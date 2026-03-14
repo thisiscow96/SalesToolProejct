@@ -1,0 +1,31 @@
+# Node / TypeScript / React / Expo 공통 무시 파일
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+dist/
+build/
+.expo/
+.expo-shared/
+web-build/
+
+# 환경 변수 / 민감 정보
+.env
+.env.*
+
+# OS / 에디터 관련
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 로그 파일
+*.log
+
+# 설치 파일 (용량 제한 회피)
+*.exe
+postgresql*.exe
+

@@ -1,0 +1,139 @@
+# 판매툴 흐름 정리 (구매 → 재고 → 판매 → 미수금) + 화면 고려
+
+## 1. 구매했을 때 → 재고에 어떻게 반영되는지
+
+### 데이터 흐름
+1. **중매인이 구매** → `purchases` 테이블에 1건 등록  
+   - 구매처(partner), 상품(product), 수량(quantity), 단가(unit_price), 구매일(purchase_date) 등
+2. **재고 반영**  
+   - 해당 `product_id`의 `inventory` 행을 찾아서 **quantity 를 + 구매 수량** 만큼 증가  
+   - 상품당 1행만 두므로: `inventory.quantity += purchases.quantity`  
+   - 없으면 해당 상품에 대해 `inventory` 행을 새로 만들고 quantity = 구매 수량
+3. **이동 이력 필수**  
+   - `product_transfers` 에 1건 등록: **구매처 → 재고**, `transferred_at`(시각), `purchase_id` 연결.  
+   - from_type=supplier, to_type=inventory, from_partner_id=구매처.
+
+### 정리
+- **구매 1건 입력** = **입고 1건** → **재고 증가** + **이동 이력 1건(구매처→재고)** 무조건 기록
+- 화면에서 필요한 것: 구매 입력 폼, 구매 후 “현재 재고” 확인 가능
+
+---
+
+## 2. 판매했을 때 → 재고에서 어떻게 깎이는지
+
+### 데이터 흐름
+1. **중매인이 판매** → `sales` 테이블에 1건 등록  
+   - 판매처(partner), 상품(product), 수량(quantity), 단가(unit_price), 판매일(sale_date), 결제상태(payment_status), 수금액(paid_amount) 등
+2. **재고 반영**  
+   - 해당 `product_id`의 `inventory` 행에서 **quantity 를 - 판매 수량** 만큼 감소  
+   - `inventory.quantity -= sales.quantity`  
+   - 재고가 0 미만이 되지 않도록 검사하는 것이 좋음(입력 시 또는 트리거)
+3. **이동 이력 필수**  
+   - `product_transfers` 에 1건: **재고 → 거래처**, `transferred_at`, `sale_id` 연결.  
+   - from_type=inventory, to_type=customer, to_partner_id=판매처.
+
+### 정리
+- **판매 1건 입력** = **출고 1건** → **재고 감소** + **이동 이력 1건(재고→거래처)** 무조건 기록
+- 화면에서 필요한 것: 판매 입력 폼, 판매 시점의 재고 표시(또는 “재고 부족” 경고)
+
+---
+
+## 2-2. 폐기했을 때 → 재고에서 어떻게 깎이는지
+
+### 데이터 흐름
+1. **판매하지 못하고 폐기** → `disposals` 테이블에 1건 등록  
+   - 상품(product), 폐기 수량(quantity), 폐기일(disposal_date), 사유(reason) 등. 거래처 없음.
+2. **재고 반영**  
+   - 해당 `product_id`의 `inventory` 에서 **quantity 를 - 폐기 수량** 만큼 감소 (판매와 동일한 방식).
+3. **이동 이력 필수**  
+   - `product_transfers` 에 1건: **재고 → 폐기**, `transferred_at`, `disposal_id` 연결.  
+   - from_type=inventory, to_type=disposal.
+
+### 정리
+- **폐기 1건** = **재고만 감소** + **이동 이력 1건(재고→폐기)** 무조건 기록. 매출·미수금 없음.
+- 화면: 폐기 입력 폼, 폐기 목록/통계, 이동 이력 조회.
+
+---
+
+## 2-3. 손해 보며 판매하는 경우
+
+- **손해 판매** = 원가보다 낮은 단가로 판매. 이미 구조로 표현 가능.
+  - `sales.unit_price` : 실제 판매 단가 (낮게 입력 가능)
+  - `sales.cost_at_sale` : (선택) 그 시점 원가. 있으면 **손익 = (unit_price - cost_at_sale) × quantity** 로 계산 가능.
+- **화면**: 건별/상품별로 “원가 대비 손익” 표시. `cost_at_sale` 이 있고 `unit_price < cost_at_sale` 이면 “손해”로 표시.
+
+---
+
+## 3. 미수금·수금은 어떤 방식으로 관리하는지
+
+### 저장 방식
+- **건별 미수금**: `sales.total_amount - sales.paid_amount`. `payment_status` 로 paid / unpaid / partial 구분.
+- **수금은 “묶음 결제” 지원**: 한 번에 받은 금액을 **여러 sales에 나눠 배분**.
+  - **payments**: 거래처가 수금한 “한 건” (amount, paid_at). 1 payment = “이번에 이만 원 받음”.
+  - **payment_allocations**: 그 수금을 어떤 sale에 얼마씩 배분했는지 (payment_id, sale_id, amount).
+- 각 sale의 **paid_amount** = 그 sale에 대한 `payment_allocations` 합계. 배분을 추가/삭제할 때마다 `sales.paid_amount` 를 갱신하고, `paid_amount >= total_amount` 이면 `payment_status` 를 `paid` 로 변경.
+
+### 집계
+- **거래처별 미수금**: 해당 거래처의 sales 중 unpaid/partial만 `SUM(total_amount - paid_amount)`. 뷰 `receivables_by_partner` 사용 가능.
+
+### 수금 처리 (묶음)
+1. **수금 등록**: `payments` 에 1건 (partner_id, amount, paid_at).
+2. **배분**: `payment_allocations` 로 “이 수금에서 sale A에 10만, sale B에 15만” 식으로 여러 건에 나눠 등록.
+3. 각 sale의 `paid_amount` 갱신 → 필요 시 `payment_status` 를 partial/paid 로 변경.
+
+### 정리
+- **미수금 = sales의 (total_amount - paid_amount). paid_amount는 수금 배분(allocations)의 합으로 유지.**
+- 화면: 거래처별 미수금 합계, 건별 미수금 목록, **수금 등록 화면**(금액·일자 입력 후 → 해당 거래처의 미수 건 목록에서 “어느 sale에 얼마 배분할지” 선택/입력)
+
+---
+
+## 4. 화면 표출 시 항상 고려할 것
+
+### 4.1 재고·이동 이력 관련
+- **상품 이동 이력(Tracking) 화면**  
+  - `product_transfers` 조회: **몇 시(transferred_at)** 에 **어디(from_type) → 어디(to_type)** 로, 수량·상품·연결된 구매/판매/폐기 건.  
+  - 필터: 상품별, 기간별, 이동 유형별(구매처→재고, 재고→거래처, 재고→폐기)
+- **재고 목록 화면**  
+  - 상품별 현재 재고 수량 (`inventory` 테이블 + `products` 조인)  
+  - 필요 시 “최근 입출고” 링크로 구매/판매 내역 연결
+- **구매 입력 화면**  
+  - 입력 후 반영된 재고 수량 표시 (같은 상품의 `inventory.quantity`)
+- **판매 입력 화면**  
+  - 판매 전 해당 상품의 현재 재고 표시  
+  - 판매 수량 > 재고 수량이면 경고 또는 입력 제한
+
+### 4.2 폐기 관련
+- **폐기 입력 화면**: 상품, 수량, 폐기일, 사유. 입력 시 해당 상품 재고 감소.
+- **폐기 내역/통계**: 상품별·기간별 폐기량.
+
+### 4.3 판매·손익·미수금 관련
+- **미수금 현황 화면**  
+  - 거래처별 미수금 합계 (뷰 `receivables_by_partner` 또는 동일 로직 API)  
+  - 클릭 시 해당 거래처의 미수 건별 목록 (sale별 total_amount, paid_amount, 미수금)
+- **손해 판매 표시**  
+  - sale에 `cost_at_sale` 이 있으면 (unit_price - cost_at_sale) × quantity 로 손익 표시. 음수면 “손해”로 표시.
+- **수금 처리 화면 (묶음 결제)**  
+  1. “수금 등록”: 거래처, 수금액, 수금일 입력 → `payments` 1건 생성  
+  2. “배분”: 이 수금을 해당 거래처의 미수 건(sales) 목록에서 선택해 “건별 배분액” 입력 → `payment_allocations` 저장 후 각 sale의 `paid_amount` 갱신  
+  - 수금 이력: `payments` 목록 + 각 payment의 배분 내역(allocations) 표시
+
+### 4.4 공통
+- **구매일/판매일** 기준 목록·필터·기간 조회는 항상 가능하도록 (purchase_date, sale_date)
+- **상품**은 마스터(products) + 일별 단가(product_daily_prices) 두 개 객체로 관리되므로,  
+  - 구매/판매 입력 시 “해당 일자 단가” 조회 후 화면에 기본값으로 띄우기
+
+---
+
+## 5. 한 줄 요약
+
+| 구분 | 방식 | 화면에서 할 일 |
+|------|------|----------------|
+| **구매 시 재고** | `purchases` 1건 → 해당 상품 `inventory` **증가** | 구매 입력 폼, 반영 후 재고 표시 |
+| **판매 시 재고** | `sales` 1건 → 해당 상품 `inventory` **감소** | 판매 입력 폼, 재고 표시·부족 시 경고 |
+| **폐기 시 재고** | `disposals` 1건 → `inventory` **감소** + **이동 이력(재고→폐기)** | 폐기 입력 폼, 폐기 내역/통계 |
+| **이동 이력** | 구매/판매/폐기 시마다 `product_transfers` 1건 (몇 시, 어디→어디) **무조건** | 이동 이력 목록·필터(상품, 기간, 유형) |
+| **손해 판매** | `sales.unit_price`가 `cost_at_sale`보다 작으면 손해 | 건별/상품별 원가 대비 손익·손해 표시 |
+| **미수금** | `sales` 의 (total_amount - paid_amount). paid_amount = 수금 배분 합계 | 거래처별 미수금, 건별 미수 목록 |
+| **묶음 수금** | `payments` 1건 + `payment_allocations` 로 여러 sale에 배분 | 수금 등록 → 미수 건 목록에서 배분 입력 |
+
+이 흐름을 기준으로 API와 화면(React)을 설계하면 됩니다.

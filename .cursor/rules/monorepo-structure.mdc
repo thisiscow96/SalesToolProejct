@@ -1,0 +1,42 @@
+---
+description: Monorepo structure for sales tool project (web/mobile/server)
+alwaysApply: true
+---
+
+# Monorepo 구조 및 디렉터리 역할
+
+- 이 프로젝트는 **단일 GitHub 레포지토리** 아래에 다음 하위 디렉터리를 두는 **모노레포 구조**를 사용한다.
+  - `web/` : PC 웹용 **React** 프론트엔드
+  - `mobile/` : **Expo(React Native)** 기반 모바일/멀티플랫폼 앱
+  - `server/` : **백엔드 API 서버** (예: Node.js 기반)
+
+## 공통 규칙
+
+- 공통 비즈니스 로직/타입은 가능한 경우 재사용 가능하도록 별도 디렉터리(예: `shared/` 또는 각 프로젝트 내부의 `shared/` 폴더)를 고려한다.
+- 환경 변수, 비밀 키 등은 `.env` 계열 파일로 관리하며, `.gitignore`에 포함하여 GitHub에 커밋하지 않는다.
+- 브랜치/커밋 메시지는 web/mobile/server 각각의 변경 범위를 명확히 드러내도록 작성한다.
+
+## web/ 디렉터리
+
+- 역할: 판매툴의 **PC 웹 UI** 구현.
+- 주요 기술: React (추후 Vite/Next.js 등 빌드 도구 도입 가능).
+- 예시 구조:
+  - `web/src/` : React 컴포넌트 및 페이지
+  - `web/public/` : 정적 자산
+
+## mobile/ 디렉터리
+
+- 역할: Expo(React Native) 기반의 **모바일/멀티플랫폼 앱** 구현.
+- 주요 기술: Expo managed workflow.
+- 예시 구조:
+  - `mobile/App.(ts|js)x` : 진입점 컴포넌트
+  - `mobile/app/` 또는 `mobile/src/` : 화면/네비게이션 구조
+
+## server/ 디렉터리
+
+- 역할: 판매 데이터 관리, 인증, 통계 등의 **백엔드 API 서버**.
+- 주요 기술: Node.js 기반 프레임워크(예: Express / NestJS 등).
+- 예시 구조:
+  - `server/src/` : API 라우트, 서비스, DB 연동 코드
+  - `server/prisma/` 또는 `server/db/` : PostgreSQL 스키마 및 마이그레이션 (선택)
+

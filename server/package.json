@@ -1,0 +1,15 @@
+{
+  "name": "sales-tool-server",
+  "version": "1.0.0",
+  "description": "판매툴 백엔드 API (Express + PostgreSQL)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "pg": "^8.11.3"
+  }
+}
