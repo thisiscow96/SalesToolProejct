@@ -24,16 +24,22 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // PostgreSQL 연결 설정 (WHATWG URL로 파싱해 deprecation 경고 방지)
+// DATABASE_URL은 반드시 postgres(ql):// 로 시작해야 함 (앱 URL 넣으면 DB 포트에 HTTP 요청이 가서 invalid startup packet 에러 발생)
 function getPoolConfig() {
-  if (process.env.DATABASE_URL) {
-    const u = new URL(process.env.DATABASE_URL);
+  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
+  if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
+    const u = new URL(raw);
     return {
       host: u.hostname,
       port: u.port ? Number(u.port) : 5432,
       user: u.username || undefined,
       password: u.password ? decodeURIComponent(u.password) : undefined,
       database: u.pathname ? u.pathname.slice(1) : undefined,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
     };
+  }
+  if (raw) {
+    console.warn('[DB] DATABASE_URL이 postgres:// 또는 postgresql:// 로 시작하지 않습니다. Postgres 연결 정보만 넣어 주세요.');
   }
   return {
     host: process.env.PG_HOST || 'localhost',
@@ -44,6 +50,7 @@ function getPoolConfig() {
   };
 }
 const pool = new Pool(getPoolConfig());
+pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
 // 이메일 발송 (SMTP 미설정 시 콘솔에 인증번호만 출력)
 function getMailTransporter() {
