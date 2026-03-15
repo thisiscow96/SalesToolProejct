@@ -97,11 +97,14 @@ export default function Signup() {
     setSendCodeLoading(true);
     setError('');
     setVerifyError('');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(`${API_BASE}/auth/send-email-verification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim() }),
+        signal: controller.signal,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -112,9 +115,11 @@ export default function Signup() {
       setRemainingSec(VERIFY_EXPIRE_SEC);
       setVerificationCode('');
       setDevCode(data.dev_code || '');
-    } catch {
-      setError('서버에 연결할 수 없습니다.');
+    } catch (e) {
+      if (e.name === 'AbortError') setError('요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.');
+      else setError('서버에 연결할 수 없습니다.');
     } finally {
+      clearTimeout(timeoutId);
       setSendCodeLoading(false);
     }
   }

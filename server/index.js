@@ -59,7 +59,14 @@ function getMailTransporter() {
   const pass = process.env.SMTP_PASS; // 비밀번호는 공백도 유효할 수 있으므로 trim 안 함
   const hasPass = pass != null && String(pass).length > 0;
   if (host && user && hasPass) {
-    return nodemailer.createTransport({ host, port: Number(process.env.SMTP_PORT) || 587, secure: false, auth: { user, pass: String(pass) } });
+    return nodemailer.createTransport({
+      host,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: false,
+      auth: { user, pass: String(pass) },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+    });
   }
   return null;
 }
@@ -75,9 +82,10 @@ async function sendVerificationEmail(email, code) {
         subject,
         text,
       });
+      console.log('[이메일 인증] 발송 성공 →', email);
       return { sent: true };
     } catch (err) {
-      console.error('[이메일 인증] 발송 실패:', err.message);
+      console.error('[이메일 인증] 발송 실패:', err.code || err.message, err.message);
       return { sent: false, code };
     }
   }
