@@ -24,6 +24,18 @@ function normalizePhone(phone) {
 const app = express();
 const port = process.env.PORT || 3000;
 
+// 로컬 개발: 다른 포트(프론트)에서 API 호출 허용
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Agent-No');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // PostgreSQL 연결 설정 (WHATWG URL로 파싱해 deprecation 경고 방지)
 // DATABASE_URL은 반드시 postgres(ql):// 로 시작해야 함 (앱 URL 넣으면 DB 포트에 HTTP 요청이 가서 invalid startup packet 에러 발생)
 function getPoolConfig() {

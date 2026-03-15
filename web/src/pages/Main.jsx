@@ -351,9 +351,9 @@ function TabProductMaster() {
           {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
           {formMode === 'single' && (
             <form onSubmit={handleCreateSingle}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+              <div className="product-master-form-grid">
                 <label>상품명 * <input value={singleRow.name} onChange={(e) => setSingleRow((s) => ({ ...s, name: e.target.value }))} required /></label>
-                <label>단위 <input value={singleRow.unit} onChange={(e) => setSingleRow((s) => ({ ...s, unit: e.target.value }))} /></label>
+                <label>단위 <span className="unit-display">kg</span></label>
                 <label>대분류 <input value={singleRow.category_large} onChange={(e) => setSingleRow((s) => ({ ...s, category_large: e.target.value }))} /></label>
                 <label>중분류 <input value={singleRow.category_mid} onChange={(e) => setSingleRow((s) => ({ ...s, category_mid: e.target.value }))} /></label>
                 <label>소분류 <input value={singleRow.category_small} onChange={(e) => setSingleRow((s) => ({ ...s, category_small: e.target.value }))} /></label>
@@ -382,7 +382,7 @@ function TabProductMaster() {
                     {bulkRows.map((row, idx) => (
                       <tr key={idx}>
                         <td><input value={row.name} onChange={(e) => setBulkRow(idx, 'name', e.target.value)} placeholder="필수" style={{ width: '120px' }} /></td>
-                        <td><input value={row.unit} onChange={(e) => setBulkRow(idx, 'unit', e.target.value)} style={{ width: '50px' }} /></td>
+                        <td><span className="unit-display">kg</span></td>
                         <td><input value={row.category_large} onChange={(e) => setBulkRow(idx, 'category_large', e.target.value)} style={{ width: '80px' }} /></td>
                         <td><input value={row.category_mid} onChange={(e) => setBulkRow(idx, 'category_mid', e.target.value)} style={{ width: '80px' }} /></td>
                         <td><input value={row.category_small} onChange={(e) => setBulkRow(idx, 'category_small', e.target.value)} style={{ width: '80px' }} /></td>

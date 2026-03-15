@@ -98,23 +98,53 @@
   color: #475569;
 }
 
+/* 입력 필드 공통 — 부드러운 스타일 */
 .main-filters input[type="date"],
 .main-filters input[type="text"],
-.main-filters select {
-  padding: 0.5rem 0.65rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
+.main-filters select,
+.main-content input[type="text"],
+.main-content input[type="date"],
+.main-content select,
+.product-master-form input {
+  padding: 0.55rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   font-size: 0.9rem;
-  background: #fff;
+  background: #fafbfc;
   color: #334155;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.main-filters input:hover,
+.main-filters select:hover,
+.main-content input:hover,
+.main-content select:hover,
+.product-master-form input:hover {
+  background: #fff;
+  border-color: #cbd5e1;
 }
 
 .main-filters input:focus,
-.main-filters select:focus {
+.main-filters select:focus,
+.main-content input:focus,
+.main-content select:focus,
+.product-master-form input:focus {
   outline: none;
-  border-color: #818cf8;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  border-color: #a5b4fc;
+  box-shadow: 0 0 0 3px rgba(199, 210, 254, 0.4);
+  background: #fff;
+}
+
+/* 단위 표시만 (입력 없음) */
+.unit-display {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.9rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 8px;
+  font-weight: 500;
 }
 
 .main-filters button {
@@ -274,17 +304,30 @@
   margin-left: 0.5rem;
 }
 
-.main-content input[type="text"] {
-  padding: 0.4rem 0.5rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: #fff;
+/* product-master 단건 폼 그리드 */
+.product-master-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
 }
-
-.main-content input[type="text"]:focus {
-  outline: none;
-  border-color: #818cf8;
+.product-master-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-weight: 500;
+}
+.product-master-form label input {
+  width: 100%;
+  min-width: 0;
+}
+/* 다건 테이블 내 입력칸 */
+.main-table td input {
+  width: 100%;
+  min-width: 60px;
+  box-sizing: border-box;
 }
 
 /* 상품 마스터: 새로만들기 영역 */
