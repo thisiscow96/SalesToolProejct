@@ -133,7 +133,12 @@ app.post('/api/auth/check-email', async (req, res) => {
     res.json({ ok: true, available, message: available ? undefined : '이미 사용 중인 이메일입니다.' });
   } catch (err) {
     console.error('check-email error:', err.message);
-    res.status(500).json({ ok: false, available: false, message: '확인할 수 없습니다. 잠시 후 다시 시도해 주세요.' });
+    res.status(500).json({
+      ok: false,
+      available: false,
+      message: '확인할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+      error: err.message,
+    });
   }
 });
 
