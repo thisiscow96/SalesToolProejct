@@ -82,7 +82,8 @@ export default function Signup() {
       });
       const data = await res.json().catch(() => ({}));
       setEmailChecked(data.available === true);
-      if (!data.available) setError(data.message || '이미 사용 중인 이메일입니다.');
+      if (!res.ok) setError(data.message || '확인할 수 없습니다.');
+      else if (!data.available) setError(data.message || '이미 사용 중인 이메일입니다.');
     } catch {
       setError('확인할 수 없습니다.');
       setEmailChecked(false);

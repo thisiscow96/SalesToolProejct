@@ -119,16 +119,21 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// 이메일 중복 확인 (형식 검사 포함)
+// 이메일 중복 확인 (형식 검사 포함, 대소문자 구분 없음) — public."user" 테이블만 조회
 app.post('/api/auth/check-email', async (req, res) => {
-  const email = req.body?.email?.trim();
-  if (!email) return res.status(400).json({ ok: false, available: false, message: '이메일을 입력하세요.' });
-  if (!isValidEmail(email)) return res.status(400).json({ ok: false, available: false, message: '이메일 형식이 올바르지 않습니다.' });
+  const raw = req.body?.email?.trim();
+  if (!raw) return res.status(400).json({ ok: false, available: false, message: '이메일을 입력하세요.' });
+  if (!isValidEmail(raw)) return res.status(400).json({ ok: false, available: false, message: '이메일 형식이 올바르지 않습니다.' });
+  const emailLower = raw.toLowerCase();
   try {
-    const r = await pool.query('SELECT 1 FROM "user" WHERE email = $1', [email]);
-    res.json({ ok: true, available: r.rows.length === 0 });
+    const r = await pool.query('SELECT 1 FROM public."user" WHERE LOWER(email) = $1', [emailLower]);
+    const count = r.rows.length;
+    const available = count === 0;
+    console.log('[check-email]', emailLower, '→ public."user" 조회 결과 행 수:', count, available ? '(사용 가능)' : '(중복)');
+    res.json({ ok: true, available, message: available ? undefined : '이미 사용 중인 이메일입니다.' });
   } catch (err) {
-    res.status(500).json({ ok: false, available: false });
+    console.error('check-email error:', err.message);
+    res.status(500).json({ ok: false, available: false, message: '확인할 수 없습니다. 잠시 후 다시 시도해 주세요.' });
   }
 });
 
@@ -163,8 +168,9 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
   const email = req.body?.email?.trim();
   if (!email) return res.status(400).json({ ok: false, message: '이메일을 입력하세요.' });
   if (!isValidEmail(email)) return res.status(400).json({ ok: false, message: '이메일 형식이 올바르지 않습니다.' });
+  const emailLower = email.toLowerCase();
   try {
-    const r = await pool.query('SELECT 1 FROM "user" WHERE email = $1', [email]);
+    const r = await pool.query('SELECT 1 FROM "user" WHERE LOWER(email) = $1', [emailLower]);
     if (r.rows.length > 0) return res.status(409).json({ ok: false, message: '이미 가입된 이메일입니다.' });
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
