@@ -250,8 +250,8 @@ function TabProductMaster() {
   const [nameSearch, setNameSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState('single'); // 'single' | 'bulk'
-  const [singleRow, setSingleRow] = useState({ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' });
-  const [bulkRows, setBulkRows] = useState([{ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+  const [singleRow, setSingleRow] = useState({ product_key: '', name: '', unit: '', category_large: '', category_mid: '', category_small: '', memo: '' });
+  const [bulkRows, setBulkRows] = useState([{ product_key: '', name: '', unit: '', category_large: '', category_mid: '', category_small: '', memo: '' }]);
   const [submitErr, setSubmitErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -272,11 +272,19 @@ function TabProductMaster() {
 
   const handleCreateSingle = (e) => {
     e.preventDefault();
+    if (!singleRow.product_key?.trim()) {
+      setSubmitErr('상품 키를 입력하세요.');
+      return;
+    }
+    if (!singleRow.name?.trim()) {
+      setSubmitErr('상품명을 입력하세요.');
+      return;
+    }
     setSubmitErr('');
     setSubmitting(true);
     createProduct(singleRow)
       .then(() => {
-        setSingleRow({ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' });
+        setSingleRow({ product_key: '', name: '', unit: '', category_large: '', category_mid: '', category_small: '', memo: '' });
         load();
         setShowForm(false);
       })
@@ -286,16 +294,16 @@ function TabProductMaster() {
 
   const handleCreateBulk = (e) => {
     e.preventDefault();
-    const products = bulkRows.filter((r) => r.name?.trim());
+    const products = bulkRows.filter((r) => r.product_key?.trim() && r.name?.trim());
     if (products.length === 0) {
-      setSubmitErr('상품명을 입력한 행이 없습니다.');
+      setSubmitErr('상품 키와 상품명을 모두 입력한 행이 없습니다.');
       return;
     }
     setSubmitErr('');
     setSubmitting(true);
     createProductsBulk(products)
       .then((data) => {
-        setBulkRows([{ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+        setBulkRows([{ product_key: '', name: '', unit: '', category_large: '', category_mid: '', category_small: '', memo: '' }]);
         load();
         setShowForm(false);
         if (data.count) setErr(''); // clear any previous err
@@ -304,7 +312,7 @@ function TabProductMaster() {
       .finally(() => setSubmitting(false));
   };
 
-  const addBulkRow = () => setBulkRows((prev) => [...prev, { name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+  const addBulkRow = () => setBulkRows((prev) => [...prev, { product_key: '', name: '', unit: '', category_large: '', category_mid: '', category_small: '', memo: '' }]);
   const setBulkRow = (idx, field, value) => setBulkRows((prev) => {
     const next = [...prev];
     next[idx] = { ...next[idx], [field]: value };
@@ -351,43 +359,60 @@ function TabProductMaster() {
           {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
           {formMode === 'single' && (
             <form onSubmit={handleCreateSingle}>
-              <div className="product-master-form-grid">
-                <label>상품명 * <input value={singleRow.name} onChange={(e) => setSingleRow((s) => ({ ...s, name: e.target.value }))} required /></label>
-                <label>단위 <span className="unit-display">kg</span></label>
-                <label>대분류 <input value={singleRow.category_large} onChange={(e) => setSingleRow((s) => ({ ...s, category_large: e.target.value }))} /></label>
-                <label>중분류 <input value={singleRow.category_mid} onChange={(e) => setSingleRow((s) => ({ ...s, category_mid: e.target.value }))} /></label>
-                <label>소분류 <input value={singleRow.category_small} onChange={(e) => setSingleRow((s) => ({ ...s, category_small: e.target.value }))} /></label>
-                <label>상품 키 <input value={singleRow.product_key} onChange={(e) => setSingleRow((s) => ({ ...s, product_key: e.target.value }))} /></label>
-                <label>비고 <input value={singleRow.memo} onChange={(e) => setSingleRow((s) => ({ ...s, memo: e.target.value }))} /></label>
+              <div className="main-table-wrap product-master-single-table">
+                <table className="main-table">
+                  <thead>
+                    <tr>
+                      <th>상품 키 *</th>
+                      <th>상품명 *</th>
+                      <th>단위</th>
+                      <th>대분류</th>
+                      <th>중분류</th>
+                      <th>소분류</th>
+                      <th>비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><input value={singleRow.product_key} onChange={(e) => setSingleRow((s) => ({ ...s, product_key: e.target.value }))} placeholder="필수" /></td>
+                      <td><input value={singleRow.name} onChange={(e) => setSingleRow((s) => ({ ...s, name: e.target.value }))} placeholder="필수" /></td>
+                      <td><input value={singleRow.unit} onChange={(e) => setSingleRow((s) => ({ ...s, unit: e.target.value }))} /></td>
+                      <td><input value={singleRow.category_large} onChange={(e) => setSingleRow((s) => ({ ...s, category_large: e.target.value }))} /></td>
+                      <td><input value={singleRow.category_mid} onChange={(e) => setSingleRow((s) => ({ ...s, category_mid: e.target.value }))} /></td>
+                      <td><input value={singleRow.category_small} onChange={(e) => setSingleRow((s) => ({ ...s, category_small: e.target.value }))} /></td>
+                      <td><input value={singleRow.memo} onChange={(e) => setSingleRow((s) => ({ ...s, memo: e.target.value }))} /></td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
               <button type="submit" disabled={submitting}>{submitting ? '등록 중…' : '등록'}</button>
             </form>
           )}
           {formMode === 'bulk' && (
             <form onSubmit={handleCreateBulk}>
-              <div className="main-table-wrap" style={{ overflowX: 'auto', marginBottom: '8px' }}>
+              <div className="main-table-wrap product-master-bulk-table">
                 <table className="main-table">
                   <thead>
                     <tr>
+                      <th>상품 키 *</th>
                       <th>상품명 *</th>
                       <th>단위</th>
                       <th>대분류</th>
                       <th>중분류</th>
                       <th>소분류</th>
-                      <th>상품 키</th>
                       <th>비고</th>
                     </tr>
                   </thead>
                   <tbody>
                     {bulkRows.map((row, idx) => (
                       <tr key={idx}>
-                        <td><input value={row.name} onChange={(e) => setBulkRow(idx, 'name', e.target.value)} placeholder="필수" style={{ width: '120px' }} /></td>
-                        <td><span className="unit-display">kg</span></td>
-                        <td><input value={row.category_large} onChange={(e) => setBulkRow(idx, 'category_large', e.target.value)} style={{ width: '80px' }} /></td>
-                        <td><input value={row.category_mid} onChange={(e) => setBulkRow(idx, 'category_mid', e.target.value)} style={{ width: '80px' }} /></td>
-                        <td><input value={row.category_small} onChange={(e) => setBulkRow(idx, 'category_small', e.target.value)} style={{ width: '80px' }} /></td>
-                        <td><input value={row.product_key} onChange={(e) => setBulkRow(idx, 'product_key', e.target.value)} style={{ width: '80px' }} /></td>
-                        <td><input value={row.memo} onChange={(e) => setBulkRow(idx, 'memo', e.target.value)} style={{ width: '100px' }} /></td>
+                        <td><input value={row.product_key} onChange={(e) => setBulkRow(idx, 'product_key', e.target.value)} placeholder="필수" /></td>
+                        <td><input value={row.name} onChange={(e) => setBulkRow(idx, 'name', e.target.value)} placeholder="필수" /></td>
+                        <td><input value={row.unit} onChange={(e) => setBulkRow(idx, 'unit', e.target.value)} /></td>
+                        <td><input value={row.category_large} onChange={(e) => setBulkRow(idx, 'category_large', e.target.value)} /></td>
+                        <td><input value={row.category_mid} onChange={(e) => setBulkRow(idx, 'category_mid', e.target.value)} /></td>
+                        <td><input value={row.category_small} onChange={(e) => setBulkRow(idx, 'category_small', e.target.value)} /></td>
+                        <td><input value={row.memo} onChange={(e) => setBulkRow(idx, 'memo', e.target.value)} /></td>
                       </tr>
                     ))}
                   </tbody>

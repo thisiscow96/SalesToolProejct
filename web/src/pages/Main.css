@@ -135,18 +135,6 @@
   background: #fff;
 }
 
-/* 단위 표시만 (입력 없음) */
-.unit-display {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.9rem;
-  color: #64748b;
-  background: #f1f5f9;
-  border-radius: 8px;
-  font-weight: 500;
-}
-
 .main-filters button {
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
@@ -304,26 +292,31 @@
   margin-left: 0.5rem;
 }
 
-/* product-master 단건 폼 그리드 */
-.product-master-form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.25rem;
+/* 상품 마스터 단건/다건 테이블 — 간격 축소, border 유지 */
+.product-master-single-table,
+.product-master-bulk-table {
+  margin-bottom: 0.75rem;
 }
-.product-master-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: #64748b;
-  font-weight: 500;
+.product-master-single-table .main-table th,
+.product-master-single-table .main-table td,
+.product-master-bulk-table .main-table th,
+.product-master-bulk-table .main-table td {
+  padding: 0.5rem 0.65rem;
 }
-.product-master-form label input {
+.product-master-single-table .main-table th:first-child,
+.product-master-single-table .main-table td:first-child,
+.product-master-bulk-table .main-table th:first-child,
+.product-master-bulk-table .main-table td:first-child {
+  padding-left: 0.75rem;
+}
+.product-master-single-table .main-table td input,
+.product-master-bulk-table .main-table td input {
   width: 100%;
   min-width: 0;
+  padding: 0.4rem 0.5rem;
+  box-sizing: border-box;
 }
-/* 다건 테이블 내 입력칸 */
+/* 테이블 내 입력칸 공통 */
 .main-table td input {
   width: 100%;
   min-width: 60px;
@@ -347,30 +340,32 @@
 
 .product-master-form {
   border: 1px solid #e2e8f0;
-  padding: 1.25rem;
-  margin-bottom: 1.25rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .product-master-form-tabs {
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   display: flex;
-  gap: 0.5rem;
+  gap: 0.25rem;
 }
 .main-tab-toggle {
-  padding: 0.45rem 0.9rem;
+  padding: 0.5rem 1rem;
   font-size: 0.9rem;
-  color: #475569;
+  font-weight: 500;
+  color: #64748b;
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .main-tab-toggle:hover {
   background: #e2e8f0;
+  color: #475569;
 }
 .main-tab-toggle.active {
   background: #4f46e5;
