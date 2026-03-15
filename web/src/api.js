@@ -16,7 +16,7 @@ function authHeaders() {
   const user = getUser();
   return {
     'Content-Type': 'application/json',
-    ...(user?.id != null ? { 'X-User-Id': String(user.id) } : {}),
+    ...(user?.agent_no ? { 'X-Agent-No': String(user.agent_no) } : {}),
   };
 }
 

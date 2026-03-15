@@ -81,12 +81,17 @@ async function sendVerificationEmail(email, code) {
 
 app.use(express.json());
 
-// 로그인 사용자 ID (프론트에서 헤더로 전달)
-function getUserId(req) {
-  const id = req.headers['x-user-id'];
-  if (id === undefined || id === null) return null;
-  const n = parseInt(id, 10);
-  return Number.isFinite(n) ? n : null;
+// 로그인 사용자 ID — 중매인 번호(X-Agent-No)로 조회 (데이터는 user_id 기반으로 유지)
+async function getUserId(req) {
+  const agentNo = req.headers['x-agent-no']?.trim();
+  if (!agentNo) return null;
+  try {
+    const r = await pool.query('SELECT id FROM "user" WHERE agent_no = $1 AND status = $2', [agentNo, 'active']);
+    return r.rows[0] ? r.rows[0].id : null;
+  } catch (err) {
+    console.error('getUserId error:', err.message);
+    return null;
+  }
 }
 
 // 서버 상태 확인 (DB 없이도 동작)
@@ -285,7 +290,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// ---------- 메인 화면용 API (X-User-Id 헤더 필수) ----------
+// ---------- 메인 화면용 API (X-Agent-No 헤더 필수, 중매인 번호 기준으로 해당 회원 데이터 조회) ----------
 
 // 상품 목록 (전체 공통, 관리자 탭에서도 사용)
 app.get('/api/products', async (req, res) => {
@@ -298,9 +303,9 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// 거래처 목록 (내 회원)
+// 거래처 목록 (중매인 번호 기준 — 내 회원)
 app.get('/api/partners', async (req, res) => {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   try {
     const r = await pool.query('SELECT id, name, type, contact, phone FROM account WHERE user_id = $1 ORDER BY name', [userId]);
@@ -311,9 +316,9 @@ app.get('/api/partners', async (req, res) => {
   }
 });
 
-// 재고현황 (내 회원)
+// 재고현황 (중매인 번호 기준)
 app.get('/api/inventory', async (req, res) => {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   try {
     const r = await pool.query(
@@ -331,9 +336,9 @@ app.get('/api/inventory', async (req, res) => {
   }
 });
 
-// 매입정보 (기간·제품별 검색, default 오늘)
+// 매입정보 (중매인 번호 기준, 기간·제품별 검색)
 app.get('/api/purchases', async (req, res) => {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const today = new Date().toISOString().slice(0, 10);
   const from = req.query.from_date || today;
@@ -360,9 +365,9 @@ app.get('/api/purchases', async (req, res) => {
   }
 });
 
-// 매출정보 (기간·거래처별 검색)
+// 매출정보 (중매인 번호 기준, 기간·거래처별 검색)
 app.get('/api/sales', async (req, res) => {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
@@ -387,9 +392,9 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// 수금정보 (기간·거래처별 검색)
+// 수금정보 (중매인 번호 기준, 기간·거래처별 검색)
 app.get('/api/payments', async (req, res) => {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
