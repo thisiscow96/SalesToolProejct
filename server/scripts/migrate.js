@@ -13,13 +13,15 @@ function getConfig() {
   const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
   if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
     const u = new URL(raw);
+    const database = (u.pathname || '/').slice(1).replace(/\?.*$/, '');
+    const needSsl = process.env.NODE_ENV === 'production' || u.hostname.includes('render.com') || (u.searchParams && u.searchParams.get('sslmode'));
     return {
       host: u.hostname,
       port: u.port ? Number(u.port) : 5432,
       user: u.username || undefined,
       password: u.password ? decodeURIComponent(u.password) : undefined,
-      database: u.pathname ? u.pathname.slice(1) : undefined,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      database: database || undefined,
+      ssl: needSsl ? { rejectUnauthorized: false } : undefined,
     };
   }
   return {
@@ -57,7 +59,7 @@ async function run() {
   try {
     await client.connect();
   } catch (err) {
-    console.error('[migrate] DB 연결 실패:', err.message);
+    console.error('[migrate] DB 연결 실패:', err.code || err.message, err.message);
     process.exit(1);
   }
 

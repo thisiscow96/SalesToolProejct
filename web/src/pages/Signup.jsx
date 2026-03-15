@@ -51,6 +51,7 @@ export default function Signup() {
   const [error, setError] = useState('');
   const [verifyError, setVerifyError] = useState('');
   const [devCode, setDevCode] = useState('');
+  const [smtpError, setSmtpError] = useState('');
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState('');
   const [sendCodeLoading, setSendCodeLoading] = useState(false);
@@ -97,6 +98,7 @@ export default function Signup() {
     setSendCodeLoading(true);
     setError('');
     setVerifyError('');
+    setSmtpError('');
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
@@ -115,6 +117,7 @@ export default function Signup() {
       setRemainingSec(VERIFY_EXPIRE_SEC);
       setVerificationCode('');
       setDevCode(data.dev_code || '');
+      setSmtpError(data.smtp_error || '');
     } catch (e) {
       if (e.name === 'AbortError') setError('요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.');
       else setError('서버에 연결할 수 없습니다.');
@@ -288,7 +291,7 @@ export default function Signup() {
                       </button>
                     </div>
                     {verifyError && <p className="signup-verify-error">{verifyError}</p>}
-                    {devCode && <p className="signup-dev-code">테스트용 인증번호: <strong>{devCode}</strong> (이메일 미발송 — SMTP 미설정)</p>}
+                    {devCode && <p className="signup-dev-code">테스트용 인증번호: <strong>{devCode}</strong> (이메일 미발송{smtpError ? ` — ${smtpError}` : ''})</p>}
                     <p className="signup-verify-timer">
                       {remainingSec > 0 ? `${Math.floor(remainingSec / 60)}:${String(remainingSec % 60).padStart(2, '0')} 남음` : '만료되었습니다. 인증번호를 다시 발송하세요.'}
                     </p>

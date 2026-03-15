@@ -52,23 +52,23 @@ function getPoolConfig() {
 const pool = new Pool(getPoolConfig());
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
-// 이메일 발송 (SMTP 미설정 시 콘솔에 인증번호만 출력)
+// 이메일 발송 (Gmail SMTP. Railway에서 587 막히면 465 시도)
 function getMailTransporter() {
   const host = (process.env.SMTP_HOST || '').trim();
   const user = (process.env.SMTP_USER || '').trim();
-  const pass = process.env.SMTP_PASS; // 비밀번호는 공백도 유효할 수 있으므로 trim 안 함
+  const pass = process.env.SMTP_PASS;
   const hasPass = pass != null && String(pass).length > 0;
-  if (host && user && hasPass) {
-    return nodemailer.createTransport({
-      host,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: false,
-      auth: { user, pass: String(pass) },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-    });
-  }
-  return null;
+  if (!host || !user || !hasPass) return null;
+  const port = Number(process.env.SMTP_PORT) || 587;
+  const secure = port === 465;
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass: String(pass) },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+  });
 }
 async function sendVerificationEmail(email, code) {
   const transporter = getMailTransporter();
@@ -85,15 +85,13 @@ async function sendVerificationEmail(email, code) {
       console.log('[이메일 인증] 발송 성공 →', email);
       return { sent: true };
     } catch (err) {
-      console.error('[이메일 인증] 발송 실패:', err.code || err.message, err.message);
-      return { sent: false, code };
+      const msg = err.code || err.message || String(err);
+      console.error('[이메일 인증] 발송 실패:', msg);
+      return { sent: false, code, error: msg };
     }
   }
-  const host = process.env.SMTP_HOST ? 'O' : 'X';
-  const user = process.env.SMTP_USER ? 'O' : 'X';
-  const passSet = process.env.SMTP_PASS != null && String(process.env.SMTP_PASS).length > 0 ? 'O' : 'X';
-  console.log('[이메일 인증] SMTP 미설정 — SMTP_HOST:', host, 'SMTP_USER:', user, 'SMTP_PASS:', passSet, '| 인증번호:', code, '→', email);
-  return { sent: false, code };
+  console.log('[이메일 인증] SMTP 미설정 (HOST/USER/PASS 중 누락) | 인증번호:', code, '→', email);
+  return { sent: false, code, error: 'SMTP 미설정 (SMTP_HOST, SMTP_USER, SMTP_PASS 확인)' };
 }
 
 app.use(express.json());
@@ -205,10 +203,11 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
       sendResult = await sendVerificationEmail(email, code);
     } catch (mailErr) {
       console.error('Send verification email failed:', mailErr);
-      sendResult = { sent: false, code };
+      sendResult = { sent: false, code, error: mailErr.message || String(mailErr) };
     }
     const payload = { ok: true, message: sendResult.sent ? '인증번호가 발송되었습니다. 5분 안에 입력하세요.' : '인증번호가 생성되었습니다. 아래 번호를 입력하세요. (이메일 미발송)' };
     if (!sendResult.sent && sendResult.code) payload.dev_code = sendResult.code;
+    if (!sendResult.sent && sendResult.error) payload.smtp_error = sendResult.error;
     res.json(payload);
   } catch (err) {
     console.error('Send verification error:', err);
