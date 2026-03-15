@@ -343,10 +343,10 @@ function TabProductMaster() {
       </div>
 
       {showForm && (
-        <div className="product-master-form" style={{ border: '1px solid #ddd', padding: '16px', marginBottom: '16px', borderRadius: '8px' }}>
-          <div style={{ marginBottom: '12px' }}>
-            <button type="button" className={formMode === 'single' ? 'active' : ''} onClick={() => setFormMode('single')} style={{ marginRight: '8px' }}>단건 등록</button>
-            <button type="button" className={formMode === 'bulk' ? 'active' : ''} onClick={() => setFormMode('bulk')}>다건 등록</button>
+        <div className="product-master-form">
+          <div className="product-master-form-tabs">
+            <button type="button" className={'main-tab-toggle ' + (formMode === 'single' ? 'active' : '')} onClick={() => setFormMode('single')}>단건 등록</button>
+            <button type="button" className={'main-tab-toggle ' + (formMode === 'bulk' ? 'active' : '')} onClick={() => setFormMode('bulk')}>다건 등록</button>
           </div>
           {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
           {formMode === 'single' && (
