@@ -24,7 +24,7 @@ export default function App() {
     const userInfo = {
       id: data.user?.id,
       name: data.user?.name,
-      login_id: data.user?.login_id,
+      agent_no: data.user?.agent_no,
       is_admin: !!data.user?.is_admin,
     };
     window.sessionStorage.setItem('user', JSON.stringify(userInfo));

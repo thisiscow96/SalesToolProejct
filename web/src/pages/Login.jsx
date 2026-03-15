@@ -6,7 +6,7 @@ import './Login.css';
 export default function Login({ onLogin }) {
   const location = useLocation();
   const successMessage = location.state?.message;
-  const [loginId, setLoginId] = useState('');
+  const [agentNo, setAgentNo] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,8 +14,8 @@ export default function Login({ onLogin }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (!loginId.trim() || !password) {
-      setError('아이디와 비밀번호를 입력하세요.');
+    if (!agentNo.trim() || !password) {
+      setError('중매인 번호와 비밀번호를 입력하세요.');
       return;
     }
     setLoading(true);
@@ -23,7 +23,7 @@ export default function Login({ onLogin }) {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login_id: loginId.trim(), password }),
+        body: JSON.stringify({ agent_no: agentNo.trim(), password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -45,12 +45,12 @@ export default function Login({ onLogin }) {
         {successMessage && <p className="login-success">{successMessage}</p>}
         <form className="login-form" onSubmit={handleSubmit}>
           <label className="login-label">
-            아이디
+            중매인 번호
             <input
               type="text"
-              value={loginId}
-              onChange={(e) => setLoginId(e.target.value)}
-              placeholder="아이디 입력"
+              value={agentNo}
+              onChange={(e) => setAgentNo(e.target.value)}
+              placeholder="중매인 번호 입력"
               autoComplete="username"
               disabled={loading}
             />

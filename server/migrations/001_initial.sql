@@ -1,64 +1,20 @@
--- =============================================================================
--- 판매툴 DB 전체 스키마 (PostgreSQL) — 맨 처음부터 끝까지 한 번에 실행
--- =============================================================================
--- 1. DB 생성: psql 등에서 CREATE DATABASE sales_tool; 실행 후
--- 2. 이 파일 전체를 sales_tool DB에 대해 실행 (pgAdmin Query Tool 또는 psql -f schema-full.sql)
--- 재실행 시 아래 DROP 구문으로 기존 객체 제거 후 CREATE 됨.
--- =============================================================================
+-- 초기 스키마 (한 번만 적용됨, IF NOT EXISTS로 재실행 시 오류 방지)
+DO $$ BEGIN
+  CREATE TYPE user_status AS ENUM ('active', 'suspended', 'withdrawn');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE TYPE partner_type AS ENUM ('supplier', 'customer');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE TYPE payment_status AS ENUM ('paid', 'unpaid', 'partial');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE TYPE transfer_location_type AS ENUM ('supplier', 'inventory', 'customer', 'disposal');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- ---------- 기존 객체 제거 (재실행 시) ----------
--- 뷰
-DROP VIEW IF EXISTS receivables_by_partner;
+CREATE SEQUENCE IF NOT EXISTS user_user_key_seq START 1;
 
--- 테이블 (단수명 — 현재 스키마)
-DROP TABLE IF EXISTS product_transfer;
-DROP TABLE IF EXISTS inventory;
-DROP TABLE IF EXISTS disposal;
-DROP TABLE IF EXISTS payment_allocation;
-DROP TABLE IF EXISTS payment;
-DROP TABLE IF EXISTS sale;
-DROP TABLE IF EXISTS purchase;
-DROP TABLE IF EXISTS product_daily_price;
-DROP TABLE IF EXISTS product;
-DROP TABLE IF EXISTS account;
-DROP TABLE IF EXISTS terms_agreement;
-DROP TABLE IF EXISTS email_verification;
-DROP TABLE IF EXISTS "user";
-
--- 테이블 (과거 복수명 — 기존 DB 마이그레이션 시 제거)
-DROP TABLE IF EXISTS product_transfers;
-DROP TABLE IF EXISTS disposals;
-DROP TABLE IF EXISTS payment_allocations;
-DROP TABLE IF EXISTS payments;
-DROP TABLE IF EXISTS sales;
-DROP TABLE IF EXISTS purchases;
-DROP TABLE IF EXISTS product_daily_prices;
-DROP TABLE IF EXISTS products;
-DROP TABLE IF EXISTS partners;
-DROP TABLE IF EXISTS terms_agreements;
-DROP TABLE IF EXISTS email_verifications;
-DROP TABLE IF EXISTS users;
-
--- 시퀀스
-DROP SEQUENCE IF EXISTS user_user_key_seq;
-DROP SEQUENCE IF EXISTS users_user_key_seq;
-
--- 타입 (테이블 제거 후 삭제 가능)
-DROP TYPE IF EXISTS transfer_location_type;
-DROP TYPE IF EXISTS payment_status;
-DROP TYPE IF EXISTS partner_type;
-DROP TYPE IF EXISTS user_status;
-
--- ---------- 타입 정의 ----------
-CREATE TYPE user_status AS ENUM ('active', 'suspended', 'withdrawn');
-CREATE TYPE partner_type AS ENUM ('supplier', 'customer');
-CREATE TYPE payment_status AS ENUM ('paid', 'unpaid', 'partial');
-CREATE TYPE transfer_location_type AS ENUM ('supplier', 'inventory', 'customer', 'disposal');
-
--- ---------- 0. 회원 (가입·이메일인증·약관동의) ----------
-CREATE SEQUENCE user_user_key_seq START 1;
-
-CREATE TABLE "user" (
+CREATE TABLE IF NOT EXISTS "user" (
   id                SERIAL PRIMARY KEY,
   user_key          VARCHAR(10) NOT NULL UNIQUE DEFAULT ('GK' || LPAD(nextval('user_user_key_seq')::text, 6, '0')),
   name              VARCHAR(100) NOT NULL,
@@ -74,7 +30,7 @@ CREATE TABLE "user" (
   updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE email_verification (
+CREATE TABLE IF NOT EXISTS email_verification (
   id          SERIAL PRIMARY KEY,
   email       VARCHAR(255) NOT NULL,
   user_id     INTEGER REFERENCES "user"(id),
@@ -83,10 +39,10 @@ CREATE TABLE email_verification (
   verified_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_email_verification_email ON email_verification(email);
-CREATE INDEX idx_email_verification_expires ON email_verification(expires_at);
+CREATE INDEX IF NOT EXISTS idx_email_verification_email ON email_verification(email);
+CREATE INDEX IF NOT EXISTS idx_email_verification_expires ON email_verification(expires_at);
 
-CREATE TABLE terms_agreement (
+CREATE TABLE IF NOT EXISTS terms_agreement (
   id         SERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES "user"(id),
   terms_type VARCHAR(50) NOT NULL,
@@ -94,10 +50,9 @@ CREATE TABLE terms_agreement (
   version    VARCHAR(20),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_terms_agreement_user ON terms_agreement(user_id);
+CREATE INDEX IF NOT EXISTS idx_terms_agreement_user ON terms_agreement(user_id);
 
--- ---------- 1. 거래처 (구매처/판매처) — 회원별 소유 ----------
-CREATE TABLE account (
+CREATE TABLE IF NOT EXISTS account (
   id         SERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES "user"(id),
   name       VARCHAR(200) NOT NULL,
@@ -109,10 +64,9 @@ CREATE TABLE account (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_account_user ON account(user_id);
+CREATE INDEX IF NOT EXISTS idx_account_user ON account(user_id);
 
--- ---------- 2. 상품 마스터 ----------
-CREATE TABLE product (
+CREATE TABLE IF NOT EXISTS product (
   id         SERIAL PRIMARY KEY,
   name       VARCHAR(200) NOT NULL,
   unit       VARCHAR(50) NOT NULL DEFAULT 'kg',
@@ -122,8 +76,7 @@ CREATE TABLE product (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ---------- 2-2. 상품별 일별 단가 — 회원별(금액은 생성한 회원만) ----------
-CREATE TABLE product_daily_price (
+CREATE TABLE IF NOT EXISTS product_daily_price (
   id              SERIAL PRIMARY KEY,
   user_id         INTEGER NOT NULL REFERENCES "user"(id),
   product_id      INTEGER NOT NULL REFERENCES product(id),
@@ -135,10 +88,9 @@ CREATE TABLE product_daily_price (
   updated_at      TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (user_id, product_id, price_date)
 );
-CREATE INDEX idx_product_daily_price_user_product_date ON product_daily_price(user_id, product_id, price_date);
+CREATE INDEX IF NOT EXISTS idx_product_daily_price_user_product_date ON product_daily_price(user_id, product_id, price_date);
 
--- ---------- 3. 구매 (입고) — 회원별 금액 데이터 ----------
-CREATE TABLE purchase (
+CREATE TABLE IF NOT EXISTS purchase (
   id            SERIAL PRIMARY KEY,
   user_id       INTEGER NOT NULL REFERENCES "user"(id),
   partner_id    INTEGER NOT NULL REFERENCES account(id),
@@ -151,10 +103,9 @@ CREATE TABLE purchase (
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_purchase_user ON purchase(user_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_user ON purchase(user_id);
 
--- ---------- 4. 판매 (출고) — 회원별 금액 데이터 ----------
-CREATE TABLE sale (
+CREATE TABLE IF NOT EXISTS sale (
   id             SERIAL PRIMARY KEY,
   user_id        INTEGER NOT NULL REFERENCES "user"(id),
   partner_id     INTEGER NOT NULL REFERENCES account(id),
@@ -170,10 +121,9 @@ CREATE TABLE sale (
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_sale_user ON sale(user_id);
+CREATE INDEX IF NOT EXISTS idx_sale_user ON sale(user_id);
 
--- ---------- 4-2. 수금 (묶음 결제) — 회원별 ----------
-CREATE TABLE payment (
+CREATE TABLE IF NOT EXISTS payment (
   id         SERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES "user"(id),
   partner_id INTEGER NOT NULL REFERENCES account(id),
@@ -182,20 +132,18 @@ CREATE TABLE payment (
   memo       TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_payment_user ON payment(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_user ON payment(user_id);
 
--- ---------- 4-3. 수금 배분 ----------
-CREATE TABLE payment_allocation (
+CREATE TABLE IF NOT EXISTS payment_allocation (
   id          SERIAL PRIMARY KEY,
   payment_id  INTEGER NOT NULL REFERENCES payment(id),
   sale_id     INTEGER NOT NULL REFERENCES sale(id),
   amount      NUMERIC(14, 2) NOT NULL CHECK (amount > 0)
 );
-CREATE INDEX idx_payment_allocation_payment ON payment_allocation(payment_id);
-CREATE INDEX idx_payment_allocation_sale ON payment_allocation(sale_id);
+CREATE INDEX IF NOT EXISTS idx_payment_allocation_payment ON payment_allocation(payment_id);
+CREATE INDEX IF NOT EXISTS idx_payment_allocation_sale ON payment_allocation(sale_id);
 
--- ---------- 5. 폐기 — 회원별 ----------
-CREATE TABLE disposal (
+CREATE TABLE IF NOT EXISTS disposal (
   id            SERIAL PRIMARY KEY,
   user_id       INTEGER NOT NULL REFERENCES "user"(id),
   product_id    INTEGER NOT NULL REFERENCES product(id),
@@ -206,11 +154,10 @@ CREATE TABLE disposal (
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_disposal_user ON disposal(user_id);
-CREATE INDEX idx_disposal_product_date ON disposal(product_id, disposal_date);
+CREATE INDEX IF NOT EXISTS idx_disposal_user ON disposal(user_id);
+CREATE INDEX IF NOT EXISTS idx_disposal_product_date ON disposal(product_id, disposal_date);
 
--- ---------- 6. 재고 (회원별·상품당 1행) ----------
-CREATE TABLE inventory (
+CREATE TABLE IF NOT EXISTS inventory (
   id         SERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES "user"(id),
   product_id INTEGER NOT NULL REFERENCES product(id),
@@ -218,10 +165,9 @@ CREATE TABLE inventory (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (user_id, product_id)
 );
-CREATE INDEX idx_inventory_user ON inventory(user_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_user ON inventory(user_id);
 
--- ---------- 7. 상품 이동 이력 — 회원별 ----------
-CREATE TABLE product_transfer (
+CREATE TABLE IF NOT EXISTS product_transfer (
   id              SERIAL PRIMARY KEY,
   user_id         INTEGER NOT NULL REFERENCES "user"(id),
   product_id      INTEGER NOT NULL REFERENCES product(id),
@@ -237,19 +183,17 @@ CREATE TABLE product_transfer (
   memo            TEXT,
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_product_transfer_user ON product_transfer(user_id);
-CREATE INDEX idx_product_transfer_product_at ON product_transfer(product_id, transferred_at);
-CREATE INDEX idx_product_transfer_from_to ON product_transfer(from_type, to_type);
-CREATE INDEX idx_product_transfer_transferred_at ON product_transfer(transferred_at);
+CREATE INDEX IF NOT EXISTS idx_product_transfer_user ON product_transfer(user_id);
+CREATE INDEX IF NOT EXISTS idx_product_transfer_product_at ON product_transfer(product_id, transferred_at);
+CREATE INDEX IF NOT EXISTS idx_product_transfer_from_to ON product_transfer(from_type, to_type);
+CREATE INDEX IF NOT EXISTS idx_product_transfer_transferred_at ON product_transfer(transferred_at);
 
--- ---------- 인덱스 (조회/집계) ----------
-CREATE INDEX idx_purchase_partner_date ON purchase(partner_id, purchase_date);
-CREATE INDEX idx_purchase_product_date ON purchase(product_id, purchase_date);
-CREATE INDEX idx_sale_partner_date ON sale(partner_id, sale_date);
-CREATE INDEX idx_sale_product_date ON sale(product_id, sale_date);
-CREATE INDEX idx_sale_payment_status ON sale(payment_status);
+CREATE INDEX IF NOT EXISTS idx_purchase_partner_date ON purchase(partner_id, purchase_date);
+CREATE INDEX IF NOT EXISTS idx_purchase_product_date ON purchase(product_id, purchase_date);
+CREATE INDEX IF NOT EXISTS idx_sale_partner_date ON sale(partner_id, sale_date);
+CREATE INDEX IF NOT EXISTS idx_sale_product_date ON sale(product_id, sale_date);
+CREATE INDEX IF NOT EXISTS idx_sale_payment_status ON sale(payment_status);
 
--- ---------- 뷰: 거래처별 미수금 합계 (회원별로 조회 시 user_id 조건 사용) ----------
 CREATE OR REPLACE VIEW receivables_by_partner AS
 SELECT
   a.user_id,
@@ -260,9 +204,3 @@ FROM account a
 LEFT JOIN sale s ON s.partner_id = a.id AND s.payment_status IN ('unpaid', 'partial') AND s.user_id = a.user_id
 WHERE a.type = 'customer'
 GROUP BY a.user_id, a.id, a.name;
-
--- =============================================================================
--- 끝. 테이블: user, account, product, product_daily_price, purchase, sale,
---            payment, payment_allocation, disposal, inventory, product_transfer
--- 뷰: receivables_by_partner
--- =============================================================================

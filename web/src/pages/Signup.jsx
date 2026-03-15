@@ -21,7 +21,7 @@ const PRIVACY_TERMS_TEXT = `제1조 (개인정보의 수집 및 이용 목적)
 - 회원 가입 및 관리, 서비스 제공, 민원 처리 등
 
 제2조 (수집하는 개인정보 항목)
-- 필수: 이름, 이메일, 휴대폰번호, 아이디, 비밀번호
+- 필수: 상호명, 이메일, 휴대폰번호, 중매인 번호, 비밀번호
 - 선택: 주소, 연락처 등 (서비스에 따라 추가될 수 있음)
 
 제3조 (개인정보의 보유 및 이용 기간)
@@ -37,13 +37,13 @@ export default function Signup() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [loginId, setLoginId] = useState('');
+  const [agentNo, setAgentNo] = useState('');
   const [password, setPassword] = useState('');
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [emailChecked, setEmailChecked] = useState(null);
   const [phoneChecked, setPhoneChecked] = useState(null);
-  const [loginIdChecked, setLoginIdChecked] = useState(null);
+  const [agentNoChecked, setAgentNoChecked] = useState(null);
   const [emailVerified, setEmailVerified] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
   const [verifyExpiresAt, setVerifyExpiresAt] = useState(null);
@@ -166,29 +166,29 @@ export default function Signup() {
     }
   }
 
-  async function checkLoginId() {
-    if (!loginId.trim()) { setError('아이디를 입력하세요.'); return; }
-    setChecking('login_id');
+  async function checkAgentNo() {
+    if (!agentNo.trim()) { setError('중매인 번호를 입력하세요.'); return; }
+    setChecking('agent_no');
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/auth/check-login-id`, {
+      const res = await fetch(`${API_BASE}/auth/check-agent-no`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login_id: loginId.trim() }),
+        body: JSON.stringify({ agent_no: agentNo.trim() }),
       });
       const data = await res.json().catch(() => ({}));
-      setLoginIdChecked(data.available === true);
-      if (!data.available) setError('이미 사용 중인 아이디입니다.');
+      setAgentNoChecked(data.available === true);
+      if (!data.available) setError('이미 사용 중인 중매인 번호입니다.');
     } catch {
       setError('확인할 수 없습니다.');
-      setLoginIdChecked(false);
+      setAgentNoChecked(false);
     } finally {
       setChecking('');
     }
   }
 
-  const canSubmit = name.trim() && email.trim() && phone.trim() && loginId.trim() && password.length >= 1
-    && emailChecked === true && emailVerified && phoneChecked === true && loginIdChecked === true
+  const canSubmit = name.trim() && email.trim() && phone.trim() && agentNo.trim() && password.length >= 1
+    && emailChecked === true && emailVerified && phoneChecked === true && agentNoChecked === true
     && termsAgreed && !loading;
 
   async function handleSubmit(e) {
@@ -205,7 +205,7 @@ export default function Signup() {
           name: name.trim(),
           email: email.trim(),
           phone: phone.trim(),
-          login_id: loginId.trim(),
+          agent_no: agentNo.trim(),
           password,
           terms_agreed: true,
         }),
@@ -229,12 +229,12 @@ export default function Signup() {
         <h1 className="signup-title">회원가입</h1>
         <form className="signup-form" onSubmit={handleSubmit}>
           <label className="signup-label">
-            이름
+            상호명
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="이름 입력"
+              placeholder="상호명 입력"
               disabled={loading}
             />
           </label>
@@ -312,21 +312,21 @@ export default function Signup() {
           </label>
 
           <label className="signup-label">
-            아이디
+            중매인 번호
             <div className="signup-input-row">
               <input
                 type="text"
-                value={loginId}
-                onChange={(e) => { setLoginId(e.target.value); setLoginIdChecked(null); }}
-                placeholder="아이디 입력"
+                value={agentNo}
+                onChange={(e) => { setAgentNo(e.target.value); setAgentNoChecked(null); }}
+                placeholder="중매인 번호 입력"
                 disabled={loading}
               />
-              <button type="button" className="signup-check-btn" onClick={checkLoginId} disabled={!!checking || loading}>
-                {checking === 'login_id' ? '확인 중…' : '중복확인'}
+              <button type="button" className="signup-check-btn" onClick={checkAgentNo} disabled={!!checking || loading}>
+                {checking === 'agent_no' ? '확인 중…' : '중복확인'}
               </button>
             </div>
-            {loginIdChecked === true && <span className="signup-ok">사용 가능</span>}
-            {loginIdChecked === false && <span className="signup-dup">사용 불가</span>}
+            {agentNoChecked === true && <span className="signup-ok">사용 가능</span>}
+            {agentNoChecked === false && <span className="signup-dup">사용 불가</span>}
           </label>
 
           <label className="signup-label">

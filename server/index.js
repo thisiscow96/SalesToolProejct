@@ -141,12 +141,12 @@ app.post('/api/auth/check-phone', async (req, res) => {
   }
 });
 
-// 아이디 중복 확인
-app.post('/api/auth/check-login-id', async (req, res) => {
-  const login_id = req.body?.login_id?.trim();
-  if (!login_id) return res.status(400).json({ ok: false, available: false, message: '아이디를 입력하세요.' });
+// 중매인 번호 중복 확인
+app.post('/api/auth/check-agent-no', async (req, res) => {
+  const agent_no = req.body?.agent_no?.trim();
+  if (!agent_no) return res.status(400).json({ ok: false, available: false, message: '중매인 번호를 입력하세요.' });
   try {
-    const r = await pool.query('SELECT 1 FROM "user" WHERE login_id = $1', [login_id]);
+    const r = await pool.query('SELECT 1 FROM "user" WHERE agent_no = $1', [agent_no]);
     res.json({ ok: true, available: r.rows.length === 0 });
   } catch (err) {
     res.status(500).json({ ok: false, available: false });
@@ -204,11 +204,11 @@ app.post('/api/auth/verify-email-code', async (req, res) => {
   }
 });
 
-// 회원가입 (user_key는 DB DEFAULT로 자동 생성. login_id·password_hash는 user 테이블에 저장)
+// 회원가입 (user_key는 DB DEFAULT로 자동 생성. name=상호명, agent_no=중매인 번호)
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, phone, login_id, password, terms_agreed } = req.body || {};
-  if (!name?.trim() || !email?.trim() || !phone?.trim() || !login_id?.trim() || password === undefined) {
-    return res.status(400).json({ ok: false, message: '이름, 이메일, 휴대폰번호, 아이디, 비밀번호를 모두 입력하세요.' });
+  const { name, email, phone, agent_no, password, terms_agreed } = req.body || {};
+  if (!name?.trim() || !email?.trim() || !phone?.trim() || !agent_no?.trim() || password === undefined) {
+    return res.status(400).json({ ok: false, message: '상호명, 이메일, 휴대폰번호, 중매인 번호, 비밀번호를 모두 입력하세요.' });
   }
   if (!terms_agreed) return res.status(400).json({ ok: false, message: '개인정보약관에 동의해 주세요.' });
   if (!isValidEmail(email)) return res.status(400).json({ ok: false, message: '이메일 형식이 올바르지 않습니다.' });
@@ -226,10 +226,10 @@ app.post('/api/auth/register', async (req, res) => {
     }
     const hash = await bcrypt.hash(String(password), 10);
     const r = await client.query(
-      `INSERT INTO "user" (name, phone, email, login_id, password_hash, terms_agreed_at, status)
+      `INSERT INTO "user" (name, phone, email, agent_no, password_hash, terms_agreed_at, status)
        VALUES ($1, $2, $3, $4, $5, NOW(), 'active')
-       RETURNING id, user_key, name, email, login_id`,
-      [name.trim(), phoneNorm, email.trim(), login_id.trim(), hash]
+       RETURNING id, user_key, name, email, agent_no`,
+      [name.trim(), phoneNorm, email.trim(), agent_no.trim(), hash]
     );
     const user = r.rows[0];
     await client.query(
@@ -237,13 +237,13 @@ app.post('/api/auth/register', async (req, res) => {
       [user.id]
     );
     client.release();
-    res.json({ ok: true, user: { id: user.id, user_key: user.user_key, name: user.name, email: user.email, login_id: user.login_id } });
+    res.json({ ok: true, user: { id: user.id, user_key: user.user_key, name: user.name, email: user.email, agent_no: user.agent_no } });
   } catch (err) {
     client.release();
     if (err.code === '23505') {
       const msg = err.constraint === 'user_email_key' ? '이미 사용 중인 이메일입니다.'
         : err.constraint === 'user_phone_key' ? '이미 사용 중인 휴대폰번호입니다.'
-        : err.constraint === 'user_login_id_key' ? '이미 사용 중인 아이디입니다.' : '이미 등록된 정보가 있습니다.';
+        : err.constraint === 'user_agent_no_key' ? '이미 사용 중인 중매인 번호입니다.' : '이미 등록된 정보가 있습니다.';
       return res.status(409).json({ ok: false, message: msg });
     }
     console.error('Register error:', err);
@@ -251,33 +251,33 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 로그인 API (login_id + password → 사용자 정보 반환)
+// 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 반환)
 app.post('/api/auth/login', async (req, res) => {
-  const { login_id, password } = req.body || {};
-  if (!login_id || password === undefined) {
-    return res.status(400).json({ ok: false, message: '아이디와 비밀번호를 입력하세요.' });
+  const { agent_no, password } = req.body || {};
+  if (!agent_no || password === undefined) {
+    return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
   try {
     const client = await pool.connect();
     const r = await client.query(
-      `SELECT id, user_key, name, login_id, password_hash, status, is_admin FROM "user" WHERE login_id = $1`,
-      [String(login_id).trim()]
+      `SELECT id, user_key, name, agent_no, password_hash, status, is_admin FROM "user" WHERE agent_no = $1`,
+      [String(agent_no).trim()]
     );
     client.release();
     const row = r.rows[0];
     if (!row) {
-      return res.status(401).json({ ok: false, message: '아이디 또는 비밀번호가 올바르지 않습니다.' });
+      return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
     }
     if (row.status !== 'active') {
       return res.status(403).json({ ok: false, message: '비활성화된 계정입니다.' });
     }
     const match = await bcrypt.compare(String(password), row.password_hash);
     if (!match) {
-      return res.status(401).json({ ok: false, message: '아이디 또는 비밀번호가 올바르지 않습니다.' });
+      return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
     }
     res.json({
       ok: true,
-      user: { id: row.id, user_key: row.user_key, name: row.name, login_id: row.login_id, is_admin: !!row.is_admin },
+      user: { id: row.id, user_key: row.user_key, name: row.name, agent_no: row.agent_no, is_admin: !!row.is_admin },
     });
   } catch (err) {
     console.error('Login error:', err);

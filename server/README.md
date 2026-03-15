@@ -65,8 +65,17 @@ CREATE DATABASE sales_tool;
 **요약**: **pgAdmin** → **sales_tool** 선택 → **Tools** → **Query Tool** → **File** → **Open** → `server/schema-full.sql` 선택 → **F5** 실행.
 
 **관리자(is_admin)**: `user` 테이블에 `is_admin` 컬럼이 있습니다. 관리자로 지정된 사용자만 메인 화면에 **상품 마스터** 탭이 보입니다.  
-- 스키마를 처음 적용한 경우: pgAdmin에서 `UPDATE "user" SET is_admin = true WHERE login_id = '관리자아이디';` 로 지정.  
+- 스키마를 처음 적용한 경우: pgAdmin에서 `UPDATE "user" SET is_admin = true WHERE agent_no = '중매인번호';` 로 지정.  
 - 이미 스키마를 적용한 DB에 컬럼만 추가하려면: `ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;` 실행 후 위 UPDATE로 관리자 지정.
+
+### 2-2. 증분 마이그레이션 (배포 시 자동 스키마 반영)
+
+배포 툴(Railway 등)에서 **push 시 Postgres 스키마까지 자동 반영**하려면 `npm run migrate`를 사용합니다.
+
+- **로컬**: `cd server` 후 `npm run migrate` 실행 → `migrations/` 폴더의 SQL이 순서대로 적용됩니다.
+- **Railway**: 서비스 **Settings** → **Start Command**를 `npm run migrate && npm start` 로 설정하면, 배포될 때마다 마이그레이션 실행 후 앱이 시작됩니다.
+
+자세한 내용은 `server/migrations/README.md` 를 참고하세요.
 
 ## 3. 서버 설정 및 실행
 
@@ -159,9 +168,9 @@ npm run dev
 ### 4) 회원가입 화면으로 이동
 
 - 로그인 화면 아래 **“회원가입”** 링크를 클릭한다.
-- 회원가입 폼(이름, 이메일, 휴대폰, 아이디, 비밀번호 등)이 나오면 준비 완료.
+- 회원가입 폼(상호명, 이메일, 휴대폰, 중매인 번호, 비밀번호 등)이 나오면 준비 완료.
 
-### 5) 입력 후 이메일 / 휴대폰 / 아이디 중복확인
+### 5) 입력 후 이메일 / 휴대폰 / 중매인 번호 중복확인
 
 - **이름**: 원하는 이름 입력.
 - **이메일**: 이메일 형식에 맞게 입력 후 **“중복확인”** 클릭 → “사용 가능”이 나와야 한다. (형식이 틀리면 “이메일 형식이 올바르지 않습니다.” 표시.)
