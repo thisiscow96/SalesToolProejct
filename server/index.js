@@ -54,11 +54,12 @@ pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
 // 이메일 발송 (SMTP 미설정 시 콘솔에 인증번호만 출력)
 function getMailTransporter() {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (host && user && pass) {
-    return nodemailer.createTransport({ host, port: Number(process.env.SMTP_PORT) || 587, secure: false, auth: { user, pass } });
+  const host = (process.env.SMTP_HOST || '').trim();
+  const user = (process.env.SMTP_USER || '').trim();
+  const pass = process.env.SMTP_PASS; // 비밀번호는 공백도 유효할 수 있으므로 trim 안 함
+  const hasPass = pass != null && String(pass).length > 0;
+  if (host && user && hasPass) {
+    return nodemailer.createTransport({ host, port: Number(process.env.SMTP_PORT) || 587, secure: false, auth: { user, pass: String(pass) } });
   }
   return null;
 }
@@ -67,15 +68,23 @@ async function sendVerificationEmail(email, code) {
   const subject = '판매툴 인증';
   const text = `판매툴 인증\n\n인증번호 : ${code}\n\n5분 안에 입력해 주세요.`;
   if (transporter) {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
-      to: email,
-      subject,
-      text,
-    });
-    return { sent: true };
+    try {
+      await transporter.sendMail({
+        from: (process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
+        to: email,
+        subject,
+        text,
+      });
+      return { sent: true };
+    } catch (err) {
+      console.error('[이메일 인증] 발송 실패:', err.message);
+      return { sent: false, code };
+    }
   }
-  console.log('[이메일 인증] SMTP 미설정 — 인증번호:', code, '→', email);
+  const host = process.env.SMTP_HOST ? 'O' : 'X';
+  const user = process.env.SMTP_USER ? 'O' : 'X';
+  const passSet = process.env.SMTP_PASS != null && String(process.env.SMTP_PASS).length > 0 ? 'O' : 'X';
+  console.log('[이메일 인증] SMTP 미설정 — SMTP_HOST:', host, 'SMTP_USER:', user, 'SMTP_PASS:', passSet, '| 인증번호:', code, '→', email);
   return { sent: false, code };
 }
 
