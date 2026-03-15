@@ -3,6 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const { Pool } = require('pg');
 
 // ---------- 입력값 검증 ----------
@@ -52,7 +53,7 @@ function getPoolConfig() {
 const pool = new Pool(getPoolConfig());
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
-// 이메일 발송 (Gmail SMTP. Railway에서 587 막히면 465 시도)
+// 이메일 발송: RESEND_API_KEY 있으면 Resend(HTTPS), 없으면 Gmail SMTP. Render/Railway는 SMTP 막혀서 Resend 권장.
 function getMailTransporter() {
   const host = (process.env.SMTP_HOST || '').trim();
   const user = (process.env.SMTP_USER || '').trim();
@@ -71,9 +72,34 @@ function getMailTransporter() {
   });
 }
 async function sendVerificationEmail(email, code) {
-  const transporter = getMailTransporter();
   const subject = '판매툴 인증';
   const text = `판매툴 인증\n\n인증번호 : ${code}\n\n5분 안에 입력해 주세요.`;
+
+  const resendKey = (process.env.RESEND_API_KEY || '').trim();
+  if (resendKey) {
+    try {
+      const resend = new Resend(resendKey);
+      const from = (process.env.RESEND_FROM || 'onboarding@resend.dev').trim();
+      const { data, error } = await resend.emails.send({
+        from,
+        to: [email],
+        subject,
+        text,
+      });
+      if (error) {
+        console.error('[이메일 인증] Resend 실패:', error.message);
+        return { sent: false, code, error: error.message };
+      }
+      console.log('[이메일 인증] Resend 발송 성공 →', email);
+      return { sent: true };
+    } catch (err) {
+      const msg = err.message || String(err);
+      console.error('[이메일 인증] Resend 오류:', msg);
+      return { sent: false, code, error: msg };
+    }
+  }
+
+  const transporter = getMailTransporter();
   if (transporter) {
     try {
       await transporter.sendMail({
@@ -82,16 +108,16 @@ async function sendVerificationEmail(email, code) {
         subject,
         text,
       });
-      console.log('[이메일 인증] 발송 성공 →', email);
+      console.log('[이메일 인증] SMTP 발송 성공 →', email);
       return { sent: true };
     } catch (err) {
       const msg = err.code || err.message || String(err);
-      console.error('[이메일 인증] 발송 실패:', msg);
+      console.error('[이메일 인증] SMTP 발송 실패:', msg);
       return { sent: false, code, error: msg };
     }
   }
-  console.log('[이메일 인증] SMTP 미설정 (HOST/USER/PASS 중 누락) | 인증번호:', code, '→', email);
-  return { sent: false, code, error: 'SMTP 미설정 (SMTP_HOST, SMTP_USER, SMTP_PASS 확인)' };
+  console.log('[이메일 인증] 발송 수단 없음 (RESEND_API_KEY 또는 SMTP 설정 필요) | 인증번호:', code, '→', email);
+  return { sent: false, code, error: 'RESEND_API_KEY 또는 SMTP_HOST/SMTP_USER/SMTP_PASS 설정 필요' };
 }
 
 app.use(express.json());
