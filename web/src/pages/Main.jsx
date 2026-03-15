@@ -7,6 +7,8 @@ import {
   fetchProducts,
   fetchPartners,
   getUser,
+  createProduct,
+  createProductsBulk,
 } from '../api';
 import './Main.css';
 
@@ -242,46 +244,197 @@ function TabProductMaster() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
-  useEffect(() => {
+  const [categoryLarge, setCategoryLarge] = useState('');
+  const [categoryMid, setCategoryMid] = useState('');
+  const [categorySmall, setCategorySmall] = useState('');
+  const [nameSearch, setNameSearch] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [formMode, setFormMode] = useState('single'); // 'single' | 'bulk'
+  const [singleRow, setSingleRow] = useState({ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' });
+  const [bulkRows, setBulkRows] = useState([{ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+  const [submitErr, setSubmitErr] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = () => {
     setLoading(true);
     setErr('');
-    fetchProducts()
+    const params = {};
+    if (categoryLarge) params.category_large = categoryLarge;
+    if (categoryMid) params.category_mid = categoryMid;
+    if (categorySmall) params.category_small = categorySmall;
+    if (nameSearch) params.name = nameSearch;
+    fetchProducts(params)
       .then(setList)
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
-  }, []);
-  if (loading) return <p className="main-loading">불러오는 중…</p>;
-  if (err) return <p className="main-error">{err}</p>;
-  if (list.length === 0) return <p className="main-empty">등록된 상품이 없습니다.</p>;
+  };
+  useEffect(() => { load(); }, [categoryLarge, categoryMid, categorySmall, nameSearch]);
+
+  const handleCreateSingle = (e) => {
+    e.preventDefault();
+    setSubmitErr('');
+    setSubmitting(true);
+    createProduct(singleRow)
+      .then(() => {
+        setSingleRow({ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' });
+        load();
+        setShowForm(false);
+      })
+      .catch((e) => setSubmitErr(e.message))
+      .finally(() => setSubmitting(false));
+  };
+
+  const handleCreateBulk = (e) => {
+    e.preventDefault();
+    const products = bulkRows.filter((r) => r.name?.trim());
+    if (products.length === 0) {
+      setSubmitErr('상품명을 입력한 행이 없습니다.');
+      return;
+    }
+    setSubmitErr('');
+    setSubmitting(true);
+    createProductsBulk(products)
+      .then((data) => {
+        setBulkRows([{ name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+        load();
+        setShowForm(false);
+        if (data.count) setErr(''); // clear any previous err
+      })
+      .catch((e) => setSubmitErr(e.message))
+      .finally(() => setSubmitting(false));
+  };
+
+  const addBulkRow = () => setBulkRows((prev) => [...prev, { name: '', unit: 'kg', category_large: '', category_mid: '', category_small: '', product_key: '', memo: '' }]);
+  const setBulkRow = (idx, field, value) => setBulkRows((prev) => {
+    const next = [...prev];
+    next[idx] = { ...next[idx], [field]: value };
+    return next;
+  });
+
+  const distinct = (key) => [...new Set(list.map((r) => r[key]).filter(Boolean))].sort();
+
   return (
-    <div className="main-table-wrap">
-      <table className="main-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>상품명</th>
-            <th>단위</th>
-            <th>카테고리</th>
-            <th>비고</th>
-            <th>등록일</th>
-            <th>수정일</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((row) => (
-            <tr key={row.id}>
-              <td className="num">{row.id}</td>
-              <td>{row.name}</td>
-              <td>{row.unit}</td>
-              <td>{row.category || '-'}</td>
-              <td>{row.memo || '-'}</td>
-              <td>{row.created_at ? new Date(row.created_at).toLocaleString('ko-KR') : '-'}</td>
-              <td>{row.updated_at ? new Date(row.updated_at).toLocaleString('ko-KR') : '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+        <label>대분류
+          <select value={categoryLarge} onChange={(e) => setCategoryLarge(e.target.value)}>
+            <option value="">전체</option>
+            {distinct('category_large').map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label>중분류
+          <select value={categoryMid} onChange={(e) => setCategoryMid(e.target.value)}>
+            <option value="">전체</option>
+            {distinct('category_mid').map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label>소분류
+          <select value={categorySmall} onChange={(e) => setCategorySmall(e.target.value)}>
+            <option value="">전체</option>
+            {distinct('category_small').map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label>이름 검색
+          <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" style={{ width: '140px' }} />
+        </label>
+        <button type="button" className="main-btn" onClick={() => { setShowForm(!showForm); setSubmitErr(''); }}>
+          {showForm ? '취소' : '새로만들기'}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="product-master-form" style={{ border: '1px solid #ddd', padding: '16px', marginBottom: '16px', borderRadius: '8px' }}>
+          <div style={{ marginBottom: '12px' }}>
+            <button type="button" className={formMode === 'single' ? 'active' : ''} onClick={() => setFormMode('single')} style={{ marginRight: '8px' }}>단건 등록</button>
+            <button type="button" className={formMode === 'bulk' ? 'active' : ''} onClick={() => setFormMode('bulk')}>다건 등록</button>
+          </div>
+          {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
+          {formMode === 'single' && (
+            <form onSubmit={handleCreateSingle}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+                <label>상품명 * <input value={singleRow.name} onChange={(e) => setSingleRow((s) => ({ ...s, name: e.target.value }))} required /></label>
+                <label>단위 <input value={singleRow.unit} onChange={(e) => setSingleRow((s) => ({ ...s, unit: e.target.value }))} /></label>
+                <label>대분류 <input value={singleRow.category_large} onChange={(e) => setSingleRow((s) => ({ ...s, category_large: e.target.value }))} /></label>
+                <label>중분류 <input value={singleRow.category_mid} onChange={(e) => setSingleRow((s) => ({ ...s, category_mid: e.target.value }))} /></label>
+                <label>소분류 <input value={singleRow.category_small} onChange={(e) => setSingleRow((s) => ({ ...s, category_small: e.target.value }))} /></label>
+                <label>상품 키 <input value={singleRow.product_key} onChange={(e) => setSingleRow((s) => ({ ...s, product_key: e.target.value }))} /></label>
+                <label>비고 <input value={singleRow.memo} onChange={(e) => setSingleRow((s) => ({ ...s, memo: e.target.value }))} /></label>
+              </div>
+              <button type="submit" disabled={submitting}>{submitting ? '등록 중…' : '등록'}</button>
+            </form>
+          )}
+          {formMode === 'bulk' && (
+            <form onSubmit={handleCreateBulk}>
+              <div className="main-table-wrap" style={{ overflowX: 'auto', marginBottom: '8px' }}>
+                <table className="main-table">
+                  <thead>
+                    <tr>
+                      <th>상품명 *</th>
+                      <th>단위</th>
+                      <th>대분류</th>
+                      <th>중분류</th>
+                      <th>소분류</th>
+                      <th>상품 키</th>
+                      <th>비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkRows.map((row, idx) => (
+                      <tr key={idx}>
+                        <td><input value={row.name} onChange={(e) => setBulkRow(idx, 'name', e.target.value)} placeholder="필수" style={{ width: '120px' }} /></td>
+                        <td><input value={row.unit} onChange={(e) => setBulkRow(idx, 'unit', e.target.value)} style={{ width: '50px' }} /></td>
+                        <td><input value={row.category_large} onChange={(e) => setBulkRow(idx, 'category_large', e.target.value)} style={{ width: '80px' }} /></td>
+                        <td><input value={row.category_mid} onChange={(e) => setBulkRow(idx, 'category_mid', e.target.value)} style={{ width: '80px' }} /></td>
+                        <td><input value={row.category_small} onChange={(e) => setBulkRow(idx, 'category_small', e.target.value)} style={{ width: '80px' }} /></td>
+                        <td><input value={row.product_key} onChange={(e) => setBulkRow(idx, 'product_key', e.target.value)} style={{ width: '80px' }} /></td>
+                        <td><input value={row.memo} onChange={(e) => setBulkRow(idx, 'memo', e.target.value)} style={{ width: '100px' }} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button type="button" onClick={addBulkRow} style={{ marginRight: '8px' }}>행 추가</button>
+              <button type="submit" disabled={submitting}>{submitting ? '등록 중…' : '일괄 등록'}</button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">등록된 상품이 없습니다. 검색 조건을 바꾸거나 새로만들기로 등록하세요.</p> : (
+        <div className="main-table-wrap">
+          <table className="main-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>상품 키</th>
+                <th>상품명</th>
+                <th>단위</th>
+                <th>대분류</th>
+                <th>중분류</th>
+                <th>소분류</th>
+                <th>비고</th>
+                <th>등록일</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((row) => (
+                <tr key={row.id}>
+                  <td className="num">{row.id}</td>
+                  <td>{row.product_key || '-'}</td>
+                  <td>{row.name}</td>
+                  <td>{row.unit}</td>
+                  <td>{row.category_large || '-'}</td>
+                  <td>{row.category_mid || '-'}</td>
+                  <td>{row.category_small || '-'}</td>
+                  <td>{row.memo || '-'}</td>
+                  <td>{row.created_at ? new Date(row.created_at).toLocaleString('ko-KR') : '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
 

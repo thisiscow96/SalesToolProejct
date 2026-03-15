@@ -20,11 +20,34 @@ function authHeaders() {
   };
 }
 
-export async function fetchProducts() {
-  const res = await fetch(`${API_BASE}/products`);
+export async function fetchProducts(params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await fetch(`${API_BASE}/products${q ? '?' + q : ''}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
+}
+
+export async function createProduct(body) {
+  const res = await fetch(`${API_BASE}/products`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '등록 실패');
+  return data.data;
+}
+
+export async function createProductsBulk(products) {
+  const res = await fetch(`${API_BASE}/products/bulk`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ products }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '다건 등록 실패');
+  return data;
 }
 
 export async function fetchPartners() {

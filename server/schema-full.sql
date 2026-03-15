@@ -113,13 +113,17 @@ CREATE INDEX idx_account_user ON account(user_id);
 
 -- ---------- 2. 상품 마스터 ----------
 CREATE TABLE product (
-  id         SERIAL PRIMARY KEY,
-  name       VARCHAR(200) NOT NULL,
-  unit       VARCHAR(50) NOT NULL DEFAULT 'kg',
-  category   VARCHAR(100),
-  memo       TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  id             SERIAL PRIMARY KEY,
+  name           VARCHAR(200) NOT NULL,
+  unit           VARCHAR(50) NOT NULL DEFAULT 'kg',
+  category       VARCHAR(100),
+  category_large VARCHAR(100),
+  category_mid   VARCHAR(100),
+  category_small VARCHAR(100),
+  product_key    VARCHAR(100),
+  memo           TEXT,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ---------- 2-2. 상품별 일별 단가 — 회원별(금액은 생성한 회원만) ----------

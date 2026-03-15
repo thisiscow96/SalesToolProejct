@@ -135,6 +135,19 @@ async function getUserId(req) {
   }
 }
 
+async function getUserIdAndAdmin(req) {
+  const agentNo = req.headers['x-agent-no']?.trim();
+  if (!agentNo) return null;
+  try {
+    const r = await pool.query('SELECT id, is_admin FROM "user" WHERE agent_no = $1 AND status = $2', [agentNo, 'active']);
+    const row = r.rows[0];
+    return row ? { userId: row.id, isAdmin: !!row.is_admin } : null;
+  } catch (err) {
+    console.error('getUserIdAndAdmin error:', err.message);
+    return null;
+  }
+}
+
 // 서버 상태 확인 (DB 없이도 동작)
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'Sales tool backend is running' });
@@ -345,14 +358,84 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ---------- 메인 화면용 API (X-Agent-No 헤더 필수, 중매인 번호 기준으로 해당 회원 데이터 조회) ----------
 
-// 상품 목록 (전체 공통, 관리자 탭에서도 사용)
+// 상품 목록 (대분류/중분류/소분류/이름 검색 가능)
 app.get('/api/products', async (req, res) => {
   try {
-    const r = await pool.query('SELECT id, name, unit, category, memo, created_at, updated_at FROM product ORDER BY name');
+    const categoryLarge = req.query.category_large?.trim();
+    const categoryMid = req.query.category_mid?.trim();
+    const categorySmall = req.query.category_small?.trim();
+    const nameSearch = req.query.name?.trim();
+    let q = `SELECT id, name, unit, category, category_large, category_mid, category_small, product_key, memo, created_at, updated_at FROM product WHERE 1=1`;
+    const params = [];
+    if (categoryLarge) { params.push(categoryLarge); q += ` AND category_large = $${params.length}`; }
+    if (categoryMid) { params.push(categoryMid); q += ` AND category_mid = $${params.length}`; }
+    if (categorySmall) { params.push(categorySmall); q += ` AND category_small = $${params.length}`; }
+    if (nameSearch) { params.push('%' + nameSearch + '%'); q += ` AND name ILIKE $${params.length}`; }
+    q += ' ORDER BY category_large, category_mid, category_small, name';
+    const r = await pool.query(q, params);
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Products error:', err);
     res.status(500).json({ ok: false });
+  }
+});
+
+// 상품 단건 등록 (관리자)
+app.post('/api/products', async (req, res) => {
+  const auth = await getUserIdAndAdmin(req);
+  if (!auth) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  if (!auth.isAdmin) return res.status(403).json({ ok: false, message: '관리자만 등록할 수 있습니다.' });
+  const { name, unit, category_large, category_mid, category_small, product_key, memo } = req.body || {};
+  if (!name?.trim()) return res.status(400).json({ ok: false, message: '상품명을 입력하세요.' });
+  try {
+    const r = await pool.query(
+      `INSERT INTO product (name, unit, category_large, category_mid, category_small, product_key, memo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, unit, category_large, category_mid, category_small, product_key, memo, created_at`,
+      [name.trim(), (unit || 'kg').trim(), category_large?.trim() || null, category_mid?.trim() || null, category_small?.trim() || null, product_key?.trim() || null, memo?.trim() || null]
+    );
+    res.status(201).json({ ok: true, data: r.rows[0] });
+  } catch (err) {
+    console.error('Product create error:', err);
+    res.status(500).json({ ok: false, message: err.message || '등록에 실패했습니다.' });
+  }
+});
+
+// 상품 다건 등록 (관리자)
+app.post('/api/products/bulk', async (req, res) => {
+  const auth = await getUserIdAndAdmin(req);
+  if (!auth) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  if (!auth.isAdmin) return res.status(403).json({ ok: false, message: '관리자만 등록할 수 있습니다.' });
+  const products = Array.isArray(req.body?.products) ? req.body.products : [];
+  if (products.length === 0) return res.status(400).json({ ok: false, message: '등록할 상품 목록을 입력하세요.' });
+  const created = [];
+  const client = await pool.connect();
+  try {
+    for (const p of products) {
+      const name = (p.name != null && String(p.name)).trim();
+      if (!name) continue;
+      const r = await client.query(
+        `INSERT INTO product (name, unit, category_large, category_mid, category_small, product_key, memo)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, name, unit, category_large, category_mid, category_small, product_key, memo, created_at`,
+        [
+          name,
+          (p.unit != null ? String(p.unit) : 'kg').trim(),
+          (p.category_large != null ? String(p.category_large) : '').trim() || null,
+          (p.category_mid != null ? String(p.category_mid) : '').trim() || null,
+          (p.category_small != null ? String(p.category_small) : '').trim() || null,
+          (p.product_key != null ? String(p.product_key) : '').trim() || null,
+          (p.memo != null ? String(p.memo) : '').trim() || null,
+        ]
+      );
+      created.push(r.rows[0]);
+    }
+    client.release();
+    res.status(201).json({ ok: true, data: created, count: created.length });
+  } catch (err) {
+    client.release();
+    console.error('Product bulk create error:', err);
+    res.status(500).json({ ok: false, message: err.message || '다건 등록에 실패했습니다.' });
   }
 });
 
