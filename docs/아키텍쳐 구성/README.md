@@ -4,3 +4,4 @@
 
 - [서비스별 역할 및 선정 사유](서비스별-역할-및-선정사유.md)
 - [시스템별 사용용도](시스템별-사용용도.md)
+- [도메인 (DNS·Resend·garaksalestool.com)](도메인/README.md)

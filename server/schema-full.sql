@@ -12,6 +12,8 @@ DROP VIEW IF EXISTS receivables_by_partner;
 
 -- 테이블 (단수명 — 현재 스키마)
 DROP TABLE IF EXISTS product_transfer;
+DROP TABLE IF EXISTS purchase_allocation;
+DROP TABLE IF EXISTS refund;
 DROP TABLE IF EXISTS inventory;
 DROP TABLE IF EXISTS disposal;
 DROP TABLE IF EXISTS payment_allocation;
@@ -44,6 +46,7 @@ DROP SEQUENCE IF EXISTS user_user_key_seq;
 DROP SEQUENCE IF EXISTS users_user_key_seq;
 
 -- 타입 (테이블 제거 후 삭제 가능)
+DROP TYPE IF EXISTS transfer_action;
 DROP TYPE IF EXISTS transfer_location_type;
 DROP TYPE IF EXISTS payment_status;
 DROP TYPE IF EXISTS partner_type;
@@ -51,9 +54,10 @@ DROP TYPE IF EXISTS user_status;
 
 -- ---------- 타입 정의 ----------
 CREATE TYPE user_status AS ENUM ('active', 'suspended', 'withdrawn');
-CREATE TYPE partner_type AS ENUM ('supplier', 'customer');
+CREATE TYPE partner_type AS ENUM ('supplier', 'customer', 'same_market', 'wholesaler', 'market_wholesaler');
 CREATE TYPE payment_status AS ENUM ('paid', 'unpaid', 'partial');
 CREATE TYPE transfer_location_type AS ENUM ('supplier', 'inventory', 'customer', 'disposal');
+CREATE TYPE transfer_action AS ENUM ('purchase', 'sale', 'refund', 'disposal');
 
 -- ---------- 0. 회원 (가입·이메일인증·약관동의) ----------
 CREATE SEQUENCE user_user_key_seq START 1;
@@ -105,6 +109,7 @@ CREATE TABLE account (
   contact    VARCHAR(100),
   phone      VARCHAR(50),
   address    TEXT,
+  location   VARCHAR(200),
   memo       TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -170,11 +175,41 @@ CREATE TABLE sale (
   sale_date      DATE NOT NULL,
   payment_status payment_status NOT NULL DEFAULT 'unpaid',
   paid_amount    NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+  status         VARCHAR(20) NOT NULL DEFAULT 'active',
   memo           TEXT,
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_sale_user ON sale(user_id);
+
+-- ---------- 3-2. 매입-매출 연결 (한 매출이 어떤 매입에서 소진되었는지) ----------
+CREATE TABLE purchase_allocation (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES "user"(id),
+  purchase_id INTEGER NOT NULL REFERENCES purchase(id) ON DELETE RESTRICT,
+  sale_id     INTEGER NOT NULL REFERENCES sale(id) ON DELETE RESTRICT,
+  quantity    NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_purchase_allocation_purchase ON purchase_allocation(purchase_id);
+CREATE INDEX idx_purchase_allocation_sale ON purchase_allocation(sale_id);
+CREATE INDEX idx_purchase_allocation_user ON purchase_allocation(user_id);
+
+-- ---------- 4-1. 환불 (반품 수량·환불금) ----------
+CREATE TABLE refund (
+  id             SERIAL PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES "user"(id),
+  sale_id        INTEGER NOT NULL REFERENCES sale(id) ON DELETE RESTRICT,
+  quantity       NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+  refund_amount  NUMERIC(14, 2),
+  reason         TEXT,
+  refunded_at    DATE NOT NULL,
+  memo           TEXT,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT refund_amount_nonneg CHECK (refund_amount IS NULL OR refund_amount >= 0)
+);
+CREATE INDEX idx_refund_user ON refund(user_id);
+CREATE INDEX idx_refund_sale ON refund(sale_id);
 
 -- ---------- 4-2. 수금 (묶음 결제) — 회원별 ----------
 CREATE TABLE payment (
@@ -183,6 +218,7 @@ CREATE TABLE payment (
   partner_id INTEGER NOT NULL REFERENCES account(id),
   amount     NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
   paid_at    DATE NOT NULL,
+  entry_kind VARCHAR(20) NOT NULL DEFAULT 'receive',
   memo       TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -230,14 +266,18 @@ CREATE TABLE product_transfer (
   user_id         INTEGER NOT NULL REFERENCES "user"(id),
   product_id      INTEGER NOT NULL REFERENCES product(id),
   quantity        NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+  action_type     transfer_action NOT NULL DEFAULT 'purchase',
   from_type       transfer_location_type NOT NULL,
   to_type         transfer_location_type NOT NULL,
   from_partner_id INTEGER REFERENCES account(id),
   to_partner_id   INTEGER REFERENCES account(id),
+  before_location VARCHAR(300),
+  after_location  VARCHAR(300),
   transferred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   purchase_id     INTEGER REFERENCES purchase(id),
   sale_id         INTEGER REFERENCES sale(id),
   disposal_id     INTEGER REFERENCES disposal(id),
+  refund_id       INTEGER REFERENCES refund(id),
   memo            TEXT,
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -267,6 +307,6 @@ GROUP BY a.user_id, a.id, a.name;
 
 -- =============================================================================
 -- 끝. 테이블: user, account, product, product_daily_price, purchase, sale,
---            payment, payment_allocation, disposal, inventory, product_transfer
+--            purchase_allocation, refund, payment, payment_allocation, disposal, inventory, product_transfer
 -- 뷰: receivables_by_partner
 -- =============================================================================

@@ -337,6 +337,7 @@ app.post('/api/auth/register', async (req, res) => {
 // 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 반환)
 app.post('/api/auth/login', async (req, res) => {
   const { agent_no, password } = req.body || {};
+  console.log('[login] body =', req.body);
   if (!agent_no || password === undefined) {
     return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
@@ -456,7 +457,10 @@ app.get('/api/partners', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   try {
-    const r = await pool.query('SELECT id, name, type, contact, phone FROM account WHERE user_id = $1 ORDER BY name', [userId]);
+    const r = await pool.query(
+      'SELECT id, name, type, contact, phone, location, address FROM account WHERE user_id = $1 ORDER BY name',
+      [userId]
+    );
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Partners error:', err);
@@ -493,8 +497,10 @@ app.get('/api/purchases', async (req, res) => {
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
   try {
-    let q = `SELECT pu.id, pu.purchase_date, pu.quantity, pu.unit_price, pu.total_amount, pu.memo,
-             p.name AS product_name, p.unit, pt.name AS partner_name
+    let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.quantity, pu.unit_price, pu.total_amount, pu.memo,
+             p.name AS product_name, p.unit, pt.name AS partner_name,
+             COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
+             (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
              FROM purchase pu
              JOIN product p ON p.id = pu.product_id
              JOIN account pt ON pt.id = pu.partner_id
@@ -521,8 +527,10 @@ app.get('/api/sales', async (req, res) => {
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
   try {
-    let q = `SELECT s.id, s.sale_date, s.quantity, s.unit_price, s.total_amount, s.payment_status, s.paid_amount, s.memo,
-             p.name AS product_name, p.unit, pt.name AS partner_name
+    let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.quantity, s.unit_price, s.total_amount,
+             s.payment_status, s.paid_amount, s.status, s.memo,
+             p.name AS product_name, p.unit, pt.name AS partner_name,
+             COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
              FROM sale s
              JOIN product p ON p.id = s.product_id
              JOIN account pt ON pt.id = s.partner_id
@@ -548,7 +556,7 @@ app.get('/api/payments', async (req, res) => {
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
   try {
-    let q = `SELECT py.id, py.paid_at, py.amount, py.memo, pt.name AS partner_name
+    let q = `SELECT py.id, py.paid_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name
              FROM payment py
              JOIN account pt ON pt.id = py.partner_id
              WHERE py.user_id = $1`;
@@ -561,6 +569,468 @@ app.get('/api/payments', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Payments error:', err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ---------- 거래 흐름: 매입·매출 전환·수금·환불·폐기 ----------
+const PURCHASE_PARTNER_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+const SALE_PARTNER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
+
+function accountLocationLine(row) {
+  if (!row) return '';
+  const name = row.name != null ? String(row.name).trim() : '';
+  const loc = row.location != null ? String(row.location).trim() : '';
+  if (loc && name) return `${name} · ${loc}`;
+  return loc || name || '';
+}
+
+async function getUserWarehouseLabel(client, userId) {
+  const u = await client.query(`SELECT name, agent_no FROM "user" WHERE id = $1`, [userId]);
+  const r = u.rows[0];
+  if (!r) return '내 창고';
+  return `${r.name} (중매 ${r.agent_no})`;
+}
+
+async function syncSalePaymentStatus(client, saleId) {
+  await client.query(
+    `UPDATE sale SET payment_status =
+      CASE
+        WHEN paid_amount >= total_amount THEN 'paid'::payment_status
+        WHEN paid_amount > 0 THEN 'partial'::payment_status
+        ELSE 'unpaid'::payment_status
+      END,
+      updated_at = NOW()
+     WHERE id = $1`,
+    [saleId]
+  );
+}
+
+async function upsertInventoryDelta(client, userId, productId, delta) {
+  const existing = await client.query(
+    `SELECT quantity FROM inventory WHERE user_id = $1 AND product_id = $2 FOR UPDATE`,
+    [userId, productId]
+  );
+  const cur = existing.rows[0] ? Number(existing.rows[0].quantity) : 0;
+  const next = cur + delta;
+  if (next < 0) {
+    const e = new Error('재고가 부족합니다.');
+    e.code = 'NEGATIVE_INVENTORY';
+    throw e;
+  }
+  if (existing.rows[0]) {
+    await client.query(
+      `UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE user_id = $2 AND product_id = $3`,
+      [next, userId, productId]
+    );
+  } else {
+    if (delta <= 0) {
+      const e = new Error('재고가 부족합니다.');
+      e.code = 'NEGATIVE_INVENTORY';
+      throw e;
+    }
+    await client.query(`INSERT INTO inventory (user_id, product_id, quantity) VALUES ($1,$2,$3)`, [userId, productId, next]);
+  }
+}
+
+async function insertTransfer(client, row) {
+  await client.query(
+    `INSERT INTO product_transfer (
+       user_id, product_id, quantity, action_type, from_type, to_type,
+       from_partner_id, to_partner_id, before_location, after_location,
+       transferred_at, purchase_id, sale_id, disposal_id, refund_id, memo
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, COALESCE($11::timestamptz, NOW()), $12,$13,$14,$15,$16)`,
+    [
+      row.userId,
+      row.productId,
+      row.quantity,
+      row.actionType,
+      row.fromType,
+      row.toType,
+      row.fromPartnerId ?? null,
+      row.toPartnerId ?? null,
+      row.beforeLocation ?? null,
+      row.afterLocation ?? null,
+      row.transferredAt ?? null,
+      row.purchaseId ?? null,
+      row.saleId ?? null,
+      row.disposalId ?? null,
+      row.refundId ?? null,
+      row.memo ?? null,
+    ]
+  );
+}
+
+// 매입 등록 (입고 + 재고 증가 + 이동 이력)
+app.post('/api/purchases', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const { partner_id, product_id, quantity, unit_price, purchase_date, memo } = req.body || {};
+  const pid = parseInt(partner_id, 10);
+  const prid = parseInt(product_id, 10);
+  const qty = Number(quantity);
+  const up = Number(unit_price);
+  if (!Number.isFinite(pid) || !Number.isFinite(prid) || !(qty > 0) || !(up >= 0) || !purchase_date) {
+    return res.status(400).json({ ok: false, message: '거래처·상품·수량·단가·매입일을 올바르게 입력하세요.' });
+  }
+  const total = Math.round(qty * up * 100) / 100;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const acc = await client.query(`SELECT id, type, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [pid, userId]);
+    const a = acc.rows[0];
+    if (!a || !PURCHASE_PARTNER_TYPES.has(a.type)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: '매입 가능한 거래처(공급/도매 등)를 선택하세요.' });
+    }
+    const pr = await client.query(`SELECT id FROM product WHERE id = $1`, [prid]);
+    if (!pr.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
+    }
+    const ins = await client.query(
+      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      [userId, pid, prid, qty, up, total, String(purchase_date).slice(0, 10), memo?.trim() || null]
+    );
+    const purchaseId = ins.rows[0].id;
+    await upsertInventoryDelta(client, userId, prid, qty);
+    const wh = await getUserWarehouseLabel(client, userId);
+    await insertTransfer(client, {
+      userId,
+      productId: prid,
+      quantity: qty,
+      actionType: 'purchase',
+      fromType: 'supplier',
+      toType: 'inventory',
+      fromPartnerId: pid,
+      toPartnerId: null,
+      beforeLocation: accountLocationLine(a),
+      afterLocation: wh,
+      purchaseId,
+      memo: memo?.trim() || null,
+    });
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: { id: purchaseId, total_amount: total } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST purchases error:', err);
+    if (err.code === 'NEGATIVE_INVENTORY') {
+      return res.status(400).json({ ok: false, message: err.message });
+    }
+    res.status(500).json({ ok: false, message: err.message || '매입 등록에 실패했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
+// 매입 → 매출 전환 (배분 + 재고 감소 + 매출·이동)
+app.post('/api/purchases/convert-to-sales', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (items.length === 0) return res.status(400).json({ ok: false, message: '전환할 매입 행을 입력하세요.' });
+  const client = await pool.connect();
+  const created = [];
+  try {
+    await client.query('BEGIN');
+    const wh = await getUserWarehouseLabel(client, userId);
+    for (const it of items) {
+      const purchaseId = parseInt(it.purchase_id, 10);
+      const custId = parseInt(it.partner_id, 10);
+      const qty = Number(it.quantity);
+      const up = Number(it.unit_price);
+      const saleDate = it.sale_date;
+      const smemo = it.memo?.trim() || null;
+      if (!Number.isFinite(purchaseId) || !Number.isFinite(custId) || !(qty > 0) || !(up >= 0) || !saleDate) {
+        throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
+      }
+      const pu = await client.query(
+        `SELECT id, partner_id, product_id, quantity FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        [purchaseId, userId]
+      );
+      const p = pu.rows[0];
+      if (!p) throw new Error(`매입 ${purchaseId} 를 찾을 수 없습니다.`);
+      const al = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM purchase_allocation WHERE purchase_id = $1`, [purchaseId]);
+      const allocated = Number(al.rows[0].s);
+      const remaining = Number(p.quantity) - allocated;
+      if (qty > remaining + 1e-9) throw new Error(`매입 ${purchaseId} 의 남은 수량(${remaining})보다 많게 판매할 수 없습니다.`);
+
+      const cust = await client.query(`SELECT id, type, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [custId, userId]);
+      const c = cust.rows[0];
+      if (!c || !SALE_PARTNER_TYPES.has(c.type)) throw new Error('판매 가능한 거래처를 선택하세요.');
+
+      await upsertInventoryDelta(client, userId, p.product_id, -qty);
+
+      const totalAmt = Math.round(qty * up * 100) / 100;
+      const saleIns = await client.query(
+        `INSERT INTO sale (user_id, partner_id, product_id, quantity, unit_price, total_amount, sale_date, payment_status, paid_amount, status, memo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid',0,'active',$8)
+         RETURNING id`,
+        [userId, custId, p.product_id, qty, up, totalAmt, String(saleDate).slice(0, 10), smemo]
+      );
+      const saleId = saleIns.rows[0].id;
+      await client.query(
+        `INSERT INTO purchase_allocation (user_id, purchase_id, sale_id, quantity) VALUES ($1,$2,$3,$4)`,
+        [userId, purchaseId, saleId, qty]
+      );
+      await insertTransfer(client, {
+        userId,
+        productId: p.product_id,
+        quantity: qty,
+        actionType: 'sale',
+        fromType: 'inventory',
+        toType: 'customer',
+        fromPartnerId: null,
+        toPartnerId: custId,
+        beforeLocation: wh,
+        afterLocation: accountLocationLine(c),
+        saleId,
+        purchaseId,
+        memo: smemo,
+      });
+      created.push({ sale_id: saleId, purchase_id: purchaseId });
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: created });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('convert-to-sales error:', err);
+    const msg = err.message || '매출 전환에 실패했습니다.';
+    const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
+    res.status(code).json({ ok: false, message: msg });
+  } finally {
+    client.release();
+  }
+});
+
+// 수금 등록 (배분 + 매출 paid 갱신)
+app.post('/api/payments', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const { partner_id, amount, paid_at, memo, allocations, entry_kind } = req.body || {};
+  const kind = entry_kind === 'refund' ? 'refund' : 'receive';
+  const pid = parseInt(partner_id, 10);
+  const amt = Number(amount);
+  const paidAt = paid_at ? String(paid_at).slice(0, 10) : '';
+  const allocs = Array.isArray(allocations) ? allocations : [];
+  if (!Number.isFinite(pid) || !(amt > 0) || !paidAt) {
+    return res.status(400).json({ ok: false, message: '거래처·금액·수금일을 입력하세요.' });
+  }
+  if (kind === 'receive' && allocs.length === 0) {
+    return res.status(400).json({ ok: false, message: '수금 배분(매출별 금액)을 입력하세요.' });
+  }
+  let sumAlloc = 0;
+  for (const a of allocs) {
+    sumAlloc += Number(a.amount);
+  }
+  if (kind === 'receive' && Math.abs(sumAlloc - amt) > 0.01) {
+    return res.status(400).json({ ok: false, message: `배분 합계(${sumAlloc})가 수금액(${amt})과 일치해야 합니다.` });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const acc = await client.query(`SELECT id, type FROM account WHERE id = $1 AND user_id = $2`, [pid, userId]);
+    if (!acc.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: '거래처를 찾을 수 없습니다.' });
+    }
+    const payIns = await client.query(
+      `INSERT INTO payment (user_id, partner_id, amount, paid_at, entry_kind, memo) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [userId, pid, amt, paidAt, kind, memo?.trim() || null]
+    );
+    const paymentId = payIns.rows[0].id;
+    if (kind === 'receive') {
+      for (const a of allocs) {
+        const sid = parseInt(a.sale_id, 10);
+        const al = Number(a.amount);
+        if (!Number.isFinite(sid) || !(al > 0)) {
+          throw new Error('배분 행에 매출 ID와 금액이 필요합니다.');
+        }
+        const s = await client.query(
+          `SELECT id, partner_id, total_amount, paid_amount FROM sale WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+          [sid, userId]
+        );
+        const sale = s.rows[0];
+        if (!sale || sale.partner_id !== pid) throw new Error(`매출 ${sid} 는 선택한 거래처와 맞지 않습니다.`);
+        await client.query(`UPDATE sale SET paid_amount = paid_amount + $1, updated_at = NOW() WHERE id = $2`, [al, sid]);
+        await syncSalePaymentStatus(client, sid);
+        await client.query(`INSERT INTO payment_allocation (payment_id, sale_id, amount) VALUES ($1,$2,$3)`, [paymentId, sid, al]);
+      }
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: { id: paymentId } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST payments error:', err);
+    res.status(500).json({ ok: false, message: err.message || '수금 등록에 실패했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
+// 환불 (반품 입고 + 이력 + 선택적 환불금 기록)
+app.post('/api/sales/:saleId/refund', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const saleId = parseInt(req.params.saleId, 10);
+  if (!Number.isFinite(saleId)) return res.status(400).json({ ok: false, message: '매출 ID가 올바르지 않습니다.' });
+  const { quantity, refund_amount, refunded_at, reason, memo } = req.body || {};
+  const qty = Number(quantity);
+  const ra = refund_amount != null && refund_amount !== '' ? Number(refund_amount) : null;
+  const rAt = refunded_at ? String(refunded_at).slice(0, 10) : '';
+  if (!(qty > 0) || !rAt) {
+    return res.status(400).json({ ok: false, message: '반품 수량과 환불일을 입력하세요.' });
+  }
+  if (ra != null && (!Number.isFinite(ra) || ra < 0)) {
+    return res.status(400).json({ ok: false, message: '환불금액이 올바르지 않습니다.' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const s = await client.query(
+      `SELECT id, partner_id, product_id, quantity, status FROM sale WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [saleId, userId]
+    );
+    const sale = s.rows[0];
+    if (!sale) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: '매출을 찾을 수 없습니다.' });
+    }
+    if (sale.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: '이미 취소된 매출입니다.' });
+    }
+    const rf = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM refund WHERE sale_id = $1`, [saleId]);
+    const already = Number(rf.rows[0].s);
+    const maxQty = Number(sale.quantity) - already;
+    if (qty > maxQty + 1e-9) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: `환불 가능 수량은 최대 ${maxQty} 입니다.` });
+    }
+    const wh = await getUserWarehouseLabel(client, userId);
+    const cust = await client.query(`SELECT id, name, location, address FROM account WHERE id = $1`, [sale.partner_id]);
+    const c = cust.rows[0];
+    await upsertInventoryDelta(client, userId, sale.product_id, qty);
+    const refIns = await client.query(
+      `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, reason, refunded_at, memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [userId, saleId, qty, ra, reason?.trim() || null, rAt, memo?.trim() || null]
+    );
+    const refundId = refIns.rows[0].id;
+    await insertTransfer(client, {
+      userId,
+      productId: sale.product_id,
+      quantity: qty,
+      actionType: 'refund',
+      fromType: 'customer',
+      toType: 'inventory',
+      fromPartnerId: sale.partner_id,
+      toPartnerId: null,
+      beforeLocation: accountLocationLine(c),
+      afterLocation: wh,
+      saleId,
+      refundId,
+      memo: reason?.trim() || null,
+    });
+    if (ra != null && ra > 0) {
+      await client.query(
+        `INSERT INTO payment (user_id, partner_id, amount, paid_at, entry_kind, memo) VALUES ($1,$2,$3,$4,'refund',$5)`,
+        [userId, sale.partner_id, ra, rAt, `환불 #${refundId} ${reason || ''}`.trim().slice(0, 500)]
+      );
+      await client.query(
+        `UPDATE sale SET paid_amount = GREATEST(0, paid_amount - $1), updated_at = NOW() WHERE id = $2`,
+        [ra, saleId]
+      );
+      await syncSalePaymentStatus(client, saleId);
+    }
+    const newRefunded = already + qty;
+    if (newRefunded >= Number(sale.quantity) - 1e-9) {
+      await client.query(`UPDATE sale SET status = 'refunded', updated_at = NOW() WHERE id = $1`, [saleId]);
+    }
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: { refund_id: refundId } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('refund error:', err);
+    const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
+    res.status(code).json({ ok: false, message: err.message || '환불 처리에 실패했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
+// 폐기
+app.post('/api/disposals', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const { product_id, quantity, disposal_date, reason, memo } = req.body || {};
+  const prid = parseInt(product_id, 10);
+  const qty = Number(quantity);
+  const ddate = disposal_date ? String(disposal_date).slice(0, 10) : '';
+  if (!Number.isFinite(prid) || !(qty > 0) || !ddate) {
+    return res.status(400).json({ ok: false, message: '상품·수량·폐기일을 입력하세요.' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const wh = await getUserWarehouseLabel(client, userId);
+    await upsertInventoryDelta(client, userId, prid, -qty);
+    const dIns = await client.query(
+      `INSERT INTO disposal (user_id, product_id, quantity, disposal_date, reason, memo)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [userId, prid, qty, ddate, reason?.trim() || null, memo?.trim() || null]
+    );
+    const disposalId = dIns.rows[0].id;
+    await insertTransfer(client, {
+      userId,
+      productId: prid,
+      quantity: qty,
+      actionType: 'disposal',
+      fromType: 'inventory',
+      toType: 'disposal',
+      fromPartnerId: null,
+      toPartnerId: null,
+      beforeLocation: wh,
+      afterLocation: '폐기',
+      disposalId,
+      memo: reason?.trim() || null,
+    });
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: { id: disposalId } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('disposal error:', err);
+    const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
+    res.status(code).json({ ok: false, message: err.message || '폐기 등록에 실패했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/disposals', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const from = req.query.from_date || '';
+  const to = req.query.to_date || '';
+  try {
+    let q = `SELECT d.id, d.disposal_date, d.quantity, d.reason, d.memo, p.name AS product_name, p.unit
+             FROM disposal d JOIN product p ON p.id = d.product_id WHERE d.user_id = $1`;
+    const params = [userId];
+    if (from) {
+      params.push(from);
+      q += ` AND d.disposal_date >= $${params.length}`;
+    }
+    if (to) {
+      params.push(to);
+      q += ` AND d.disposal_date <= $${params.length}`;
+    }
+    q += ' ORDER BY d.disposal_date DESC, d.id DESC';
+    const r = await pool.query(q, params);
+    res.json({ ok: true, data: r.rows });
+  } catch (err) {
+    console.error('GET disposals error:', err);
     res.status(500).json({ ok: false });
   }
 });
