@@ -1,0 +1,144 @@
+{
+  "runId": "run-2026-03-22T08-16-47-584Z",
+  "startedAt": "2026-03-22T08:16:47.584Z",
+  "updatedAt": "2026-03-22T08:16:47.812Z",
+  "base": "http://127.0.0.1:3000",
+  "agent": "admin001",
+  "tag": "1774167407584",
+  "productKey": "SCENARIO-1774167407584",
+  "steps": [
+    {
+      "id": "S-001",
+      "ok": true,
+      "detail": "status=200 db=connected",
+      "mark": "○"
+    },
+    {
+      "id": "S-002",
+      "ok": true,
+      "detail": "status=401 msg=로그인이 필요합니다.",
+      "mark": "○"
+    },
+    {
+      "id": "S-003",
+      "ok": true,
+      "detail": "status=401",
+      "mark": "○"
+    },
+    {
+      "id": "S-004",
+      "ok": true,
+      "detail": "status=200 n=2",
+      "mark": "○"
+    },
+    {
+      "id": "S-005",
+      "ok": true,
+      "detail": "status=200",
+      "mark": "○"
+    },
+    {
+      "id": "S-006",
+      "ok": true,
+      "detail": "status=200",
+      "mark": "○"
+    },
+    {
+      "id": "S-008",
+      "ok": true,
+      "detail": "status=400 매입 가능한 거래처(공급/도매 등)를 선택하세요.",
+      "mark": "○"
+    },
+    {
+      "id": "S-009",
+      "ok": true,
+      "detail": "status=400 거래처·상품·수량·단가·매입일을 올바르게 입력하세요.",
+      "mark": "○"
+    },
+    {
+      "id": "S-007",
+      "ok": 6,
+      "detail": "status=201 purchase_id=6",
+      "mark": "○"
+    },
+    {
+      "id": "S-012",
+      "ok": true,
+      "detail": "status=500 (기대: 4xx/5xx) 매입 6 의 남은 수량(100)보다 많게 판매할 수 없습니다.",
+      "mark": "○"
+    },
+    {
+      "id": "S-011",
+      "ok": 10,
+      "detail": "status=201",
+      "mark": "○"
+    },
+    {
+      "id": "S-010",
+      "ok": true,
+      "detail": "allocated=40.000 remaining=60.000",
+      "mark": "○"
+    },
+    {
+      "id": "S-013",
+      "ok": true,
+      "detail": "status=400 재고가 부족합니다.",
+      "mark": "○"
+    },
+    {
+      "id": "S-014",
+      "ok": true,
+      "detail": "status=active refunded_qty=0",
+      "mark": "○"
+    },
+    {
+      "id": "S-015",
+      "ok": true,
+      "detail": "status=201",
+      "mark": "○"
+    },
+    {
+      "id": "S-016",
+      "ok": true,
+      "detail": "status=400",
+      "mark": "○"
+    },
+    {
+      "id": "S-017",
+      "ok": true,
+      "detail": "status=500 매출 11 는 선택한 거래처와 맞지 않습니다.",
+      "mark": "○"
+    },
+    {
+      "id": "S-018",
+      "ok": true,
+      "detail": "status=201",
+      "mark": "○"
+    },
+    {
+      "id": "S-019",
+      "ok": true,
+      "detail": "status=400 환불 가능 수량은 최대 37 입니다.",
+      "mark": "○"
+    },
+    {
+      "id": "S-020",
+      "ok": true,
+      "detail": "status=201",
+      "mark": "○"
+    },
+    {
+      "id": "S-021",
+      "ok": true,
+      "detail": "status=400 재고가 부족합니다.",
+      "mark": "○"
+    }
+  ],
+  "lastCompletedStep": "S-021",
+  "passedSoFar": 21,
+  "failedSoFar": 0,
+  "firstFailedScenario": null,
+  "fatalError": null,
+  "exitCode": 0,
+  "status": "success"
+}
