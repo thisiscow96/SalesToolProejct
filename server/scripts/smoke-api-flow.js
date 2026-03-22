@@ -13,6 +13,26 @@ const BASE = process.env.SMOKE_API_BASE || 'http://127.0.0.1:3000';
 const PORT = new URL(BASE).port || 3000;
 const HOST = new URL(BASE).hostname;
 
+/** POST /api/purchases 가 404일 때 — 포트에 구버전(또는 다른) node가 떠 있는 전형적 케이스 */
+function printOldServerHelp() {
+  console.error('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.error(`[smoke] "Cannot POST /api/purchases" = 지금 포트 ${PORT}에서 뜬 서버가 최신 코드가 아닐 가능성이 큽니다.`);
+  console.error('  (Express 기본 404 HTML — 매입 POST 라우트가 없는 빌드)');
+  console.error('');
+  console.error('  ▶ 조치 (로컬 Windows)');
+  console.error(`  1) 포트 ${PORT} 점유 프로세스 종료 (작업 관리자 node.exe 또는 PowerShell):`);
+  console.error(`     Get-NetTCPConnection -LocalPort ${PORT} -ErrorAction SilentlyContinue | Select-Object OwningProcess`);
+  console.error('  2) 프로젝트 폴더에서 git pull');
+  console.error('  3) cd server → npm start  (반드시 이 폴더의 index.js가 실행되게)');
+  console.error('  4) 또는 충돌 피하려면:  $env:PORT=3001; npm start');
+  console.error('     그다음:  $env:SMOKE_API_BASE=\'http://127.0.0.1:3001\'; npm run smoke');
+  console.error('');
+  console.error(`  ▶ 최신 API 여부 확인:  GET http://${HOST}:${PORT}/api/capabilities`);
+  console.error('     응답 JSON에 "tradeFlowPost": true 가 있어야 매입·매출전환·수금 등 POST가 있습니다.');
+  console.error('  ▶ Render 등 배포: 대시보드에서 최신 커밋 배포·재시작 여부 확인');
+  console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+}
+
 function getPoolConfig() {
   const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
   if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
@@ -152,6 +172,18 @@ async function main() {
     process.exit(1);
   }
 
+  const cap = await requestNoAuth('GET', '/api/capabilities');
+  const capOk = cap.status === 200 && cap.json?.ok === true && cap.json?.tradeFlowPost === true;
+  console.log(
+    'GET /api/capabilities',
+    cap.status,
+    capOk ? 'tradeFlowPost=true ✓' : cap.json?._raw ? '(HTML/404 → 구버전 서버)' : JSON.stringify(cap.json || {})
+  );
+  if (!capOk) {
+    printOldServerHelp();
+    process.exit(1);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   let r = await request('GET', '/api/partners');
@@ -169,8 +201,11 @@ async function main() {
     purchase_date: today,
     memo: `SMOKE-P-${tag}`,
   });
-  console.log('POST /api/purchases', r.status, r.json);
-  if (r.status !== 201) throw new Error('매입 실패');
+  console.log('POST /api/purchases', r.status, r.json?._raw ? '(HTML)' : r.json);
+  if (r.status !== 201) {
+    if (r.status === 404 && String(r.json?._raw || '').includes('Cannot POST')) printOldServerHelp();
+    throw new Error('매입 실패');
+  }
   const purchaseId = r.json.data.id;
 
   r = await request('GET', `/api/purchases?from_date=${today}&to_date=${today}`);

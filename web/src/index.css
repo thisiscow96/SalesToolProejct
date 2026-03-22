@@ -25,3 +25,14 @@ input, button {
 button {
   cursor: pointer;
 }
+
+/* number 입력 스피너(위/아래 화살표) 숨김 — 모든 화면 공통 */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

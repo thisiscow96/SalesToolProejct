@@ -369,6 +369,17 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ---------- API 기능 확인 (스모크·배포 검증용, 인증 불필요) ----------
+app.get('/api/capabilities', (req, res) => {
+  res.json({
+    ok: true,
+    app: 'sales-tool-server',
+    /** 거래 흐름 POST 라우트가 포함된 빌드면 true — 구버전 서버는 이 경로 자체가 없을 수 있음 */
+    tradeFlowPost: true,
+    hints: ['POST /api/purchases', 'POST /api/purchases/convert-to-sales', 'POST /api/payments', 'POST /api/sales/:id/refund', 'POST /api/disposals'],
+  });
+});
+
 // ---------- 메인 화면용 API (X-Agent-No 헤더 필수, 중매인 번호 기준으로 해당 회원 데이터 조회) ----------
 
 // 상품 목록 (대분류/중분류/소분류/이름 검색 가능)
@@ -474,9 +485,34 @@ app.get('/api/inventory', async (req, res) => {
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   try {
     const r = await pool.query(
-      `SELECT i.id, i.product_id, i.quantity, i.updated_at, p.name AS product_name, p.unit
+      `SELECT i.id, i.product_id, i.quantity, i.updated_at, p.name AS product_name, p.unit,
+              lp.purchase_date AS last_purchase_date,
+              lp.created_at AS last_purchase_created_at,
+              COALESCE(
+                NULLIF(BTRIM(pt.name::text), ''),
+                NULLIF(BTRIM(pt_tf.name::text), ''),
+                NULLIF(BTRIM(loc_from_tf.before_location::text), '')
+              ) AS last_partner_name
        FROM inventory i
        JOIN product p ON p.id = i.product_id
+       LEFT JOIN LATERAL (
+         SELECT pu.purchase_date, pu.created_at, pu.partner_id
+         FROM purchase pu
+         WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id
+         ORDER BY pu.purchase_date DESC, pu.created_at DESC NULLS LAST, pu.id DESC
+         LIMIT 1
+       ) lp ON true
+       LEFT JOIN account pt ON pt.id = lp.partner_id AND pt.user_id = i.user_id
+       LEFT JOIN LATERAL (
+         SELECT t.from_partner_id, t.before_location, t.purchase_id
+         FROM product_transfer t
+         WHERE t.user_id = i.user_id AND t.product_id = i.product_id
+           AND t.from_type = 'supplier' AND t.to_type = 'inventory'
+           AND t.purchase_id IS NOT NULL
+         ORDER BY t.transferred_at DESC NULLS LAST, t.id DESC
+         LIMIT 1
+       ) loc_from_tf ON true
+       LEFT JOIN account pt_tf ON pt_tf.id = loc_from_tf.from_partner_id AND pt_tf.user_id = i.user_id
        WHERE i.user_id = $1 AND i.quantity > 0
        ORDER BY p.name`,
       [userId]
@@ -497,7 +533,7 @@ app.get('/api/purchases', async (req, res) => {
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
   try {
-    let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.quantity, pu.unit_price, pu.total_amount, pu.memo,
+    let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
              (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
@@ -519,25 +555,58 @@ app.get('/api/purchases', async (req, res) => {
   }
 });
 
+function parsePaidAtInput(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T00:00:00+09:00`);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)) {
+    const withSec = s.length === 16 ? `${s}:00` : s;
+    if (/[Z+-]\d{2}:?\d{2}$/.test(withSec) || withSec.endsWith('Z')) return new Date(withSec);
+    return new Date(`${withSec}+09:00`);
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 // 매출정보 (중매인 번호 기준, 기간·거래처별 검색)
+// unpaid_only=1 이면 미수·일부만 전체 기간(날짜 필터 무시)
+// paid_only=1 이면 수금 완료만 (기간·거래처 필터 적용)
+// refundable_only=1 이면 수금 발생(paid_amount>0) + 환불 가능 잔여 수량 있음 (환불 처리 모달용)
 app.get('/api/sales', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
+  const unpaidOnly = req.query.unpaid_only === '1' || req.query.unpaid_only === 'true';
+  const paidOnly = req.query.paid_only === '1' || req.query.paid_only === 'true';
+  const refundableOnly = req.query.refundable_only === '1' || req.query.refundable_only === 'true';
   try {
-    let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.quantity, s.unit_price, s.total_amount,
+    let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.status, s.memo,
-             p.name AS product_name, p.unit, pt.name AS partner_name,
+             p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
              COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
              FROM sale s
              JOIN product p ON p.id = s.product_id
              JOIN account pt ON pt.id = s.partner_id
              WHERE s.user_id = $1`;
     const params = [userId];
-    if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
-    if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
+    if (unpaidOnly) {
+      q += ` AND s.payment_status IN ('unpaid', 'partial') AND s.status NOT IN ('refunded', 'cancelled')`;
+    } else if (refundableOnly) {
+      q += ` AND s.paid_amount > 0`;
+      q += ` AND s.status NOT IN ('refunded', 'cancelled')`;
+      q += ` AND (s.quantity - COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)) > 0.0001`;
+      if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
+      if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
+    } else if (paidOnly) {
+      q += ` AND s.payment_status = 'paid'`;
+      if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
+      if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
+    } else {
+      if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
+      if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
+    }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND s.partner_id = $${params.length}`; }
     q += ' ORDER BY s.sale_date DESC, s.id DESC';
     const r = await pool.query(q, params);
@@ -556,13 +625,13 @@ app.get('/api/payments', async (req, res) => {
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
   try {
-    let q = `SELECT py.id, py.paid_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name
+    let q = `SELECT py.id, py.paid_at, py.created_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name
              FROM payment py
              JOIN account pt ON pt.id = py.partner_id
              WHERE py.user_id = $1`;
     const params = [userId];
-    if (from) { params.push(from); q += ` AND py.paid_at >= $${params.length}`; }
-    if (to) { params.push(to); q += ` AND py.paid_at <= $${params.length}`; }
+    if (from) { params.push(from); q += ` AND py.paid_at::date >= $${params.length}::date`; }
+    if (to) { params.push(to); q += ` AND py.paid_at::date <= $${params.length}::date`; }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND py.partner_id = $${params.length}`; }
     q += ' ORDER BY py.paid_at DESC, py.id DESC';
     const r = await pool.query(q, params);
@@ -813,10 +882,10 @@ app.post('/api/payments', async (req, res) => {
   const kind = entry_kind === 'refund' ? 'refund' : 'receive';
   const pid = parseInt(partner_id, 10);
   const amt = Number(amount);
-  const paidAt = paid_at ? String(paid_at).slice(0, 10) : '';
+  const paidAt = parsePaidAtInput(paid_at);
   const allocs = Array.isArray(allocations) ? allocations : [];
   if (!Number.isFinite(pid) || !(amt > 0) || !paidAt) {
-    return res.status(400).json({ ok: false, message: '거래처·금액·수금일을 입력하세요.' });
+    return res.status(400).json({ ok: false, message: '거래처·금액·수금일시를 입력하세요.' });
   }
   if (kind === 'receive' && allocs.length === 0) {
     return res.status(400).json({ ok: false, message: '수금 배분(매출별 금액)을 입력하세요.' });
@@ -935,9 +1004,10 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
       memo: reason?.trim() || null,
     });
     if (ra != null && ra > 0) {
+      const refundPaidAt = parsePaidAtInput(rAt) || new Date();
       await client.query(
         `INSERT INTO payment (user_id, partner_id, amount, paid_at, entry_kind, memo) VALUES ($1,$2,$3,$4,'refund',$5)`,
-        [userId, sale.partner_id, ra, rAt, `환불 #${refundId} ${reason || ''}`.trim().slice(0, 500)]
+        [userId, sale.partner_id, ra, refundPaidAt, `환불 #${refundId} ${reason || ''}`.trim().slice(0, 500)]
       );
       await client.query(
         `UPDATE sale SET paid_amount = GREATEST(0, paid_amount - $1), updated_at = NOW() WHERE id = $2`,
@@ -1015,7 +1085,7 @@ app.get('/api/disposals', async (req, res) => {
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
   try {
-    let q = `SELECT d.id, d.disposal_date, d.quantity, d.reason, d.memo, p.name AS product_name, p.unit
+    let q = `SELECT d.id, d.disposal_date, d.created_at, d.quantity, d.reason, d.memo, p.name AS product_name, p.unit
              FROM disposal d JOIN product p ON p.id = d.product_id WHERE d.user_id = $1`;
     const params = [userId];
     if (from) {
@@ -1038,6 +1108,7 @@ app.get('/api/disposals', async (req, res) => {
 const host = process.env.HOST || '0.0.0.0';
 app.listen(port, host, () => {
   console.log(`Server listening on http://${host}:${port}`);
+  console.log('  Health: GET /health   Capabilities: GET /api/capabilities (최신 빌드 확인용)');
   const hasDb = process.env.DATABASE_URL || (process.env.PG_HOST && process.env.PG_PASSWORD);
   if (!hasDb) {
     console.warn('DB not configured. Set .env (DATABASE_URL or PG_HOST/PG_PASSWORD) and restart.');

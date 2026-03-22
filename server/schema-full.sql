@@ -217,7 +217,7 @@ CREATE TABLE payment (
   user_id    INTEGER NOT NULL REFERENCES "user"(id),
   partner_id INTEGER NOT NULL REFERENCES account(id),
   amount     NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
-  paid_at    DATE NOT NULL,
+  paid_at    TIMESTAMPTZ NOT NULL,
   entry_kind VARCHAR(20) NOT NULL DEFAULT 'receive',
   memo       TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()

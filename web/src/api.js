@@ -2,7 +2,9 @@
 // - 로컬 개발( localhost:* )에서는 언제나 Vite 프록시(/api -> 3000)를 타도록 '/api' 고정
 // - 배포(Vercel 등)에서는 VITE_API_URL 이 있으면 그 값을 사용, 없으면 현재 origin 기준 '/api'
 const isLocalhost =
-  typeof window !== 'undefined' && window.location.origin.startsWith('http://localhost:');
+  typeof window !== 'undefined' &&
+  (window.location.origin.startsWith('http://localhost:') ||
+    window.location.origin.startsWith('http://127.0.0.1:'));
 
 const API_BASE = isLocalhost
   ? '/api'
