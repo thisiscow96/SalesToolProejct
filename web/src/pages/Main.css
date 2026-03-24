@@ -830,41 +830,9 @@ td.main-td-scroll.main-col-product {
   font-size: 0.92rem;
 }
 
-.main-file-transfer-progress-wrap {
+.main-file-transfer-status {
   margin-top: 0.75rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-}
-
-.main-file-transfer-progress-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.92rem;
-  color: #0f172a;
-}
-
-.main-file-transfer-progress-bar {
-  margin-top: 0.4rem;
-  width: 100%;
-  height: 10px;
-  border-radius: 999px;
-  background: #e2e8f0;
-  overflow: hidden;
-}
-
-.main-file-transfer-progress-bar > span {
-  display: block;
-  height: 100%;
-  background: #4f46e5;
-  transition: width 0.18s ease;
-}
-
-.main-file-transfer-progress-text {
-  margin: 0.45rem 0 0;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   color: #334155;
 }
 

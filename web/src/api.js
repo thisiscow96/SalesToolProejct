@@ -160,7 +160,7 @@ export async function fetchDisposals(params = {}) {
   return data.data;
 }
 
-export async function uploadSalesforceContentVersion({ file, title, first_publish_location_id, onProgress }) {
+export async function uploadSalesforceContentVersion({ file, title, first_publish_location_id }) {
   const user = getUser();
   const form = new FormData();
   form.append('file', file);
@@ -172,14 +172,6 @@ export async function uploadSalesforceContentVersion({ file, title, first_publis
     if (user?.agent_no) {
       xhr.setRequestHeader('X-Agent-No', String(user.agent_no));
     }
-    xhr.upload.onprogress = (evt) => {
-      if (!evt.lengthComputable || typeof onProgress !== 'function') return;
-      onProgress({
-        loaded: evt.loaded,
-        total: evt.total,
-        percent: Math.min(100, Math.round((evt.loaded / evt.total) * 100)),
-      });
-    };
     xhr.onerror = () => reject(new Error('Salesforce 파일 전송 실패'));
     xhr.onload = () => {
       let data = {};

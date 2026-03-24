@@ -138,9 +138,86 @@ app.use(express.json());
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 120 * 1024 * 1024, // 120MB
+    // 단건 ContentVersion 업로드용; 실질 한도는 Salesforce·서버 메모리에 따름
+    fileSize: 2 * 1024 * 1024 * 1024, // 2GB
   },
 });
+
+async function uploadContentVersionToSalesforce({
+  fileName,
+  fileSize,
+  fileBuffer,
+  mimeType,
+  titleRaw,
+  firstPublishLocationId,
+}) {
+  const apiVersion = String(process.env.SF_API_VERSION || 'v60.0').trim();
+  const auth = await getSalesforceAccessToken();
+  const title = String(titleRaw || '').trim() || fileName.replace(/\.[^.]+$/, '').slice(0, 255) || 'upload';
+  const pathOnClient = fileName.slice(0, 500) || 'upload.bin';
+
+  const entity = {
+    Title: title,
+    PathOnClient: pathOnClient,
+  };
+  if (firstPublishLocationId) entity.FirstPublishLocationId = firstPublishLocationId;
+
+  const boundary = `sf-boundary-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const jsonPart =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="entity_content"\r\n` +
+    `Content-Type: application/json\r\n\r\n` +
+    `${JSON.stringify(entity)}\r\n`;
+  const fileHead =
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="VersionData"; filename="${fileName.replace(/"/g, '')}"\r\n` +
+    `Content-Type: ${mimeType || 'application/octet-stream'}\r\n\r\n`;
+  const endPart = `\r\n--${boundary}--\r\n`;
+  const multipartBody = Buffer.concat([
+    Buffer.from(jsonPart, 'utf8'),
+    Buffer.from(fileHead, 'utf8'),
+    fileBuffer,
+    Buffer.from(endPart, 'utf8'),
+  ]);
+
+  const uploadUrl = `${auth.instanceUrl}/services/data/${apiVersion}/sobjects/ContentVersion`;
+  const up = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${auth.accessToken}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body: multipartBody,
+  });
+  const upJson = await up.json().catch(() => ({}));
+  if (!up.ok || !upJson.id) {
+    const errMsg = upJson?.[0]?.message || upJson?.message || 'Salesforce ContentVersion 업로드 실패';
+    const e = new Error(errMsg);
+    e.statusCode = 502;
+    e.detail = upJson;
+    throw e;
+  }
+
+  const cvId = upJson.id;
+  let contentDocumentId = null;
+  try {
+    const q = encodeURIComponent(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = '${cvId}'`);
+    const qUrl = `${auth.instanceUrl}/services/data/${apiVersion}/query?q=${q}`;
+    const qr = await fetch(qUrl, { headers: { Authorization: `Bearer ${auth.accessToken}` } });
+    const qj = await qr.json().catch(() => ({}));
+    contentDocumentId = qj?.records?.[0]?.ContentDocumentId || null;
+  } catch (_) {
+    // 조회 실패는 업로드 실패가 아니므로 무시
+  }
+
+  return {
+    content_version_id: cvId,
+    content_document_id: contentDocumentId,
+    file_name: fileName,
+    file_size: fileSize,
+    salesforce_instance_url: auth.instanceUrl,
+  };
+}
 
 function getSalesforceAuthConfig() {
   return {
@@ -1182,81 +1259,23 @@ app.post('/api/file-transfer/salesforce/content-version', uploadMemory.single('f
 
     const titleRaw = String(req.body?.title || '').trim();
     const firstPublishLocationId = String(req.body?.first_publish_location_id || '').trim() || null;
-    const apiVersion = String(process.env.SF_API_VERSION || 'v60.0').trim();
-    const maxBytes = 100 * 1024 * 1024;
-    if (file.size > maxBytes) {
-      return res.status(400).json({ ok: false, message: '테스트 업로드 한도는 100MB 입니다.' });
-    }
-
-    const auth = await getSalesforceAccessToken();
-    const title = titleRaw || file.originalname.replace(/\.[^.]+$/, '').slice(0, 255) || 'upload';
-    const pathOnClient = file.originalname.slice(0, 500) || 'upload.bin';
-
-    const entity = {
-      Title: title,
-      PathOnClient: pathOnClient,
-    };
-    if (firstPublishLocationId) entity.FirstPublishLocationId = firstPublishLocationId;
-
-    const boundary = `sf-boundary-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const jsonPart =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="entity_content"\r\n` +
-      `Content-Type: application/json\r\n\r\n` +
-      `${JSON.stringify(entity)}\r\n`;
-    const fileHead =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="VersionData"; filename="${file.originalname.replace(/"/g, '')}"\r\n` +
-      `Content-Type: ${file.mimetype || 'application/octet-stream'}\r\n\r\n`;
-    const endPart = `\r\n--${boundary}--\r\n`;
-    const multipartBody = Buffer.concat([
-      Buffer.from(jsonPart, 'utf8'),
-      Buffer.from(fileHead, 'utf8'),
-      file.buffer,
-      Buffer.from(endPart, 'utf8'),
-    ]);
-
-    const uploadUrl = `${auth.instanceUrl}/services/data/${apiVersion}/sobjects/ContentVersion`;
-    const up = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-      },
-      body: multipartBody,
+    const result = await uploadContentVersionToSalesforce({
+      fileName: file.originalname,
+      fileSize: file.size,
+      fileBuffer: file.buffer,
+      mimeType: file.mimetype,
+      titleRaw,
+      firstPublishLocationId,
     });
-    const upJson = await up.json().catch(() => ({}));
-    if (!up.ok || !upJson.id) {
-      const errMsg = upJson?.[0]?.message || upJson?.message || 'Salesforce ContentVersion 업로드 실패';
-      return res.status(502).json({ ok: false, message: errMsg, detail: upJson });
-    }
-
-    const cvId = upJson.id;
-    let contentDocumentId = null;
-    try {
-      const q = encodeURIComponent(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = '${cvId}'`);
-      const qUrl = `${auth.instanceUrl}/services/data/${apiVersion}/query?q=${q}`;
-      const qr = await fetch(qUrl, { headers: { Authorization: `Bearer ${auth.accessToken}` } });
-      const qj = await qr.json().catch(() => ({}));
-      contentDocumentId = qj?.records?.[0]?.ContentDocumentId || null;
-    } catch (_) {
-      // 조회 실패는 업로드 실패가 아니므로 무시
-    }
 
     return res.status(201).json({
       ok: true,
-      data: {
-        content_version_id: cvId,
-        content_document_id: contentDocumentId,
-        file_name: file.originalname,
-        file_size: file.size,
-        salesforce_instance_url: auth.instanceUrl,
-      },
+      data: result,
     });
   } catch (err) {
     console.error('Salesforce ContentVersion upload error:', err);
     const status = err.statusCode || 500;
-    res.status(status).json({ ok: false, message: err.message || '파일 전송 실패' });
+    res.status(status).json({ ok: false, message: err.message || '파일 전송 실패', detail: err.detail || null });
   }
 });
 

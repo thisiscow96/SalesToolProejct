@@ -2199,17 +2199,14 @@ function TabDisposals() {
 }
 
 function TabFileTransferTest() {
-  const CHUNK_BYTES = 10 * 1024 * 1024;
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState('');
   const [firstPublishLocationId, setFirstPublishLocationId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState('');
   const [result, setResult] = useState(null);
-  const [progress, setProgress] = useState({ loaded: 0, total: 0, percent: 0, chunkIndex: 0, chunkTotal: 0 });
 
   const fileMb = file ? formatMb(file.size) : '0.00';
-  const chunkTotal = file ? Math.max(1, Math.ceil(file.size / CHUNK_BYTES)) : 0;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -2219,28 +2216,12 @@ function TabFileTransferTest() {
       setErr('파일을 선택하세요.');
       return;
     }
-    if (file.size > 100 * 1024 * 1024) {
-      setErr('테스트 한도는 100MB 입니다.');
-      return;
-    }
     setSubmitting(true);
-    setProgress({ loaded: 0, total: file.size, percent: 0, chunkIndex: 0, chunkTotal });
     try {
       const data = await uploadSalesforceContentVersion({
         file,
         title: title.trim() || undefined,
         first_publish_location_id: firstPublishLocationId.trim() || undefined,
-        onProgress: ({ loaded, total, percent }) => {
-          const safeTotal = total || file.size || 0;
-          const idx = safeTotal > 0 ? Math.min(chunkTotal, Math.max(1, Math.ceil(loaded / CHUNK_BYTES))) : 0;
-          setProgress({
-            loaded,
-            total: safeTotal,
-            percent,
-            chunkIndex: idx,
-            chunkTotal,
-          });
-        },
       });
       setResult(data);
     } catch (e2) {
@@ -2253,7 +2234,7 @@ function TabFileTransferTest() {
   return (
     <>
       <div className="main-alert-banner" role="alert">
-        테스트 탭입니다. Salesforce ContentVersion 단건 multipart 업로드(최대 100MB)를 수행합니다.
+        테스트 탭입니다. Salesforce ContentVersion 단건 multipart 업로드를 수행합니다.
       </div>
       <form className="main-file-transfer-form" onSubmit={submit}>
         <div className="main-file-transfer-grid">
@@ -2269,9 +2250,6 @@ function TabFileTransferTest() {
                   setFile(next);
                   setResult(null);
                   setErr('');
-                  if (!next) {
-                    setProgress({ loaded: 0, total: 0, percent: 0, chunkIndex: 0, chunkTotal: 0 });
-                  }
                 }}
               />
               <label htmlFor="sf-file-input" className="main-file-picker-btn">파일 선택</label>
@@ -2301,24 +2279,13 @@ function TabFileTransferTest() {
           <div className="main-file-transfer-meta">
             <div><strong>파일명:</strong> {file.name}</div>
             <div><strong>파일크기:</strong> {fileMb} MB</div>
-            <div><strong>청크 기준:</strong> 10 MB x {chunkTotal}개</div>
+            <div><strong>전송방식:</strong> 단건 업로드</div>
           </div>
         )}
         {submitting && (
-          <div className="main-file-transfer-progress-wrap">
-            <div className="main-file-transfer-progress-label">
-              <span>전송 진행률</span>
-              <strong>{progress.percent}%</strong>
-            </div>
-            <div className="main-file-transfer-progress-bar">
-              <span style={{ width: `${progress.percent}%` }} />
-            </div>
-            <p className="main-file-transfer-progress-text">
-              {progress.chunkTotal > 0
-                ? `청크 전송: ${progress.chunkIndex}/${progress.chunkTotal} (10MB 단위), ${formatMb(progress.loaded)}/${formatMb(progress.total)} MB`
-                : '전송 준비 중'}
-            </p>
-          </div>
+          <p className="main-file-transfer-status" role="status" aria-live="polite">
+            전송 진행 중…
+          </p>
         )}
         <div className="main-file-transfer-actions">
           <button type="submit" className="main-btn" disabled={submitting}>
