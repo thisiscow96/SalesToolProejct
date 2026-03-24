@@ -3,6 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
+const multer = require('multer');
 const { Resend } = require('resend');
 const { Pool } = require('pg');
 
@@ -133,6 +134,70 @@ async function sendVerificationEmail(email, code) {
 }
 
 app.use(express.json());
+
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 120 * 1024 * 1024, // 120MB
+  },
+});
+
+function getSalesforceAuthConfig() {
+  return {
+    tokenUrl: (process.env.SF_TOKEN_URL || '').trim(),
+    clientId: (process.env.SF_CLIENT_ID || '').trim(),
+    clientSecret: (process.env.SF_CLIENT_SECRET || '').trim(),
+    username: (process.env.SF_USERNAME || '').trim(),
+    password: (process.env.SF_PASSWORD || '').trim(),
+    securityToken: (process.env.SF_SECURITY_TOKEN || '').trim(),
+    accessToken: (process.env.SF_ACCESS_TOKEN || '').trim(),
+    instanceUrl: (process.env.SF_INSTANCE_URL || '').trim(),
+  };
+}
+
+async function getSalesforceAccessToken() {
+  const cfg = getSalesforceAuthConfig();
+  if (cfg.accessToken && cfg.instanceUrl) {
+    return {
+      accessToken: cfg.accessToken,
+      instanceUrl: cfg.instanceUrl,
+      source: 'env-token',
+    };
+  }
+
+  if (!cfg.tokenUrl || !cfg.clientId || !cfg.clientSecret || !cfg.username || !cfg.password) {
+    const e = new Error(
+      'Salesforce 인증정보가 부족합니다. SF_TOKEN_URL, SF_CLIENT_ID, SF_CLIENT_SECRET, SF_USERNAME, SF_PASSWORD(필요 시 SF_SECURITY_TOKEN)를 설정하세요.'
+    );
+    e.statusCode = 500;
+    throw e;
+  }
+
+  const body = new URLSearchParams();
+  body.set('grant_type', 'password');
+  body.set('client_id', cfg.clientId);
+  body.set('client_secret', cfg.clientSecret);
+  body.set('username', cfg.username);
+  body.set('password', `${cfg.password}${cfg.securityToken || ''}`);
+
+  const r = await fetch(cfg.tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.access_token || !data.instance_url) {
+    const msg = data.error_description || data.error || 'Salesforce OAuth 토큰 발급 실패';
+    const e = new Error(msg);
+    e.statusCode = 502;
+    throw e;
+  }
+  return {
+    accessToken: data.access_token,
+    instanceUrl: data.instance_url,
+    source: 'oauth-password',
+  };
+}
 
 // 로그인 사용자 ID — 중매인 번호(X-Agent-No)로 조회 (데이터는 user_id 기반으로 유지)
 async function getUserId(req) {
@@ -404,24 +469,49 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+async function generateProductKey(client) {
+  const hasSeq = await client.query(
+    `SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.sequences
+      WHERE sequence_schema = 'public' AND sequence_name = 'product_key_seq'
+    ) AS ok`
+  );
+  if (hasSeq.rows[0]?.ok) {
+    const k = await client.query(`SELECT 'P' || LPAD(nextval('product_key_seq')::text, 5, '0') AS product_key`);
+    return k.rows[0].product_key;
+  }
+  const m = await client.query(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING(product_key FROM '[0-9]+$') AS INTEGER)), 0) AS n
+     FROM product
+     WHERE product_key ~ '^P[0-9]+$'`
+  );
+  const nextN = Number(m.rows[0]?.n || 0) + 1;
+  return `P${String(nextN).padStart(5, '0')}`;
+}
+
 // 상품 단건 등록 (관리자)
 app.post('/api/products', async (req, res) => {
   const auth = await getUserIdAndAdmin(req);
   if (!auth) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   if (!auth.isAdmin) return res.status(403).json({ ok: false, message: '관리자만 등록할 수 있습니다.' });
-  const { name, unit, category_large, category_mid, category_small, product_key, memo } = req.body || {};
+  const { name, unit, category_large, category_mid, category_small, memo } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ ok: false, message: '상품명을 입력하세요.' });
+  const client = await pool.connect();
   try {
-    const r = await pool.query(
+    const productKey = await generateProductKey(client);
+    const r = await client.query(
       `INSERT INTO product (name, unit, category_large, category_mid, category_small, product_key, memo)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, name, unit, category_large, category_mid, category_small, product_key, memo, created_at`,
-      [name.trim(), (unit || 'kg').trim(), category_large?.trim() || null, category_mid?.trim() || null, category_small?.trim() || null, product_key?.trim() || null, memo?.trim() || null]
+      [name.trim(), (unit || 'kg').trim(), category_large?.trim() || null, category_mid?.trim() || null, category_small?.trim() || null, productKey, memo?.trim() || null]
     );
     res.status(201).json({ ok: true, data: r.rows[0] });
   } catch (err) {
     console.error('Product create error:', err);
     res.status(500).json({ ok: false, message: err.message || '등록에 실패했습니다.' });
+  } finally {
+    client.release();
   }
 });
 
@@ -438,6 +528,7 @@ app.post('/api/products/bulk', async (req, res) => {
     for (const p of products) {
       const name = (p.name != null && String(p.name)).trim();
       if (!name) continue;
+      const productKey = await generateProductKey(client);
       const r = await client.query(
         `INSERT INTO product (name, unit, category_large, category_mid, category_small, product_key, memo)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -448,7 +539,7 @@ app.post('/api/products/bulk', async (req, res) => {
           (p.category_large != null ? String(p.category_large) : '').trim() || null,
           (p.category_mid != null ? String(p.category_mid) : '').trim() || null,
           (p.category_small != null ? String(p.category_small) : '').trim() || null,
-          (p.product_key != null ? String(p.product_key) : '').trim() || null,
+          productKey,
           (p.memo != null ? String(p.memo) : '').trim() || null,
         ]
       );
@@ -1076,6 +1167,96 @@ app.post('/api/disposals', async (req, res) => {
     res.status(code).json({ ok: false, message: err.message || '폐기 등록에 실패했습니다.' });
   } finally {
     client.release();
+  }
+});
+
+// 파일 전송 테스트: Salesforce ContentVersion 단건 multipart 업로드
+app.post('/api/file-transfer/salesforce/content-version', uploadMemory.single('file'), async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ ok: false, message: 'file 필드로 파일을 업로드하세요.' });
+    if (!file.originalname) return res.status(400).json({ ok: false, message: '파일명이 필요합니다.' });
+
+    const titleRaw = String(req.body?.title || '').trim();
+    const firstPublishLocationId = String(req.body?.first_publish_location_id || '').trim() || null;
+    const apiVersion = String(process.env.SF_API_VERSION || 'v60.0').trim();
+    const maxBytes = 100 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      return res.status(400).json({ ok: false, message: '테스트 업로드 한도는 100MB 입니다.' });
+    }
+
+    const auth = await getSalesforceAccessToken();
+    const title = titleRaw || file.originalname.replace(/\.[^.]+$/, '').slice(0, 255) || 'upload';
+    const pathOnClient = file.originalname.slice(0, 500) || 'upload.bin';
+
+    const entity = {
+      Title: title,
+      PathOnClient: pathOnClient,
+    };
+    if (firstPublishLocationId) entity.FirstPublishLocationId = firstPublishLocationId;
+
+    const boundary = `sf-boundary-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const jsonPart =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="entity_content"\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${JSON.stringify(entity)}\r\n`;
+    const fileHead =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="VersionData"; filename="${file.originalname.replace(/"/g, '')}"\r\n` +
+      `Content-Type: ${file.mimetype || 'application/octet-stream'}\r\n\r\n`;
+    const endPart = `\r\n--${boundary}--\r\n`;
+    const multipartBody = Buffer.concat([
+      Buffer.from(jsonPart, 'utf8'),
+      Buffer.from(fileHead, 'utf8'),
+      file.buffer,
+      Buffer.from(endPart, 'utf8'),
+    ]);
+
+    const uploadUrl = `${auth.instanceUrl}/services/data/${apiVersion}/sobjects/ContentVersion`;
+    const up = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${auth.accessToken}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    });
+    const upJson = await up.json().catch(() => ({}));
+    if (!up.ok || !upJson.id) {
+      const errMsg = upJson?.[0]?.message || upJson?.message || 'Salesforce ContentVersion 업로드 실패';
+      return res.status(502).json({ ok: false, message: errMsg, detail: upJson });
+    }
+
+    const cvId = upJson.id;
+    let contentDocumentId = null;
+    try {
+      const q = encodeURIComponent(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = '${cvId}'`);
+      const qUrl = `${auth.instanceUrl}/services/data/${apiVersion}/query?q=${q}`;
+      const qr = await fetch(qUrl, { headers: { Authorization: `Bearer ${auth.accessToken}` } });
+      const qj = await qr.json().catch(() => ({}));
+      contentDocumentId = qj?.records?.[0]?.ContentDocumentId || null;
+    } catch (_) {
+      // 조회 실패는 업로드 실패가 아니므로 무시
+    }
+
+    return res.status(201).json({
+      ok: true,
+      data: {
+        content_version_id: cvId,
+        content_document_id: contentDocumentId,
+        file_name: file.originalname,
+        file_size: file.size,
+        salesforce_instance_url: auth.instanceUrl,
+      },
+    });
+  } catch (err) {
+    console.error('Salesforce ContentVersion upload error:', err);
+    const status = err.statusCode || 500;
+    res.status(status).json({ ok: false, message: err.message || '파일 전송 실패' });
   }
 });
 

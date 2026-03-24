@@ -14,6 +14,7 @@ import {
   refundSale,
   createDisposal,
   fetchDisposals,
+  uploadSalesforceContentVersion,
 } from '../api';
 import './Main.css';
 
@@ -141,6 +142,12 @@ function formatKoNumber(n) {
   const num = Number(n);
   if (Number.isNaN(num)) return String(n);
   return num.toLocaleString('ko-KR');
+}
+
+function formatMb(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0.00';
+  return (n / (1024 * 1024)).toFixed(2);
 }
 
 /** 금액·단가 입력: 콤마 제거 후 숫자·소수점만 */
@@ -382,7 +389,6 @@ function newPurchaseRow() {
 function newProductMasterRow() {
   return {
     key: `pm-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
-    product_key: '',
     name: '',
     unit: '',
     category_large: '',
@@ -1639,21 +1645,20 @@ function TabProductMaster() {
   const submitProducts = async (e) => {
     e.preventDefault();
     const partial = productRows.some((r) => {
-      const any = r.product_key?.trim() || r.name?.trim() || r.unit || r.category_large || r.category_mid || r.category_small || r.memo?.trim();
-      const full = r.product_key?.trim() && r.name?.trim();
+      const any = r.name?.trim() || r.unit || r.category_large || r.category_mid || r.category_small || r.memo?.trim();
+      const full = r.name?.trim();
       return any && !full;
     });
     if (partial) {
-      setSubmitErr('입력이 완료되지 않은 행이 있습니다. 비우거나 상품 키·상품명을 모두 채워 주세요.');
+      setSubmitErr('입력이 완료되지 않은 행이 있습니다. 비우거나 상품명을 채워 주세요.');
       return;
     }
-    const valid = productRows.filter((r) => r.product_key?.trim() && r.name?.trim());
+    const valid = productRows.filter((r) => r.name?.trim());
     if (valid.length === 0) {
-      setSubmitErr('상품 키와 상품명을 입력한 행이 최소 1개 필요합니다.');
+      setSubmitErr('상품명을 입력한 행이 최소 1개 필요합니다.');
       return;
     }
     const products = valid.map((r) => ({
-      product_key: r.product_key.trim(),
       name: r.name.trim(),
       unit: r.unit?.trim() || undefined,
       category_large: r.category_large?.trim() || undefined,
@@ -1737,7 +1742,6 @@ function TabProductMaster() {
             <table className="main-table">
               <thead>
                 <tr>
-                  <th>상품 키 *</th>
                   <th className="main-col-product">상품명 *</th>
                   <th>단위</th>
                   <th>대분류</th>
@@ -1750,7 +1754,6 @@ function TabProductMaster() {
               <tbody>
                 {productRows.map((row) => (
                   <tr key={row.key}>
-                    <td><input value={row.product_key} onChange={(e) => updateProductRow(row.key, { product_key: e.target.value })} placeholder="필수" /></td>
                     <td className="main-col-product"><input value={row.name} onChange={(e) => updateProductRow(row.key, { name: e.target.value })} placeholder="필수" /></td>
                     <td><input value={row.unit} onChange={(e) => updateProductRow(row.key, { unit: e.target.value })} /></td>
                     <td><input value={row.category_large} onChange={(e) => updateProductRow(row.key, { category_large: e.target.value })} /></td>
@@ -2072,7 +2075,6 @@ function TabDisposals() {
                         <td className="num main-col-qty">
                           <span className="main-qty-unit-inline">
                             {formatKoNumber(row.quantity)}
-                            {row.unit ? ` ${row.unit}` : ''}
                           </span>
                         </td>
                         <td className="main-td-scroll main-col-partner">
@@ -2183,7 +2185,6 @@ function TabDisposals() {
                   <td className="num main-col-qty main-col-qty--singleline">
                     <span className="main-qty-unit-inline">
                       {formatKoNumber(row.quantity)}
-                      {row.unit ? ` ${row.unit}` : ''}
                     </span>
                   </td>
                   <td className="main-td-scroll"><CellText>{row.reason || '—'}</CellText></td>
@@ -2197,12 +2198,163 @@ function TabDisposals() {
   );
 }
 
+function TabFileTransferTest() {
+  const CHUNK_BYTES = 10 * 1024 * 1024;
+  const [file, setFile] = useState(null);
+  const [title, setTitle] = useState('');
+  const [firstPublishLocationId, setFirstPublishLocationId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState('');
+  const [result, setResult] = useState(null);
+  const [progress, setProgress] = useState({ loaded: 0, total: 0, percent: 0, chunkIndex: 0, chunkTotal: 0 });
+
+  const fileMb = file ? formatMb(file.size) : '0.00';
+  const chunkTotal = file ? Math.max(1, Math.ceil(file.size / CHUNK_BYTES)) : 0;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr('');
+    setResult(null);
+    if (!file) {
+      setErr('파일을 선택하세요.');
+      return;
+    }
+    if (file.size > 100 * 1024 * 1024) {
+      setErr('테스트 한도는 100MB 입니다.');
+      return;
+    }
+    setSubmitting(true);
+    setProgress({ loaded: 0, total: file.size, percent: 0, chunkIndex: 0, chunkTotal });
+    try {
+      const data = await uploadSalesforceContentVersion({
+        file,
+        title: title.trim() || undefined,
+        first_publish_location_id: firstPublishLocationId.trim() || undefined,
+        onProgress: ({ loaded, total, percent }) => {
+          const safeTotal = total || file.size || 0;
+          const idx = safeTotal > 0 ? Math.min(chunkTotal, Math.max(1, Math.ceil(loaded / CHUNK_BYTES))) : 0;
+          setProgress({
+            loaded,
+            total: safeTotal,
+            percent,
+            chunkIndex: idx,
+            chunkTotal,
+          });
+        },
+      });
+      setResult(data);
+    } catch (e2) {
+      setErr(e2.message || '전송 실패');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="main-alert-banner" role="alert">
+        테스트 탭입니다. Salesforce ContentVersion 단건 multipart 업로드(최대 100MB)를 수행합니다.
+      </div>
+      <form className="main-file-transfer-form" onSubmit={submit}>
+        <div className="main-file-transfer-grid">
+          <label className="main-modal-field-full main-file-transfer-field">
+            <span>업로드 파일</span>
+            <div className="main-file-picker">
+              <input
+                id="sf-file-input"
+                className="main-file-transfer-native"
+                type="file"
+                onChange={(e) => {
+                  const next = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                  setFile(next);
+                  setResult(null);
+                  setErr('');
+                  if (!next) {
+                    setProgress({ loaded: 0, total: 0, percent: 0, chunkIndex: 0, chunkTotal: 0 });
+                  }
+                }}
+              />
+              <label htmlFor="sf-file-input" className="main-file-picker-btn">파일 선택</label>
+              <span className="main-file-picker-name">{file?.name || '선택된 파일 없음'}</span>
+            </div>
+          </label>
+          <label className="main-file-transfer-field">
+            Title (선택)
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="비우면 파일명 사용"
+            />
+          </label>
+          <label className="main-modal-field-select-wide main-file-transfer-field">
+            FirstPublishLocationId (선택)
+            <input
+              type="text"
+              value={firstPublishLocationId}
+              onChange={(e) => setFirstPublishLocationId(e.target.value)}
+              placeholder="예: 001xxxxxxxxxxxx"
+            />
+          </label>
+        </div>
+        {file && (
+          <div className="main-file-transfer-meta">
+            <div><strong>파일명:</strong> {file.name}</div>
+            <div><strong>파일크기:</strong> {fileMb} MB</div>
+            <div><strong>청크 기준:</strong> 10 MB x {chunkTotal}개</div>
+          </div>
+        )}
+        {submitting && (
+          <div className="main-file-transfer-progress-wrap">
+            <div className="main-file-transfer-progress-label">
+              <span>전송 진행률</span>
+              <strong>{progress.percent}%</strong>
+            </div>
+            <div className="main-file-transfer-progress-bar">
+              <span style={{ width: `${progress.percent}%` }} />
+            </div>
+            <p className="main-file-transfer-progress-text">
+              {progress.chunkTotal > 0
+                ? `청크 전송: ${progress.chunkIndex}/${progress.chunkTotal} (10MB 단위), ${formatMb(progress.loaded)}/${formatMb(progress.total)} MB`
+                : '전송 준비 중'}
+            </p>
+          </div>
+        )}
+        <div className="main-file-transfer-actions">
+          <button type="submit" className="main-btn" disabled={submitting}>
+            {submitting ? '전송 중…' : 'Salesforce 전송'}
+          </button>
+        </div>
+      </form>
+      {err && <p className="main-error">{err}</p>}
+      {result && (
+        <div className="main-table-wrap" style={{ marginTop: '0.75rem' }}>
+          <table className="main-table">
+            <tbody>
+              <tr><th>ContentVersionId</th><td>{result.content_version_id || '—'}</td></tr>
+              <tr><th>ContentDocumentId</th><td>{result.content_document_id || '—'}</td></tr>
+              <tr><th>파일명</th><td>{result.file_name || '—'}</td></tr>
+              <tr><th>파일크기</th><td>{formatMb(result.file_size)} MB</td></tr>
+              <tr><th>Salesforce Instance</th><td>{result.salesforce_instance_url || '—'}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="main-modal-hint" style={{ marginTop: '0.75rem' }}>
+        필요한 환경변수: SF_TOKEN_URL, SF_CLIENT_ID, SF_CLIENT_SECRET, SF_USERNAME, SF_PASSWORD, (선택) SF_SECURITY_TOKEN,
+        SF_API_VERSION. 또는 SF_ACCESS_TOKEN + SF_INSTANCE_URL.
+      </p>
+    </>
+  );
+}
+
 const BASE_TABS = [
   { id: 'inventory', label: '재고현황', Component: TabReorder },
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
+  { id: 'file-transfer-test', label: '파일 전송 테스트', Component: TabFileTransferTest },
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
 

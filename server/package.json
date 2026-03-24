@@ -8,6 +8,9 @@
     "dev": "nodemon index.js",
     "migrate": "node scripts/migrate.js",
     "seed-admin": "node scripts/seed-admin.js",
+    "seed-sample-local": "node scripts/seed-sample-local.js",
+    "seed-sample-transactions-local": "node scripts/seed-sample-transactions-local.js",
+    "seed-sample-disposal-full-local": "node scripts/seed-sample-disposal-full-local.js",
     "smoke": "node scripts/smoke-api-flow.js",
     "scenario": "node scripts/scenario-integration-test.js",
     "scenario:git": "node scripts/git-commit-scenario-history.js",
@@ -17,6 +20,7 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "multer": "^2.0.2",
     "nodemailer": "^6.9.7",
     "pg": "^8.11.3",
     "resend": "^4.0.0"

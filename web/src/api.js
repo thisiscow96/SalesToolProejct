@@ -160,4 +160,42 @@ export async function fetchDisposals(params = {}) {
   return data.data;
 }
 
+export async function uploadSalesforceContentVersion({ file, title, first_publish_location_id, onProgress }) {
+  const user = getUser();
+  const form = new FormData();
+  form.append('file', file);
+  if (title) form.append('title', title);
+  if (first_publish_location_id) form.append('first_publish_location_id', first_publish_location_id);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/file-transfer/salesforce/content-version`, true);
+    if (user?.agent_no) {
+      xhr.setRequestHeader('X-Agent-No', String(user.agent_no));
+    }
+    xhr.upload.onprogress = (evt) => {
+      if (!evt.lengthComputable || typeof onProgress !== 'function') return;
+      onProgress({
+        loaded: evt.loaded,
+        total: evt.total,
+        percent: Math.min(100, Math.round((evt.loaded / evt.total) * 100)),
+      });
+    };
+    xhr.onerror = () => reject(new Error('Salesforce 파일 전송 실패'));
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch (_) {
+        data = {};
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(data.message || 'Salesforce 파일 전송 실패'));
+        return;
+      }
+      resolve(data.data);
+    };
+    xhr.send(form);
+  });
+}
+
 export { getUser, API_BASE };
