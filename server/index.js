@@ -360,7 +360,8 @@ app.post('/api/auth/check-phone', async (req, res) => {
     const r = await pool.query('SELECT 1 FROM "user" WHERE phone = $1', [phone]);
     res.json({ ok: true, available: r.rows.length === 0 });
   } catch (err) {
-    res.status(500).json({ ok: false, available: false });
+    console.error('check-phone error:', err);
+    res.status(500).json({ ok: false, available: false, message: err.message || '확인할 수 없습니다.' });
   }
 });
 
@@ -372,7 +373,8 @@ app.post('/api/auth/check-agent-no', async (req, res) => {
     const r = await pool.query('SELECT 1 FROM "user" WHERE agent_no = $1', [agent_no]);
     res.json({ ok: true, available: r.rows.length === 0 });
   } catch (err) {
-    res.status(500).json({ ok: false, available: false });
+    console.error('check-agent-no error:', err);
+    res.status(500).json({ ok: false, available: false, message: err.message || '확인할 수 없습니다.' });
   }
 });
 
@@ -425,7 +427,7 @@ app.post('/api/auth/verify-email-code', async (req, res) => {
     res.json({ ok: true, message: '이메일 인증이 완료되었습니다.' });
   } catch (err) {
     console.error('Verify email error:', err);
-    res.status(500).json({ ok: false, message: '인증 처리에 실패했습니다.' });
+    res.status(500).json({ ok: false, message: err.message || '인증 처리에 실패했습니다.' });
   }
 });
 
@@ -542,7 +544,7 @@ app.get('/api/products', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Products error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '상품 목록을 불러오지 못했습니다.' });
   }
 });
 
@@ -643,7 +645,7 @@ app.get('/api/partners', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Partners error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '거래처 목록을 불러오지 못했습니다.' });
   }
 });
 
@@ -688,7 +690,7 @@ app.get('/api/inventory', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Inventory error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '재고현황을 불러오지 못했습니다.' });
   }
 });
 
@@ -719,7 +721,7 @@ app.get('/api/purchases', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Purchases error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '매입정보를 불러오지 못했습니다.' });
   }
 });
 
@@ -781,7 +783,7 @@ app.get('/api/sales', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Sales error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '매출정보를 불러오지 못했습니다.' });
   }
 });
 
@@ -806,7 +808,7 @@ app.get('/api/payments', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('Payments error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '수금정보를 불러오지 못했습니다.' });
   }
 });
 
@@ -1301,7 +1303,7 @@ app.get('/api/disposals', async (req, res) => {
     res.json({ ok: true, data: r.rows });
   } catch (err) {
     console.error('GET disposals error:', err);
-    res.status(500).json({ ok: false });
+    res.status(500).json({ ok: false, message: err.message || '폐기 목록을 불러오지 못했습니다.' });
   }
 });
 
