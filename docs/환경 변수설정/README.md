@@ -43,6 +43,38 @@
 - **반드시** `DATABASE_URL`(Internal), `RESEND_API_KEY`, `RESEND_FROM` 설정.
 - Root Directory: `server`, Start Command: `npm run migrate && npm start`.
 
+### Salesforce (파일 전송 테스트 — `POST /api/file-transfer/salesforce/content-version`)
+
+백엔드가 Salesforce에 파일을 올리려면 **아래 둘 중 하나**를 선택합니다.
+
+**방법 A — 액세스 토큰 + 인스턴스 URL (권장, Password flow 실패 시)**
+
+| 변수명 | 설명 |
+|--------|------|
+| `SF_ACCESS_TOKEN` | OAuth 응답의 `access_token` 전체. **Render Environment에만 입력**, Git·문서에 절대 넣지 말 것. 만료 시 갱신 필요. |
+| `SF_INSTANCE_URL` | OAuth 응답의 `instance_url`과 동일. **끝에 `/` 없이** `https://` 로 시작. |
+
+**현재 연동 예시(개발자 오그)** — 토큰은 별도 발급 후 Render에만 저장:
+
+| 변수명 | 값 (예시·비밀이 아닌 URL만 기재) |
+|--------|----------------------------------|
+| `SF_INSTANCE_URL` | `https://orgfarm-a1ac1996fc-dev-ed.develop.my.salesforce.com` |
+
+**방법 B — Username–Password OAuth (토큰 미사용 시)**
+
+| 변수명 | 설명 |
+|--------|------|
+| `SF_TOKEN_URL` | 예: `https://login.salesforce.com/services/oauth2/token` (샌드박스·My Domain이면 해당 호스트) |
+| `SF_CLIENT_ID` | Connected App Consumer Key |
+| `SF_CLIENT_SECRET` | Connected App Consumer Secret |
+| `SF_USERNAME` | Salesforce 로그인 사용자명 |
+| `SF_PASSWORD` | 비밀번호만 |
+| `SF_SECURITY_TOKEN` | (필요 시) 보안 토큰 — 코드에서 비밀번호 뒤에 이어붙임 |
+
+`SF_ACCESS_TOKEN`과 `SF_INSTANCE_URL`이 **둘 다** 설정되어 있으면 방법 B는 사용하지 않습니다.
+
+설정 후 **Render → Manual Deploy** 로 서비스를 다시 배포하면 반영됩니다.
+
 ### Postgres 서비스
 
 - Render가 자동으로 `DATABASE_URL`(Internal/External) 제공. Web Service에는 **Internal Database URL** 을 쓰거나, 리소스 연결로 자동 주입.
@@ -69,6 +101,7 @@
 |------|-----------|------|
 | 로컬 (server) | `DATABASE_URL`, (이메일 테스트 시 SMTP_* 또는 RESEND_*) | `server/.env` |
 | Render (Web Service) | `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM` | Internal URL 사용. 실서비스 시 `RESEND_FROM` = `noreply@garaksalestool.com` |
+| Render (Salesforce 파일 전송) | `SF_ACCESS_TOKEN` + `SF_INSTANCE_URL` **또는** Password flow(`SF_TOKEN_URL` 등) | 토큰은 대시보드에만. 상세는 위 **Salesforce** 절 |
 | Vercel | `VITE_API_URL` | 커스텀 도메인 사용 시 `https://garaksalestool.com`, Redeploy 필요 |
 
 실제 비밀번호·API 키·DB URL은 위 예시가 아닌 **본인 계정에서 발급·복사한 값**을 각 서비스에 직접 입력하세요.
