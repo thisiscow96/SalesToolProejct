@@ -596,6 +596,106 @@ td.main-td-scroll.main-col-product {
   vertical-align: top;
 }
 
+/* 폐기 등록 모달 — 상품 열 축소(약 절반), 폐기 수량·폐기일 넉넉 */
+.main-modal .main-table--disposal-modal th.main-col-product.main-col-product--disposal,
+.main-modal .main-table--disposal-modal td.main-col-product.main-col-product--disposal {
+  min-width: min(9.5rem, 24vw);
+  width: 16%;
+  max-width: min(13rem, 32vw);
+}
+.main-modal .main-table--disposal-modal td.main-td-scroll.main-col-product.main-col-product--disposal {
+  max-width: min(13rem, 32vw);
+}
+
+.main-modal .main-table--disposal-modal th.main-col-disposal-qty-input,
+.main-modal .main-table--disposal-modal td.main-col-disposal-qty-input {
+  min-width: 5.75rem;
+  width: 6.5rem;
+  max-width: 8.5rem;
+  text-align: right;
+}
+.main-modal .main-table--disposal-modal td.main-col-disposal-qty-input .main-input-qty--disposal {
+  width: 100%;
+  min-width: 5rem;
+  max-width: none;
+  padding: 0.45rem 0.5rem;
+  box-sizing: border-box;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.main-modal .main-table--disposal-modal th.main-col-disposal-date-col,
+.main-modal .main-table--disposal-modal td.main-col-disposal-date-col {
+  min-width: 12rem;
+  width: 12rem;
+  max-width: 13rem;
+  white-space: nowrap;
+}
+.main-modal .main-table--disposal-modal .main-input-date--disposal {
+  min-width: 11.25rem;
+  width: 100%;
+  max-width: 100%;
+  padding: 0.45rem 0.5rem;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 매출 전환 모달 — 매입 ID 최소 폭, 상품·수량·단가 입력 넉넉 */
+.main-modal .main-table--convert-modal {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+
+.main-modal .main-table--convert-modal .main-col-purchase-id {
+  width: 4rem;
+  min-width: 3.25rem;
+  max-width: 5rem;
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-modal .main-table--convert-modal th.main-col-product--convert,
+.main-modal .main-table--convert-modal td.main-col-product--convert {
+  min-width: 0;
+  width: 38%;
+}
+
+.main-modal .main-table--convert-modal td.main-td-scroll.main-col-product--convert {
+  max-width: none;
+}
+
+.main-modal .main-table--convert-modal .main-col-qty--convert {
+  min-width: 6.5rem !important;
+  width: 8.5rem;
+  max-width: 11rem;
+}
+
+.main-modal .main-table--convert-modal .main-col-unit-price--convert {
+  min-width: 8rem;
+  width: 13rem;
+  max-width: 18rem;
+}
+
+.main-modal .main-table--convert-modal .main-input-qty--convert {
+  min-width: 5.5rem;
+  width: 100%;
+  max-width: none;
+  padding: 0.45rem 0.5rem;
+  box-sizing: border-box;
+}
+
+.main-modal .main-table--convert-modal .main-input-unit-price.main-input-unit-price--convert {
+  width: 100%;
+  min-width: 6.5rem;
+  max-width: none;
+  padding: 0.45rem 0.55rem;
+  box-sizing: border-box;
+}
+
 /* 환불 모달 사유 픽리스트 + 직접 기입 */
 .main-refund-reason-cell {
   display: flex;
@@ -738,113 +838,6 @@ td.main-td-scroll.main-col-product {
   margin: 1.5rem 0;
   font-size: 0.95rem;
   color: #b91c1c;
-}
-
-.main-file-transfer-form {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 1rem;
-}
-
-.main-file-transfer-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.main-file-transfer-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.main-file-transfer-field > span {
-  font-weight: 500;
-}
-
-.main-file-transfer-input {
-  width: 100%;
-  padding: 0.4rem 0.45rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.main-file-transfer-native {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
-}
-
-.main-file-picker {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-height: 2.3rem;
-  padding: 0.35rem 0.45rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.main-file-picker-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 5.5rem;
-  height: 2rem;
-  padding: 0 0.75rem;
-  border-radius: 7px;
-  background: #4f46e5;
-  color: #fff;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.main-file-picker-name {
-  min-width: 0;
-  flex: 1;
-  color: #334155;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.main-file-transfer-meta {
-  margin-top: 0.75rem;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #f8fafc;
-  color: #334155;
-  font-size: 0.92rem;
-}
-
-.main-file-transfer-status {
-  margin-top: 0.75rem;
-  font-size: 0.95rem;
-  color: #334155;
-}
-
-.main-file-transfer-actions {
-  margin-top: 0.75rem;
-}
-
-@media (max-width: 980px) {
-  .main-file-transfer-grid,
-  .main-file-transfer-meta {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* 탭 상단 알림 (매입정보·매출 전환 등) */

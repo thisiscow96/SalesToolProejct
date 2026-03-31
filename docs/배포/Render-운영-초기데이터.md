@@ -24,4 +24,17 @@ npm run seed-admin
 ## 3. 주의
 
 - 이미 `admin001` 이 있으면 **이름·해시·관리자 플래그만 갱신**됩니다(`seed-admin.js`의 `ON CONFLICT`).
-- 트랜잭션·거래 샘플 데이터는 로컬 전용 스크립트(`seed-sample-*`)를 운영에 그대로 돌리지 마세요. 필요하면 별도 검토 후 실행합니다.
+- 로컬 대용량 시드(`seed-sample-local` 등)는 데이터량이 많아 **운영에는 권장하지 않습니다.**
+
+## 4. 매출 전환 테스트용 매입 1건(선택)
+
+**매입정보 → 선택 매출 전환** 을 시험하려면, 잔여 수량이 있는 매입이 필요합니다. 아래 스크립트는 **할당 없는 매입 1건**만 넣으며, 같은 마커가 이미 있으면 **스킵**합니다.
+
+```bash
+cd server
+npm install
+npm run seed-convert-sample
+```
+
+- 대상 사용자: `SAMPLE_AGENT_NO` (기본 `admin001`). `npm run seed-admin` 후 실행하는 것을 권장합니다.
+- 생성 내용: 매입처·상품·매입 50단위 등(메모 `prod-convert-sample-v1`).

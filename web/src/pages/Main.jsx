@@ -14,7 +14,6 @@ import {
   refundSale,
   createDisposal,
   fetchDisposals,
-  uploadSalesforceContentVersion,
 } from '../api';
 import './Main.css';
 
@@ -322,7 +321,6 @@ function newDisposalInventoryDraft() {
     disposal_date: today(),
     reasonCode: DISPOSAL_REASON_SPOIL,
     reasonOther: '',
-    memo: '',
   };
 }
 
@@ -790,25 +788,25 @@ function TabPurchases() {
             </label>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table">
+            <table className="main-table main-table--convert-modal">
               <thead>
                 <tr>
-                  <th>매입 ID</th>
-                  <th className="main-col-product">상품</th>
-                  <th className="main-col-qty">남은 수량</th>
-                  <th className="main-col-qty">전환 수량</th>
-                  <th className="main-col-unit-price">판매 단가</th>
+                  <th className="main-col-purchase-id">매입 ID</th>
+                  <th className="main-col-product main-col-product--convert">상품</th>
+                  <th className="main-col-qty main-col-qty--convert">남은 수량</th>
+                  <th className="main-col-qty main-col-qty--convert">전환 수량</th>
+                  <th className="main-col-unit-price main-col-unit-price--convert">판매 단가</th>
                 </tr>
               </thead>
               <tbody>
                 {convertRows.map((r) => (
                   <tr key={r.purchase_id}>
-                    <td className="num">{r.purchase_id}</td>
-                    <td className="main-td-scroll main-col-product"><CellText>{r.product_name}</CellText></td>
-                    <td className="num main-col-qty">{formatKoNumber(r.remaining_qty)}</td>
-                    <td className="main-col-qty">
+                    <td className="num main-col-purchase-id" title={`매입 ID ${r.purchase_id}`}>{r.purchase_id}</td>
+                    <td className="main-td-scroll main-col-product main-col-product--convert"><CellText>{r.product_name}</CellText></td>
+                    <td className="num main-col-qty main-col-qty--convert">{formatKoNumber(r.remaining_qty)}</td>
+                    <td className="main-col-qty main-col-qty--convert">
                       <input
-                        className="main-input-qty"
+                        className="main-input-qty main-input-qty--convert"
                         type="number"
                         step="0.001"
                         min="0"
@@ -819,8 +817,9 @@ function TabPurchases() {
                         }
                       />
                     </td>
-                    <td className="main-col-unit-price">
+                    <td className="main-col-unit-price main-col-unit-price--convert">
                       <UnitPriceInput
+                        className="main-input-unit-price--convert"
                         value={r.unit_price}
                         onChange={(v) =>
                           setConvertRows((rows) => rows.map((x) => (x.purchase_id === r.purchase_id ? { ...x, unit_price: v } : x)))
@@ -1946,7 +1945,6 @@ function TabDisposals() {
         quantity: qty,
         disposal_date: d.disposal_date,
         reason: reasonText,
-        memo: String(d.memo ?? '').trim() || undefined,
       });
     }
     if (payload.length === 0) {
@@ -2046,14 +2044,13 @@ function TabDisposals() {
                         title="전체 선택"
                       />
                     </th>
-                    <th className="main-col-product">상품</th>
+                    <th className="main-col-product main-col-product--disposal">상품</th>
                     <th className="main-col-qty">재고 수량</th>
                     <th className="main-col-partner">판매처(매입처)</th>
                     <th className="main-col-date">매입일</th>
-                    <th className="main-col-qty">폐기 수량</th>
-                    <th className="main-col-date">폐기일</th>
+                    <th className="main-col-qty main-col-disposal-qty-input">폐기 수량</th>
+                    <th className="main-col-date main-col-disposal-date-col">폐기일</th>
                     <th>사유</th>
-                    <th>비고</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2069,7 +2066,7 @@ function TabDisposals() {
                             onChange={() => toggleDisposalRowSelect(row.product_id)}
                           />
                         </td>
-                        <td className="main-td-scroll main-col-product">
+                        <td className="main-td-scroll main-col-product main-col-product--disposal">
                           <CellText>{row.product_name}</CellText>
                         </td>
                         <td className="num main-col-qty">
@@ -2081,9 +2078,9 @@ function TabDisposals() {
                           <CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText>
                         </td>
                         <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
-                        <td className="main-col-qty">
+                        <td className="main-col-qty main-col-disposal-qty-input">
                           <input
-                            className="main-input-qty"
+                            className="main-input-qty main-input-qty--disposal"
                             type="number"
                             step="0.001"
                             min="0"
@@ -2097,9 +2094,9 @@ function TabDisposals() {
                             }
                           />
                         </td>
-                        <td className="main-col-date">
+                        <td className="main-col-date main-col-disposal-date-col">
                           <input
-                            className="main-input-date"
+                            className="main-input-date main-input-date--disposal"
                             type="date"
                             disabled={!disposalSelected[pid]}
                             value={d.disposal_date}
@@ -2146,17 +2143,6 @@ function TabDisposals() {
                             )}
                           </div>
                         </td>
-                        <td>
-                          <input
-                            value={d.memo || ''}
-                            onChange={(e) =>
-                              setDisposalDraft((prev) => ({
-                                ...prev,
-                                [pid]: { ...(prev[pid] || newDisposalInventoryDraft()), memo: e.target.value },
-                              }))
-                            }
-                          />
-                        </td>
                       </tr>
                     );
                   })}
@@ -2198,130 +2184,12 @@ function TabDisposals() {
   );
 }
 
-function TabFileTransferTest() {
-  const [file, setFile] = useState(null);
-  const [title, setTitle] = useState('');
-  const [firstPublishLocationId, setFirstPublishLocationId] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [err, setErr] = useState('');
-  const [result, setResult] = useState(null);
-
-  const fileMb = file ? formatMb(file.size) : '0.00';
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setErr('');
-    setResult(null);
-    if (!file) {
-      setErr('파일을 선택하세요.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const data = await uploadSalesforceContentVersion({
-        file,
-        title: title.trim() || undefined,
-        first_publish_location_id: firstPublishLocationId.trim() || undefined,
-      });
-      setResult(data);
-    } catch (e2) {
-      setErr(e2.message || '전송 실패');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <>
-      <div className="main-alert-banner" role="alert">
-        테스트 탭입니다. Salesforce ContentVersion 단건 multipart 업로드를 수행합니다.
-      </div>
-      <form className="main-file-transfer-form" onSubmit={submit}>
-        <div className="main-file-transfer-grid">
-          <label className="main-modal-field-full main-file-transfer-field">
-            <span>업로드 파일</span>
-            <div className="main-file-picker">
-              <input
-                id="sf-file-input"
-                className="main-file-transfer-native"
-                type="file"
-                onChange={(e) => {
-                  const next = e.target.files && e.target.files[0] ? e.target.files[0] : null;
-                  setFile(next);
-                  setResult(null);
-                  setErr('');
-                }}
-              />
-              <label htmlFor="sf-file-input" className="main-file-picker-btn">파일 선택</label>
-              <span className="main-file-picker-name">{file?.name || '선택된 파일 없음'}</span>
-            </div>
-          </label>
-          <label className="main-file-transfer-field">
-            Title (선택)
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="비우면 파일명 사용"
-            />
-          </label>
-          <label className="main-modal-field-select-wide main-file-transfer-field">
-            FirstPublishLocationId (선택)
-            <input
-              type="text"
-              value={firstPublishLocationId}
-              onChange={(e) => setFirstPublishLocationId(e.target.value)}
-              placeholder="예: 001xxxxxxxxxxxx"
-            />
-          </label>
-        </div>
-        {file && (
-          <div className="main-file-transfer-meta">
-            <div><strong>파일명:</strong> {file.name}</div>
-            <div><strong>파일크기:</strong> {fileMb} MB</div>
-            <div><strong>전송방식:</strong> 단건 업로드</div>
-          </div>
-        )}
-        {submitting && (
-          <p className="main-file-transfer-status" role="status" aria-live="polite">
-            전송 진행 중…
-          </p>
-        )}
-        <div className="main-file-transfer-actions">
-          <button type="submit" className="main-btn" disabled={submitting}>
-            {submitting ? '전송 중…' : 'Salesforce 전송'}
-          </button>
-        </div>
-      </form>
-      {err && <p className="main-error">{err}</p>}
-      {result && (
-        <div className="main-table-wrap" style={{ marginTop: '0.75rem' }}>
-          <table className="main-table">
-            <tbody>
-              <tr><th>ContentVersionId</th><td>{result.content_version_id || '—'}</td></tr>
-              <tr><th>ContentDocumentId</th><td>{result.content_document_id || '—'}</td></tr>
-              <tr><th>파일명</th><td>{result.file_name || '—'}</td></tr>
-              <tr><th>파일크기</th><td>{formatMb(result.file_size)} MB</td></tr>
-              <tr><th>Salesforce Instance</th><td>{result.salesforce_instance_url || '—'}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      )}
-      <p className="main-modal-hint" style={{ marginTop: '0.75rem' }}>
-        필요한 환경변수: SF_TOKEN_URL, SF_CLIENT_ID, SF_CLIENT_SECRET, SF_USERNAME, SF_PASSWORD, (선택) SF_SECURITY_TOKEN,
-        SF_API_VERSION. 또는 SF_ACCESS_TOKEN + SF_INSTANCE_URL.
-      </p>
-    </>
-  );
-}
-
 const BASE_TABS = [
   { id: 'inventory', label: '재고현황', Component: TabReorder },
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
-  { id: 'file-transfer-test', label: '파일 전송 테스트', Component: TabFileTransferTest },
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
 
