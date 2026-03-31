@@ -258,7 +258,19 @@ function defaultCollectDateTime() {
 /** 열린 모달 개수 — body 스크롤 잠금 (중첩 모달 대응) */
 let mainModalScrollLockCount = 0;
 
-function Modal({ open, title, onClose, children, formId, saveLabel = '저장', submitting, saveDisabled, wide, fill }) {
+function Modal({
+  open,
+  title,
+  onClose,
+  children,
+  formId,
+  saveLabel = '저장',
+  submitting,
+  saveDisabled,
+  wide,
+  fill,
+  modalClassName = '',
+}) {
   useEffect(() => {
     if (!open) return;
     mainModalScrollLockCount += 1;
@@ -284,7 +296,8 @@ function Modal({ open, title, onClose, children, formId, saveLabel = '저장', s
         className={
           'main-modal' +
           (wide ? ' main-modal--wide' : '') +
-          (fill ? ' main-modal--fill' : '')
+          (fill ? ' main-modal--fill' : '') +
+          (modalClassName ? ` ${modalClassName}` : '')
         }
         role="dialog"
         aria-modal="true"
@@ -651,6 +664,7 @@ function TabPurchases() {
         title="매입 등록"
         wide
         fill
+        modalClassName="main-modal--purchase"
         onClose={() => {
           setShowForm(false);
           setActionErr('');

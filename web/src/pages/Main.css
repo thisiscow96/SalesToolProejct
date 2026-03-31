@@ -1057,6 +1057,11 @@ td.main-td-scroll.main-col-product {
   max-height: min(90vh, 900px);
 }
 
+/* 매입 등록 모달은 입력 행이 많아 가로 폭을 더 넓게 사용 */
+.main-modal--purchase.main-modal--fill {
+  width: min(1180px, 100%);
+}
+
 .main-modal--fill .main-modal-body {
   flex: 1 1 auto;
   display: flex;
