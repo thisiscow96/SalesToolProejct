@@ -1059,7 +1059,18 @@ td.main-td-scroll.main-col-product {
 
 /* 매입 등록 모달은 입력 행이 많아 가로 폭을 더 넓게 사용 */
 .main-modal--purchase.main-modal--fill {
-  width: min(1180px, 100%);
+  width: min(1280px, 100%);
+}
+
+/* 수금 등록 모달도 매입 등록과 동일하게 가로 폭 확장 */
+.main-modal--collect.main-modal--fill {
+  width: min(1280px, 100%);
+}
+
+/* 환불/폐기 모달도 동일 확장 */
+.main-modal--refund.main-modal--fill,
+.main-modal--disposal.main-modal--fill {
+  width: min(1280px, 100%);
 }
 
 .main-modal--fill .main-modal-body {
@@ -1086,6 +1097,29 @@ td.main-td-scroll.main-col-product {
   flex-shrink: 0;
 }
 
+.main-modal-field-collect-datetime {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.main-modal-field-collect-datetime > span {
+  font-weight: 500;
+  color: #334155;
+}
+
+.main-input-datetime-local.main-input-datetime-local--collect {
+  min-width: 14rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .main-modal--fill .main-modal-table-wrap {
   flex: 1 1 auto;
   min-height: 0;
@@ -1100,6 +1134,29 @@ td.main-td-scroll.main-col-product {
   max-height: none;
   overflow: auto;
   margin-top: 0.75rem;
+}
+
+/* 노트북(중간 뷰포트)에서는 모든 모달을 화면에 맞춰 반응형으로 축소 */
+@media (max-width: 1440px) {
+  .main-modal-backdrop {
+    padding: 0.75rem;
+  }
+
+  .main-modal,
+  .main-modal--wide,
+  .main-modal--fill,
+  .main-modal--purchase.main-modal--fill,
+  .main-modal--collect.main-modal--fill,
+  .main-modal--refund.main-modal--fill,
+  .main-modal--disposal.main-modal--fill {
+    width: min(100%, calc(100vw - 1.5rem));
+    max-height: calc(100vh - 1.5rem);
+  }
+
+  .main-modal--fill {
+    min-height: calc(100vh - 1.5rem);
+    height: calc(100vh - 1.5rem);
+  }
 }
 
 .main-modal-header {

@@ -201,8 +201,9 @@ function formatInventoryDateOnly(row) {
 }
 
 /** 수금 등록 — 숫자만, 최대 9자리 */
-function CollectAmountInput({ value, onChange, disabled, placeholder, className }) {
+function CollectAmountInput({ value, onChange, disabled, placeholder, className, max }) {
   const raw = String(value ?? '').replace(/\D/g, '').slice(0, 9);
+  const maxNum = Number(max);
   return (
     <input
       type="text"
@@ -211,7 +212,15 @@ function CollectAmountInput({ value, onChange, disabled, placeholder, className 
       className={'main-input-collect-amount ' + (className || '')}
       value={raw}
       maxLength={9}
-      onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 9))}
+      onChange={(e) => {
+        const nextRaw = e.target.value.replace(/\D/g, '').slice(0, 9);
+        const nextNum = Number(nextRaw || 0);
+        if (Number.isFinite(maxNum) && maxNum >= 0 && nextRaw && nextNum > maxNum) {
+          onChange(String(Math.floor(maxNum)));
+          return;
+        }
+        onChange(nextRaw);
+      }}
       disabled={disabled}
       placeholder={placeholder}
     />
@@ -1014,11 +1023,21 @@ function TabSales() {
       .filter((s) => collectSaleSelected[s.id])
       .map((s) => {
         const n = parseMoneyToNumber(collectAlloc[s.id]);
-        return { sale_id: s.id, amount: Number.isNaN(n) ? 0 : n };
+        return {
+          sale_id: s.id,
+          amount: Number.isNaN(n) ? 0 : n,
+          max_due: Math.max(0, Number(s.total_amount) - Number(s.paid_amount)),
+          max_total: Math.max(0, Number(s.total_amount)),
+        };
       })
       .filter((a) => a.amount > 0);
     if (allocations.length === 0) {
       setSaleErr('체크한 매출에 수금 금액을 입력하세요.');
+      return;
+    }
+    const invalid = allocations.find((a) => a.amount > a.max_due + 1e-9 || a.amount > a.max_total + 1e-9);
+    if (invalid) {
+      setSaleErr(`매출 #${invalid.sale_id}: 현재 수금금액은 최대 미수금(${formatKoNumber(invalid.max_due)})까지만 입력할 수 있습니다.`);
       return;
     }
     const paySum = allocations.reduce((a, x) => a + x.amount, 0);
@@ -1140,6 +1159,7 @@ function TabSales() {
         title="수금 등록 (미수 매출 배분)"
         wide
         fill
+        modalClassName="main-modal--collect"
         onClose={() => {
           setShowCollect(false);
           setSaleErr('');
@@ -1174,16 +1194,17 @@ function TabSales() {
                 ))}
               </select>
             </label>
-            <label>
-              수금일시 (YYYY-MM-DD HH:mm)
+            <label className="main-modal-field-collect-datetime">
+              <span>수금일시</span>
               <input
                 required
-                className="main-input-datetime-local"
+                className="main-input-datetime-local main-input-datetime-local--collect"
                 type="datetime-local"
                 step="60"
                 value={collectDateTime}
                 onChange={(e) => setCollectDateTime(e.target.value)}
               />
+              <small className="main-modal-hint">형식: YYYY-MM-DD HH:mm</small>
             </label>
             <span className="main-modal-hint">배분 합계: <strong>{allocSum.toLocaleString('ko-KR')}</strong> 원 (체크한 행만)</span>
           </div>
@@ -1221,7 +1242,7 @@ function TabSales() {
                     <th className="main-col-amount">총액</th>
                     <th className="main-col-amount">기수금</th>
                     <th className="main-col-amount">미수</th>
-                    <th className="main-col-amount">이번 수금</th>
+                    <th className="main-col-amount">현재 수금금액</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1248,6 +1269,7 @@ function TabSales() {
                           <CollectAmountInput
                             disabled={!collectSaleSelected[s.id]}
                             placeholder={`최대 ${formatKoNumber(due)}`}
+                            max={due}
                             value={collectAlloc[s.id] ?? ''}
                             onChange={(v) => setCollectAlloc((m) => ({ ...m, [s.id]: v }))}
                           />
@@ -1266,6 +1288,7 @@ function TabSales() {
         title="환불 처리 (수금 발생 매출)"
         wide
         fill
+        modalClassName="main-modal--refund"
         onClose={() => {
           setShowRefundModal(false);
           setSaleErr('');
@@ -2016,6 +2039,7 @@ function TabDisposals() {
         title="폐기 등록"
         wide
         fill
+        modalClassName="main-modal--disposal"
         onClose={() => {
           setShowDisposalModal(false);
           setActionErr('');
