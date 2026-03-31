@@ -696,6 +696,49 @@ td.main-td-scroll.main-col-product {
   box-sizing: border-box;
 }
 
+/* 매입 등록 모달 — 수량/단가/매입일 입력칸 가시성 강화 */
+.main-modal .main-table--purchase-modal .main-col-qty--purchase-input {
+  min-width: 7.25rem !important;
+  width: 8.25rem;
+  max-width: 10rem;
+}
+
+.main-modal .main-table--purchase-modal .main-col-unit-price--purchase-input {
+  min-width: 9.5rem;
+  width: 12rem;
+  max-width: 16rem;
+}
+
+.main-modal .main-table--purchase-modal .main-col-date--purchase-input {
+  min-width: 11.5rem;
+  width: 12rem;
+  max-width: 13rem;
+  white-space: nowrap;
+}
+
+.main-modal .main-table--purchase-modal .main-input-qty--purchase {
+  width: 100%;
+  min-width: 6.25rem;
+  max-width: none;
+  padding: 0.45rem 0.5rem;
+  box-sizing: border-box;
+}
+
+.main-modal .main-table--purchase-modal .main-input-unit-price.main-input-unit-price--purchase {
+  width: 100%;
+  min-width: 8rem;
+  max-width: none;
+  padding: 0.45rem 0.55rem;
+  box-sizing: border-box;
+}
+
+.main-modal .main-table--purchase-modal .main-input-date--purchase {
+  width: 100%;
+  min-width: 11rem;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 /* 환불 모달 사유 픽리스트 + 직접 기입 */
 .main-refund-reason-cell {
   display: flex;

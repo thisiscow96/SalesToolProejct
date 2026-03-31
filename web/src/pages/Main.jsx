@@ -23,6 +23,11 @@ const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 };
+const daysAgo = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() - Number(n || 0));
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
 const firstDayOfMonth = () => {
   const d = new Date();
   d.setDate(1);
@@ -663,7 +668,7 @@ function TabPurchases() {
             </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table">
+            <table className="main-table main-table--purchase-modal">
               <thead>
                 <tr>
                   <th className="main-col-check">
@@ -671,9 +676,9 @@ function TabPurchases() {
                   </th>
                   <th className="main-col-partner">매입처</th>
                   <th className="main-col-product">상품</th>
-                  <th className="main-col-qty">수량</th>
-                  <th className="main-col-unit-price">단가</th>
-                  <th className="main-col-date">매입일</th>
+                  <th className="main-col-qty main-col-qty--purchase-input">수량</th>
+                  <th className="main-col-unit-price main-col-unit-price--purchase-input">단가</th>
+                  <th className="main-col-date main-col-date--purchase-input">매입일</th>
                   <th className="main-col-row-actions" aria-label="행 삭제" />
                 </tr>
               </thead>
@@ -718,9 +723,9 @@ function TabPurchases() {
                         ))}
                       </select>
                     </td>
-                    <td className="main-col-qty">
+                    <td className="main-col-qty main-col-qty--purchase-input">
                       <input
-                        className="main-input-qty"
+                        className="main-input-qty main-input-qty--purchase"
                         type="number"
                         step="0.001"
                         min="0"
@@ -728,12 +733,16 @@ function TabPurchases() {
                         onChange={(e) => updatePurchaseRow(row.key, { quantity: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-unit-price">
-                      <UnitPriceInput value={row.unit_price} onChange={(v) => updatePurchaseRow(row.key, { unit_price: v })} />
+                    <td className="main-col-unit-price main-col-unit-price--purchase-input">
+                      <UnitPriceInput
+                        className="main-input-unit-price--purchase"
+                        value={row.unit_price}
+                        onChange={(v) => updatePurchaseRow(row.key, { unit_price: v })}
+                      />
                     </td>
-                    <td className="main-col-date">
+                    <td className="main-col-date main-col-date--purchase-input">
                       <input
-                        className="main-input-date"
+                        className="main-input-date main-input-date--purchase"
                         type="date"
                         value={row.purchase_date}
                         onChange={(e) => updatePurchaseRow(row.key, { purchase_date: e.target.value })}
@@ -1825,7 +1834,8 @@ function TabDisposals() {
   const [inventoryForDisposal, setInventoryForDisposal] = useState([]);
   const [loadingInventory, setLoadingInventory] = useState(false);
   const [dispPartnerSearch, setDispPartnerSearch] = useState('');
-  const [dispDateSearch, setDispDateSearch] = useState('');
+  const [dispPurchaseFromDate, setDispPurchaseFromDate] = useState(daysAgo(7));
+  const [dispPurchaseToDate, setDispPurchaseToDate] = useState(today());
   const [disposalSelected, setDisposalSelected] = useState({});
   const [disposalDraft, setDisposalDraft] = useState({});
   const [actionErr, setActionErr] = useState('');
@@ -1848,20 +1858,27 @@ function TabDisposals() {
   const invFiltered = useMemo(() => {
     const rows = inventoryForDisposal || [];
     const q = dispPartnerSearch.trim().toLowerCase();
-    const d = dispDateSearch.trim();
-    if (!q && !d) return rows;
+    const from = dispPurchaseFromDate.trim();
+    const to = dispPurchaseToDate.trim();
+    const hasDate = !!(from || to);
+    if (!q && !hasDate) return rows;
     return rows.filter((row) => {
       const partnerOk = !q || String(row.last_partner_name || '').toLowerCase().includes(q);
       const dateStr = formatInventoryDateOnly(row);
-      const dateOk = !d || (dateStr !== '—' && dateStr === d);
+      const dateOk =
+        !hasDate ||
+        (dateStr !== '—' &&
+          (!from || dateStr >= from) &&
+          (!to || dateStr <= to));
       return partnerOk && dateOk;
     });
-  }, [inventoryForDisposal, dispPartnerSearch, dispDateSearch]);
+  }, [inventoryForDisposal, dispPartnerSearch, dispPurchaseFromDate, dispPurchaseToDate]);
 
   const openDisposalModal = async () => {
     setActionErr('');
     setDispPartnerSearch('');
-    setDispDateSearch('');
+    setDispPurchaseFromDate(daysAgo(7));
+    setDispPurchaseToDate(today());
     setDisposalSelected({});
     setDisposalDraft({});
     setShowDisposalModal(true);
@@ -1990,7 +2007,8 @@ function TabDisposals() {
           setActionErr('');
           setInventoryForDisposal([]);
           setDispPartnerSearch('');
-          setDispDateSearch('');
+          setDispPurchaseFromDate(daysAgo(7));
+          setDispPurchaseToDate(today());
           setDisposalSelected({});
           setDisposalDraft({});
         }}
@@ -2012,12 +2030,21 @@ function TabDisposals() {
               />
             </label>
             <label className="main-modal-field-disposal-date">
-              매입일 기준
+              매입일 기준 (From)
               <input
                 className="main-input-date"
                 type="date"
-                value={dispDateSearch}
-                onChange={(e) => setDispDateSearch(e.target.value)}
+                value={dispPurchaseFromDate}
+                onChange={(e) => setDispPurchaseFromDate(e.target.value)}
+              />
+            </label>
+            <label className="main-modal-field-disposal-date">
+              매입일 기준 (To)
+              <input
+                className="main-input-date"
+                type="date"
+                value={dispPurchaseToDate}
+                onChange={(e) => setDispPurchaseToDate(e.target.value)}
               />
             </label>
             <span className="main-modal-hint main-modal-hint--disposal">
