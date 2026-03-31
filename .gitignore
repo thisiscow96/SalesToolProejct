@@ -29,3 +29,6 @@ Thumbs.db
 *.exe
 postgresql*.exe
 
+# 임시 문서(대용량 PDF 등)
+docs/temp/
+
