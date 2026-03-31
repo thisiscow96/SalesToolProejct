@@ -803,7 +803,7 @@ function TabPurchases() {
         submitting={submitting}
       >
         <form id="form-convert-modal" className="main-modal-form" onSubmit={submitConvert}>
-          <div className="main-modal-fields">
+          <div className="main-modal-fields main-modal-fields--collect">
             <label className="main-modal-field-select-wide">
               판매처
               <select required value={convertCustomer} onChange={(e) => setConvertCustomer(e.target.value)}>
