@@ -86,7 +86,7 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* 검색 기간: yyyy-mm-dd 텍스트 입력 */
+/* 검색 기간: yyyy-mm-dd (type=date — 달력/키보드 입력) */
 .main-date-filter {
   display: inline-flex;
   flex-wrap: wrap;
@@ -109,18 +109,14 @@
   cursor: pointer;
 }
 .main-date-input-ymd {
-  width: 9.5rem;
+  min-width: 10.5rem;
+  width: auto;
   max-width: 100%;
   padding: 0.5rem 0.55rem;
   font-size: 0.9rem;
-  font-family: ui-monospace, monospace;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   box-sizing: border-box;
-}
-.main-date-input-ymd::placeholder {
-  color: #94a3b8;
-  font-size: 0.82rem;
 }
 
 /* 긴 상품명·거래처: hover 시 title로 전체, 셀 내 가로 스크롤 */

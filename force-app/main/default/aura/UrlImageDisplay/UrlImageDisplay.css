@@ -1,0 +1,15 @@
+.THIS.url-image-wrap {
+    width: 100%;
+}
+
+.THIS .url-image {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+.THIS .url-image-hint {
+    color: #706e6b;
+    font-size: 0.8125rem;
+    padding: 0.5rem 0;
+}

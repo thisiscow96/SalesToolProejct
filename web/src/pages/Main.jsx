@@ -41,32 +41,18 @@ function sanitizeYmd(s, fallback) {
   return fallback;
 }
 
-/** 검색 기간: yyyy-mm-dd 텍스트 입력 */
+/** 검색 기간: yyyy-mm-dd — 브라우저 달력(type=date) + 키보드 입력 */
 function DateSearchField({ value, onChange, id }) {
+  const v = String(value ?? '').trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
   return (
     <input
       id={id}
-      type="text"
+      type="date"
       className="main-date-input-ymd"
-      placeholder="yyyy-mm-dd"
       autoComplete="off"
-      spellCheck={false}
-      inputMode="numeric"
-      maxLength={10}
-      value={value}
-      onChange={(e) => {
-        let v = e.target.value;
-        if (v.length > 10) v = v.slice(0, 10);
-        onChange(v);
-      }}
-      onBlur={(e) => {
-        const v = e.target.value.trim();
-        if (!v) return;
-        const d = v.replace(/\D/g, '');
-        if (d.length === 8) {
-          onChange(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`);
-        }
-      }}
+      value={normalized}
+      onChange={(e) => onChange(e.target.value)}
     />
   );
 }
@@ -502,7 +488,10 @@ function TabPurchases() {
     fetchProducts().then(setProducts).catch(() => {});
     fetchPartners().then(setPartners).catch(() => {});
   }, []);
-  useEffect(() => { load(); }, [fromDate, toDate, productId]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
+  }, []);
 
   const purchasePartners = partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type));
   const salePartners = partners.filter((p) => SALE_ACCOUNT_TYPES.has(p.type));
@@ -954,7 +943,10 @@ function TabSales() {
       .finally(() => setLoading(false));
   };
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
-  useEffect(() => { load(); }, [fromDate, toDate, partnerId, showAllSales]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
+  }, []);
 
   const refundableFiltered = useMemo(() => {
     const q = refundPartnerSearch.trim().toLowerCase();
@@ -1607,7 +1599,10 @@ function TabPayments() {
       .finally(() => setLoading(false));
   };
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
-  useEffect(() => { load(); }, [fromDate, toDate, partnerId]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
+  }, []);
   return (
     <>
       <div className="main-filters">
@@ -1674,7 +1669,10 @@ function TabProductMaster() {
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, [categoryLarge, categoryMid, categorySmall, nameSearch]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
+  }, []);
 
   const updateProductRow = (key, patch) => {
     setProductRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -1751,6 +1749,9 @@ function TabProductMaster() {
         <label>이름 검색
           <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" style={{ width: '140px' }} />
         </label>
+        <button type="button" className="main-btn" onClick={load}>
+          검색
+        </button>
         <button
           type="button"
           className="main-btn"
@@ -1890,7 +1891,10 @@ function TabDisposals() {
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, [fromDate, toDate]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
+  }, []);
 
   const invFiltered = useMemo(() => {
     const rows = inventoryForDisposal || [];

@@ -1,0 +1,14 @@
+<aura:component implements="flexipage:availableForAllPageTypes" access="global">
+    <!-- 미리보기 URL은 Content-Type이 text/html 이라 <img>에 부적합. 다운로드/VersionData 성격의 URL을 imageUrl에 넣을 것. -->
+    <aura:attribute name="imageUrl" type="String" default="" description="파일 다운로드 URL(이미지 바이너리 응답)" />
+    <aura:attribute name="altText" type="String" default="" />
+
+    <div class="url-image-wrap">
+        <aura:if isTrue="{!not(empty(v.imageUrl))}">
+            <img src="{!v.imageUrl}" alt="{!v.altText}" class="url-image" />
+            <aura:set attribute="else">
+                <div class="url-image-hint">앱 빌더에서 속성 &quot;이미지 URL&quot;에 다운로드 URL을 입력하세요.</div>
+            </aura:set>
+        </aura:if>
+    </div>
+</aura:component>

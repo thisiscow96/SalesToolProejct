@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Design:component xmlns:Design="http://schemas.salesforce.com/design/1.0" label="URL 이미지 표시">
+    <Design:attribute
+        name="imageUrl"
+        label="이미지 URL"
+        description="미리보기(/sfdc/p/ 등, 응답이 HTML)가 아니라 파일 다운로드 URL을 넣으세요. Network에서 Content-Type이 image/* 인지 확인."
+        default="" />
+    <Design:attribute name="altText" label="대체 텍스트" description="접근성용(선택)" default="" />
+</Design:component>
