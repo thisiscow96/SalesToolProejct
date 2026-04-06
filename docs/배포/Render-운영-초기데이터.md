@@ -3,6 +3,32 @@
 운영 PostgreSQL에 **샘플 관리자 계정**만 넣고 싶을 때 사용합니다.  
 기본값은 **중매인 번호 `admin001` / 비밀번호 `sample`** 이므로, 실서비스 전에 **반드시 비밀번호 변경** 또는 계정 정책에 맞게 수정하세요.
 
+## Shell 없이 실행 (Shell 업그레이드 불필요)
+
+Render 무료 플랜 등에서 **Shell** 사용 시 유료 업그레이드를 요구하는 경우, 아래로 동일하게 마이그레이션·시드를 실행할 수 있습니다.
+
+### A. GitHub Actions (권장)
+
+1. GitHub 레포지토리 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+2. Name: **`DATABASE_URL`** — Value: Render **PostgreSQL** 대시보드 → **Connections** → **External Database URL** (Web Service에 넣은 `DATABASE_URL`과 동일한 Postgres 접속 문자열이면 됨)
+3. **Actions** 탭 → 워크플로 **「Seed oper database (Render)」** → **Run workflow** — 최초에는 `run_seed_admin`·`run_migrate`·`run_seed` 모두 켠 뒤 실행(이미 시드했으면 시드만 끄고 마이그레이션만 등으로 조정)
+
+워크플로 파일: `.github/workflows/seed-oper-database.yml`
+
+### B. 로컬 PC 터미널
+
+1. 위와 동일한 `DATABASE_URL`을 Render 대시보드에서 **한 번만** 복사합니다(파일·커밋에 넣지 말 것).
+2. 예 (PowerShell):
+
+```powershell
+cd server
+$env:DATABASE_URL="postgresql://..."  # 실제 URL로 교체
+$env:NODE_ENV="production"
+npm install
+npm run migrate
+npm run seed-oper-april-flow-2026
+```
+
 ## 1. Render Shell에서 1회 실행
 
 1. Render Dashboard → **해당 Web Service** → **Shell** (또는 **Connect** → SSH/Shell).
