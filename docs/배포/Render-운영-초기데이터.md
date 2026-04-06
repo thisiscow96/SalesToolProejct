@@ -51,3 +51,16 @@ npm run seed-april-daily-2026
 
 - 대상: `SAMPLE_AGENT_NO` (기본 `admin001`). `npm run seed-admin` 선행 권장.
 - 기간: **2026-04-01 ~ 2026-04-06** 하루씩 매입 1건 + 매출 1건(메모 `prod-april-daily-2026-v1`).
+
+## 6. 운영 데모용 대량 플로우(2026-04-01 ~ 04-06, admin001 전용)
+
+매입·매출(흑자·매입연결)·미수·폐기를 **각 약 100건** 넣어 대시보드·탭·미수 화면을 채울 때 사용합니다. 매입 **출처**는 모두 **한국청과**(`source_name`), 매입/매출 거래처는 스크립트 내 풀을 순환합니다. 이미 `prod-april-flow-2026-v1:purchase:0` 매입이 있으면 **전체 스킵**합니다.
+
+```bash
+cd server
+npm install
+npm run seed-oper-april-flow-2026
+```
+
+- 대상: `SAMPLE_AGENT_NO` (기본 `admin001`). **`npm run migrate`** 로 `purchase.source_name` 컬럼(007)이 적용된 뒤 실행하세요.
+- 거래처 목록을 바꾸려면 `server/scripts/seed-oper-april-flow-2026.js` 상단의 `SUPPLIERS` / `CUSTOMERS` 배열만 수정하면 됩니다.
