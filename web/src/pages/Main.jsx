@@ -14,6 +14,7 @@ import {
   refundSale,
   createDisposal,
   fetchDisposals,
+  fetchDailyPurchaseSales,
 } from '../api';
 import './Main.css';
 
@@ -2253,8 +2254,132 @@ function TabDisposals() {
   );
 }
 
+function TabDailyTrade() {
+  const [rows, setRows] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [fromDate, setFromDate] = useState(firstDayOfMonth());
+  const [toDate, setToDate] = useState(today());
+  const [partnerId, setPartnerId] = useState('');
+
+  const load = () => {
+    setLoading(true);
+    setErr('');
+    const params = {
+      from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
+      to_date: sanitizeYmd(toDate, today()),
+    };
+    if (partnerId) params.partner_id = partnerId;
+    fetchDailyPurchaseSales(params)
+      .then(setRows)
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchPartners().then(setPartners).catch(() => {});
+  }, []);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 조회; 이후는 검색 버튼
+  }, []);
+
+  const totals = useMemo(() => {
+    return rows.reduce(
+      (acc, r) => {
+        acc.purchase += Number(r.purchase_amount) || 0;
+        acc.sales += Number(r.sales_amount) || 0;
+        acc.purchaseCount += Number(r.purchase_count) || 0;
+        acc.salesCount += Number(r.sales_count) || 0;
+        return acc;
+      },
+      { purchase: 0, sales: 0, purchaseCount: 0, salesCount: 0 },
+    );
+  }, [rows]);
+
+  return (
+    <>
+      <div className="main-filters main-filters--daily-trade" style={{ flexWrap: 'wrap', gap: '8px' }}>
+        <label className="main-date-filter">
+          기간{' '}
+          <DateSearchField value={fromDate} onChange={setFromDate} id="daily-from" /> ~{' '}
+          <DateSearchField value={toDate} onChange={setToDate} id="daily-to" />
+        </label>
+        <label>
+          거래처
+          <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} title="매입은 구입처, 매출은 판매처 기준으로 집계">
+            <option value="">전체</option>
+            {partners.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="main-btn" onClick={load}>
+          검색
+        </button>
+        <span className="main-modal-hint main-daily-trade-hint">
+          거래처 선택 시: 해당 거래처가 <strong>구입처</strong>인 매입·<strong>판매처</strong>인 매출만 합산합니다. 취소 매출은 제외합니다.
+        </span>
+      </div>
+      {loading ? (
+        <p className="main-loading">불러오는 중…</p>
+      ) : err ? (
+        <p className="main-error">{err}</p>
+      ) : (
+        <div className="main-table-wrap">
+          <table className="main-table main-table--daily-trade">
+            <thead>
+              <tr>
+                <th className="main-col-date">일자</th>
+                <th className="main-col-amount">매입액</th>
+                <th className="main-col-qty">매입 건수</th>
+                <th className="main-col-amount">매출액</th>
+                <th className="main-col-qty">매출 건수</th>
+                <th className="main-col-amount">차이(매출−매입)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const pa = Number(r.purchase_amount) || 0;
+                const sa = Number(r.sales_amount) || 0;
+                const diff = sa - pa;
+                return (
+                  <tr key={r.date}>
+                    <td className="main-col-date">{r.date}</td>
+                    <td className="num main-col-amount">{formatKoNumber(pa)}</td>
+                    <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
+                    <td className="num main-col-amount">{formatKoNumber(sa)}</td>
+                    <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
+                    <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot>
+                <tr className="main-table-foot-daily">
+                  <th className="main-col-date">기간 합계</th>
+                  <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
+                  <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
+                  <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
+                  <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
+                  <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 const BASE_TABS = [
   { id: 'inventory', label: '재고현황', Component: TabReorder },
+  { id: 'daily-trade', label: '일별 매입·매출', Component: TabDailyTrade },
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },

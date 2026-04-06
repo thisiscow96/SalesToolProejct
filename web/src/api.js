@@ -89,6 +89,15 @@ export async function fetchSales(params = {}) {
   return data.data;
 }
 
+/** 일별 매입·매출 집계: from_date, to_date 필수; partner_id 선택 시 매입=구입처·매출=판매처 기준 */
+export async function fetchDailyPurchaseSales(params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await fetch(`${API_BASE}/reports/daily-purchase-sales?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return data.data;
+}
+
 export async function fetchPayments(params = {}) {
   const q = new URLSearchParams(params).toString();
   const res = await fetch(`${API_BASE}/payments?${q}`, { headers: authHeaders() });

@@ -787,6 +787,65 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
+// 일별 매입·매출 집계 (기간 필수, 거래처 선택 시 매입=구입처·매출=판매처 기준)
+app.get('/api/reports/daily-purchase-sales', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const from = String(req.query.from_date ?? '').trim();
+  const to = String(req.query.to_date ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ ok: false, message: 'from_date, to_date(YYYY-MM-DD)가 필요합니다.' });
+  }
+  if (from > to) {
+    return res.status(400).json({ ok: false, message: '시작일이 종료일보다 늦을 수 없습니다.' });
+  }
+  const partnerRaw = req.query.partner_id;
+  const partnerId = partnerRaw !== undefined && partnerRaw !== '' ? parseInt(partnerRaw, 10) : null;
+  const pid = partnerId && Number.isFinite(partnerId) ? partnerId : null;
+  try {
+    const r = await pool.query(
+      `WITH days AS (
+         SELECT generate_series($2::date, $3::date, '1 day'::interval)::date AS d
+       ),
+       p AS (
+         SELECT pu.purchase_date::date AS d,
+                COALESCE(SUM(pu.total_amount), 0)::numeric AS purchase_amount,
+                COUNT(*)::int AS purchase_count
+         FROM purchase pu
+         WHERE pu.user_id = $1
+           AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
+           AND ($4::int IS NULL OR pu.partner_id = $4)
+         GROUP BY pu.purchase_date::date
+       ),
+       s AS (
+         SELECT sa.sale_date::date AS d,
+                COALESCE(SUM(sa.total_amount), 0)::numeric AS sales_amount,
+                COUNT(*)::int AS sales_count
+         FROM sale sa
+         WHERE sa.user_id = $1
+           AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
+           AND sa.status NOT IN ('cancelled')
+           AND ($4::int IS NULL OR sa.partner_id = $4)
+         GROUP BY sa.sale_date::date
+       )
+       SELECT days.d AS date,
+              COALESCE(p.purchase_amount, 0)::numeric AS purchase_amount,
+              COALESCE(p.purchase_count, 0)::int AS purchase_count,
+              COALESCE(s.sales_amount, 0)::numeric AS sales_amount,
+              COALESCE(s.sales_count, 0)::int AS sales_count
+       FROM days
+       LEFT JOIN p ON p.d = days.d
+       LEFT JOIN s ON s.d = days.d
+       ORDER BY days.d`,
+      [userId, from, to, pid]
+    );
+    res.json({ ok: true, data: r.rows });
+  } catch (err) {
+    console.error('daily-purchase-sales error:', err);
+    res.status(500).json({ ok: false, message: err.message || '일별 집계를 불러오지 못했습니다.' });
+  }
+});
+
 // 수금정보 (중매인 번호 기준, 기간·거래처별 검색)
 app.get('/api/payments', async (req, res) => {
   const userId = await getUserId(req);
