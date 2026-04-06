@@ -658,31 +658,18 @@ app.get('/api/inventory', async (req, res) => {
       `SELECT i.id, i.product_id, i.quantity, i.updated_at, p.name AS product_name, p.unit,
               lp.purchase_date AS last_purchase_date,
               lp.created_at AS last_purchase_created_at,
-              COALESCE(
-                NULLIF(BTRIM(pt.name::text), ''),
-                NULLIF(BTRIM(pt_tf.name::text), ''),
-                NULLIF(BTRIM(loc_from_tf.before_location::text), '')
-              ) AS last_partner_name
+              NULLIF(BTRIM(lp.source_name::text), '') AS last_source_name,
+              NULLIF(BTRIM(pt.name::text), '') AS last_partner_name
        FROM inventory i
        JOIN product p ON p.id = i.product_id
        LEFT JOIN LATERAL (
-         SELECT pu.purchase_date, pu.created_at, pu.partner_id
+         SELECT pu.purchase_date, pu.created_at, pu.partner_id, pu.source_name
          FROM purchase pu
          WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id
          ORDER BY pu.purchase_date DESC, pu.created_at DESC NULLS LAST, pu.id DESC
          LIMIT 1
        ) lp ON true
        LEFT JOIN account pt ON pt.id = lp.partner_id AND pt.user_id = i.user_id
-       LEFT JOIN LATERAL (
-         SELECT t.from_partner_id, t.before_location, t.purchase_id
-         FROM product_transfer t
-         WHERE t.user_id = i.user_id AND t.product_id = i.product_id
-           AND t.from_type = 'supplier' AND t.to_type = 'inventory'
-           AND t.purchase_id IS NOT NULL
-         ORDER BY t.transferred_at DESC NULLS LAST, t.id DESC
-         LIMIT 1
-       ) loc_from_tf ON true
-       LEFT JOIN account pt_tf ON pt_tf.id = loc_from_tf.from_partner_id AND pt_tf.user_id = i.user_id
        WHERE i.user_id = $1 AND i.quantity > 0
        ORDER BY p.name`,
       [userId]
@@ -703,7 +690,7 @@ app.get('/api/purchases', async (req, res) => {
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
   try {
-    let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo,
+    let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
              (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
@@ -963,7 +950,7 @@ async function insertTransfer(client, row) {
 app.post('/api/purchases', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
-  const { partner_id, product_id, quantity, unit_price, purchase_date, memo } = req.body || {};
+  const { partner_id, product_id, quantity, unit_price, purchase_date, memo, source_name } = req.body || {};
   const pid = parseInt(partner_id, 10);
   const prid = parseInt(product_id, 10);
   const qty = Number(quantity);
@@ -986,11 +973,12 @@ app.post('/api/purchases', async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
     }
+    const src = source_name != null && String(source_name).trim() ? String(source_name).trim().slice(0, 200) : null;
     const ins = await client.query(
-      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id`,
-      [userId, pid, prid, qty, up, total, String(purchase_date).slice(0, 10), memo?.trim() || null]
+      [userId, pid, prid, qty, up, total, String(purchase_date).slice(0, 10), memo?.trim() || null, src]
     );
     const purchaseId = ins.rows[0].id;
     await upsertInventoryDelta(client, userId, prid, qty);

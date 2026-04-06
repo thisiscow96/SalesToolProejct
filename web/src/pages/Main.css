@@ -139,17 +139,28 @@ td.main-td-scroll {
   min-width: 11rem;
   width: 22%;
 }
+.main-table th.main-col-source,
+.main-table td.main-col-source {
+  min-width: 8rem;
+  width: 14%;
+}
 .main-table th.main-col-product,
 .main-table td.main-col-product {
   min-width: 12rem;
   width: 28%;
 }
 td.main-td-scroll.main-col-partner,
-td.main-td-scroll.main-col-product {
+td.main-td-scroll.main-col-product,
+td.main-td-scroll.main-col-source {
   max-width: none;
 }
 
 /* 모달 안 테이블: 매입처·거래처·상품·납품 등 긴 텍스트/선택 열을 본문보다 넓게 */
+.main-modal .main-table th.main-col-source,
+.main-modal .main-table td.main-col-source {
+  min-width: min(12rem, 30vw);
+  width: 20%;
+}
 .main-modal .main-table th.main-col-partner,
 .main-modal .main-table td.main-col-partner {
   min-width: min(20rem, 52vw);
@@ -601,6 +612,21 @@ td.main-td-scroll.main-col-product {
 }
 .main-modal .main-table--disposal-modal td.main-td-scroll.main-col-product.main-col-product--disposal {
   max-width: min(13rem, 32vw);
+}
+
+.main-modal .main-table--disposal-modal th.main-col-source,
+.main-modal .main-table--disposal-modal td.main-col-source {
+  min-width: min(9rem, 22vw);
+  width: 14%;
+  max-width: min(12rem, 30vw);
+}
+.main-modal .main-table--disposal-modal td.main-td-scroll.main-col-source {
+  max-width: min(12rem, 30vw);
+}
+.main-modal .main-table--disposal-modal th.main-col-partner,
+.main-modal .main-table--disposal-modal td.main-col-partner {
+  min-width: min(10rem, 26vw);
+  width: 16%;
 }
 
 .main-modal .main-table--disposal-modal th.main-col-disposal-qty-input,

@@ -389,6 +389,7 @@ function buildRefundReasonFromDraft(d) {
 function newPurchaseRow() {
   return {
     key: `pur-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+    source_name: '',
     partner_id: '',
     product_id: '',
     quantity: '',
@@ -431,6 +432,7 @@ function TabReorder() {
         <thead>
           <tr>
             <th className="main-col-product">상품명</th>
+            <th className="main-col-source">출처</th>
             <th className="main-col-partner">매입 거래처</th>
             <th className="main-col-qty">수량</th>
             <th>단위</th>
@@ -441,6 +443,7 @@ function TabReorder() {
           {list.map((row) => (
             <tr key={row.id}>
               <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+              <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
               <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
               <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
               <td>{row.unit}</td>
@@ -543,6 +546,7 @@ function TabPurchases() {
     setActionErr('');
     const clones = picked.map((r) => ({
       ...newPurchaseRow(),
+      source_name: r.source_name ?? '',
       partner_id: r.partner_id,
       product_id: r.product_id,
       quantity: r.quantity,
@@ -566,7 +570,12 @@ function TabPurchases() {
     e.preventDefault();
     setActionErr('');
     const partial = purchaseRows.some((r) => {
-      const any = r.partner_id || r.product_id || r.quantity !== '' || r.unit_price !== '';
+      const any =
+        r.partner_id ||
+        r.product_id ||
+        r.quantity !== '' ||
+        r.unit_price !== '' ||
+        String(r.source_name ?? '').trim();
       const full =
         r.partner_id &&
         r.product_id &&
@@ -595,6 +604,7 @@ function TabPurchases() {
           quantity: Number(r.quantity),
           unit_price: parseMoneyToNumber(r.unit_price),
           purchase_date: r.purchase_date,
+          source_name: String(r.source_name ?? '').trim() || undefined,
         });
       }
       setShowForm(false);
@@ -687,7 +697,8 @@ function TabPurchases() {
                   <th className="main-col-check">
                     <input type="checkbox" checked={purchaseRows.length > 0 && purchaseRows.every((r) => r.selected)} onChange={togglePurchaseSelectAll} title="전체 선택" />
                   </th>
-                  <th className="main-col-partner">매입처</th>
+                  <th className="main-col-source main-col-source--purchase-input">출처</th>
+                  <th className="main-col-partner">매입 거래처</th>
                   <th className="main-col-product">상품</th>
                   <th className="main-col-qty main-col-qty--purchase-input">수량</th>
                   <th className="main-col-unit-price main-col-unit-price--purchase-input">단가</th>
@@ -700,6 +711,16 @@ function TabPurchases() {
                   <tr key={row.key}>
                     <td className="main-col-check">
                       <input type="checkbox" checked={!!row.selected} onChange={() => togglePurchaseRowSelect(row.key)} />
+                    </td>
+                    <td className="main-col-source main-col-source--purchase-input">
+                      <input
+                        type="text"
+                        className="main-input-source-name"
+                        placeholder="예: 한국청과"
+                        autoComplete="off"
+                        value={row.source_name}
+                        onChange={(e) => updatePurchaseRow(row.key, { source_name: e.target.value })}
+                      />
                     </td>
                     <td className="main-col-partner">
                       <select
@@ -862,7 +883,8 @@ function TabPurchases() {
               <tr>
                 <th className="main-col-check">선택</th>
                 <th className="main-col-datetime">매입일</th>
-                <th className="main-col-partner">거래처</th>
+                <th className="main-col-source">출처</th>
+                <th className="main-col-partner">매입 거래처</th>
                 <th className="main-col-product">상품</th>
                 <th className="main-col-qty">수량</th>
                 <th className="main-col-qty">매출 반영</th>
@@ -883,6 +905,7 @@ function TabPurchases() {
                     />
                   </td>
                   <td className="main-col-datetime">{formatPurchaseTableDateTime(row)}</td>
+                  <td className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
                   <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                   <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
                   <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
@@ -1905,7 +1928,10 @@ function TabDisposals() {
     const hasDate = !!(from || to);
     if (!q && !hasDate) return rows;
     return rows.filter((row) => {
-      const partnerOk = !q || String(row.last_partner_name || '').toLowerCase().includes(q);
+      const partnerOk =
+        !q ||
+        String(row.last_partner_name || '').toLowerCase().includes(q) ||
+        String(row.last_source_name || '').toLowerCase().includes(q);
       const dateStr = formatInventoryDateOnly(row);
       const dateOk =
         !hasDate ||
@@ -2063,11 +2089,11 @@ function TabDisposals() {
           {actionErr && <p className="main-error" style={{ marginBottom: '8px' }}>{actionErr}</p>}
           <div className="main-modal-fields main-modal-fields--disposal-search">
             <label className="main-modal-field-disposal-search">
-              판매처(매입처) 검색
+              출처·매입 거래처 검색
               <input
                 type="search"
                 autoComplete="off"
-                placeholder="거래처명 일부"
+                placeholder="출처 또는 매입 거래처명 일부"
                 value={dispPartnerSearch}
                 onChange={(e) => setDispPartnerSearch(e.target.value)}
               />
@@ -2091,7 +2117,7 @@ function TabDisposals() {
               />
             </label>
             <span className="main-modal-hint main-modal-hint--disposal">
-              판매처·날짜 중 값이 있는 조건만 적용됩니다. 둘 다 비우면 전체 재고가 표시됩니다. 체크한 행만 저장됩니다.
+              출처·매입 거래처·매입일 중 값이 있는 조건만 적용됩니다. 모두 비우면 전체 재고가 표시됩니다. 체크한 행만 저장됩니다.
             </span>
           </div>
           {loadingInventory && <p className="main-loading">재고 불러오는 중…</p>}
@@ -2116,7 +2142,8 @@ function TabDisposals() {
                     </th>
                     <th className="main-col-product main-col-product--disposal">상품</th>
                     <th className="main-col-qty">재고 수량</th>
-                    <th className="main-col-partner">판매처(매입처)</th>
+                    <th className="main-col-source">출처</th>
+                    <th className="main-col-partner">매입 거래처</th>
                     <th className="main-col-date">매입일</th>
                     <th className="main-col-qty main-col-disposal-qty-input">폐기 수량</th>
                     <th className="main-col-date main-col-disposal-date-col">폐기일</th>
@@ -2143,6 +2170,9 @@ function TabDisposals() {
                           <span className="main-qty-unit-inline">
                             {formatKoNumber(row.quantity)}
                           </span>
+                        </td>
+                        <td className="main-td-scroll main-col-source">
+                          <CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText>
                         </td>
                         <td className="main-td-scroll main-col-partner">
                           <CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText>
