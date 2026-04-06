@@ -7,8 +7,8 @@
 | 1 | [00_Overview.md](00_Overview.md) | 전체 요약 |
 | 2 | [01_Problem.md](01_Problem.md) | 문제 정의 |
 | 3 | [02_Solution.md](02_Solution.md) | 해결 방식 · Before / After · 설계 방향 |
-| 4 | [03_Implementation.md](03_Implementation.md) | 구현·기술 (짧게) |
+| 4 | [03_Implementation.md](03_Implementation.md) | 구현·기술 |
 | 5 | [04_Impact.md](04_Impact.md) | 결과·성과 |
-| 6 | [05_Retrospective.md](05_Retrospective.md) | 회고 (선택) |
+| 6 | [05_Retrospective.md](05_Retrospective.md) | 회고 |
 
 ← [저장소 루트 README](../../README.md) · [문서 허브 전체](../README.md)
