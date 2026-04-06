@@ -38,3 +38,16 @@ npm run seed-convert-sample
 
 - 대상 사용자: `SAMPLE_AGENT_NO` (기본 `admin001`). `npm run seed-admin` 후 실행하는 것을 권장합니다.
 - 생성 내용: 매입처·상품·매입 50단위 등(메모 `prod-convert-sample-v1`).
+
+## 5. 일별 매입·매출 화면용 샘플 (2026-04-01 ~ 04-06, admin001 전용)
+
+**일별 매입·매출** 탭에서 날짜별 집계를 확인하려면, 동일 기간에 매입·매출이 있어야 합니다. 아래는 **`admin001` 사용자 데이터만** 삽입합니다(다른 중매인 번호에는 보이지 않음). 이미 같은 마커로 4월 1일 매입이 있으면 **전체 스킵**합니다.
+
+```bash
+cd server
+npm install
+npm run seed-april-daily-2026
+```
+
+- 대상: `SAMPLE_AGENT_NO` (기본 `admin001`). `npm run seed-admin` 선행 권장.
+- 기간: **2026-04-01 ~ 2026-04-06** 하루씩 매입 1건 + 매출 1건(메모 `prod-april-daily-2026-v1`).

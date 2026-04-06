@@ -12,6 +12,7 @@
     "seed-sample-transactions-local": "node scripts/seed-sample-transactions-local.js",
     "seed-sample-disposal-full-local": "node scripts/seed-sample-disposal-full-local.js",
     "seed-convert-sample": "node scripts/seed-convert-sample.js",
+    "seed-april-daily-2026": "node scripts/seed-april-daily-2026.js",
     "smoke": "node scripts/smoke-api-flow.js",
     "scenario": "node scripts/scenario-integration-test.js",
     "scenario:git": "node scripts/git-commit-scenario-history.js",
