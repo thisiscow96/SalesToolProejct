@@ -48,7 +48,7 @@ cd "...\판매툴\server"
 npm run scenario:git
 ```
 
-- `docs/테스트시나리오/시나리오-실행이력/` 과 `API-통합-시나리오-실행-통합대장.md` 만 stage → commit → `git push`
+- `docs/80. 프로젝트 테스트(TE)/테스트시나리오/시나리오-실행이력/` 과 상위 폴더의 `API-통합-시나리오-실행-통합대장.md` 만 stage → commit → `git push`
 - **한 번에:** `npm run scenario:push` (= scenario 실행 후 바로 위와 동일)
 - push 만 안 하려면: `$env:SCENARIO_GIT_NO_PUSH='1'; npm run scenario:git`
 - 프로젝트 루트에 `.git` 이 있어야 하고, `git user.name` / `user.email` · 원격 저장소 설정이 되어 있어야 합니다.

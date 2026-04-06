@@ -1,9 +1,9 @@
 /**
- * docs/테스트시나리오/API-통합-시나리오.md — S-001 ~ S-021 자동 점검
+ * docs/80. 프로젝트 테스트(TE)/테스트시나리오/API-통합-시나리오.md — S-001 ~ S-021 자동 점검
  * 전제: npm run seed-admin, DB 마이그레이션, 서버 기동(기본 3000)
  * 실행: cd server → npm run scenario
  *
- * 실행 이력: docs/테스트시나리오/시나리오-실행이력/ (또는 SCENARIO_HISTORY_DIR)
+ * 실행 이력: docs/80. 프로젝트 테스트(TE)/테스트시나리오/시나리오-실행이력/ (또는 SCENARIO_HISTORY_DIR)
  */
 const path = require('path');
 const fs = require('fs');
@@ -20,6 +20,7 @@ const PROJECT_ROOT = path.join(__dirname, '..', '..');
 const DEFAULT_HISTORY_ROOT = path.join(
   PROJECT_ROOT,
   'docs',
+  '80. 프로젝트 테스트(TE)',
   '테스트시나리오',
   '시나리오-실행이력'
 );
@@ -30,7 +31,12 @@ const RUNS_DIR = path.join(HISTORY_ROOT, 'runs');
 const HISTORY_JSONL = path.join(HISTORY_ROOT, 'history.jsonl');
 const LATEST_MD = path.join(HISTORY_ROOT, '최근실행.md');
 const LEDGER_MANUAL_JSON = path.join(HISTORY_ROOT, '통합대장-수동필드.json');
-const DOCS_SCENARIO_DIR = path.join(PROJECT_ROOT, 'docs', '테스트시나리오');
+const DOCS_SCENARIO_DIR = path.join(
+  PROJECT_ROOT,
+  'docs',
+  '80. 프로젝트 테스트(TE)',
+  '테스트시나리오'
+);
 const LEDGER_MD = path.join(DOCS_SCENARIO_DIR, 'API-통합-시나리오-실행-통합대장.md');
 
 const SCENARIO_META = require('./scenario-meta.json');

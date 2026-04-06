@@ -15,6 +15,7 @@ import {
   createDisposal,
   fetchDisposals,
   fetchDailyPurchaseSales,
+  fetchDailyPurchaseSalesBreakdown,
 } from '../api';
 import './Main.css';
 
@@ -2286,10 +2287,12 @@ function TabDisposals() {
 
 function TabDailyTrade() {
   const [rows, setRows] = useState([]);
+  const [breakdown, setBreakdown] = useState([]);
   const [partners, setPartners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [reportDate, setReportDate] = useState(today());
+  /** 기본 전체: 빈 값이면 모든 거래처(구입처·판매처) 행 표시 */
   const [partnerId, setPartnerId] = useState('');
 
   const load = () => {
@@ -2298,8 +2301,11 @@ function TabDailyTrade() {
     const d = sanitizeYmd(reportDate, today());
     const params = { from_date: d, to_date: d };
     if (partnerId) params.partner_id = partnerId;
-    fetchDailyPurchaseSales(params)
-      .then(setRows)
+    Promise.all([fetchDailyPurchaseSales(params), fetchDailyPurchaseSalesBreakdown(params)])
+      .then(([summary, detail]) => {
+        setRows(summary);
+        setBreakdown(detail);
+      })
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
   };
@@ -2325,6 +2331,37 @@ function TabDailyTrade() {
     );
   }, [rows]);
 
+  const breakdownTotals = useMemo(() => {
+    return breakdown.reduce(
+      (acc, r) => {
+        const amt = Number(r.amount_sum) || 0;
+        const rec = Number(r.receivable_sum) || 0;
+        const q = Number(r.qty_sum) || 0;
+        const c = Number(r.line_count) || 0;
+        if (r.line_kind === 'purchase') {
+          acc.purchaseQty += q;
+          acc.purchaseAmt += amt;
+          acc.purchaseLines += c;
+        } else {
+          acc.salesQty += q;
+          acc.salesAmt += amt;
+          acc.salesLines += c;
+          acc.receivable += rec;
+        }
+        return acc;
+      },
+      {
+        purchaseQty: 0,
+        purchaseAmt: 0,
+        purchaseLines: 0,
+        salesQty: 0,
+        salesAmt: 0,
+        salesLines: 0,
+        receivable: 0,
+      },
+    );
+  }, [breakdown]);
+
   return (
     <>
       <div className="main-filters main-filters--daily-trade" style={{ flexWrap: 'wrap', gap: '8px' }}>
@@ -2332,9 +2369,9 @@ function TabDailyTrade() {
           일자 <DateSearchField value={reportDate} onChange={setReportDate} id="daily-date" />
         </label>
         <label>
-          거래처
-          <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} title="매입은 구입처, 매출은 판매처 기준으로 집계">
-            <option value="">전체</option>
+          거래처 필터
+          <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} title="비우면 전체 거래처(구입·판매 모두) 표시">
+            <option value="">전체 거래처</option>
             {partners.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -2346,7 +2383,7 @@ function TabDailyTrade() {
           검색
         </button>
         <span className="main-modal-hint main-daily-trade-hint">
-          거래처 선택 시: 해당 거래처가 <strong>구입처</strong>인 매입·<strong>판매처</strong>인 매출만 합산합니다. 취소 매출은 제외합니다.
+          하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다.
         </span>
       </div>
       {loading ? (
@@ -2354,49 +2391,132 @@ function TabDailyTrade() {
       ) : err ? (
         <p className="main-error">{err}</p>
       ) : (
-        <div className="main-table-wrap">
-          <table className="main-table main-table--daily-trade">
-            <thead>
-              <tr>
-                <th className="main-col-date main-col-date--daily-narrow">일자</th>
-                <th className="main-col-amount">매입액</th>
-                <th className="main-col-qty">매입 건수</th>
-                <th className="main-col-amount">매출액</th>
-                <th className="main-col-qty">매출 건수</th>
-                <th className="main-col-amount">차이(매출−매입)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const pa = Number(r.purchase_amount) || 0;
-                const sa = Number(r.sales_amount) || 0;
-                const diff = sa - pa;
-                return (
-                  <tr key={toYmd(r.date) || 'row'}>
-                    <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
-                    <td className="num main-col-amount">{formatKoNumber(pa)}</td>
-                    <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
-                    <td className="num main-col-amount">{formatKoNumber(sa)}</td>
-                    <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
-                    <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+        <>
+          <div className="main-daily-section">
+            <h2 className="main-daily-section-title">일자 요약</h2>
+            <div className="main-table-wrap">
+              <table className="main-table main-table--daily-trade">
+                <thead>
+                  <tr>
+                    <th className="main-col-date main-col-date--daily-narrow">일자</th>
+                    <th className="main-col-amount">매입액</th>
+                    <th className="main-col-qty">매입 건수</th>
+                    <th className="main-col-amount">매출액</th>
+                    <th className="main-col-qty">매출 건수</th>
+                    <th className="main-col-amount">차이(매출−매입)</th>
                   </tr>
-                );
-              })}
-            </tbody>
-            {rows.length > 0 && (
-              <tfoot>
-                <tr className="main-table-foot-daily">
-                  <th className="main-col-date main-col-date--daily-narrow">합계</th>
-                  <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
-                  <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
-                  <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const pa = Number(r.purchase_amount) || 0;
+                    const sa = Number(r.sales_amount) || 0;
+                    const diff = sa - pa;
+                    return (
+                      <tr key={toYmd(r.date) || 'row'}>
+                        <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
+                        <td className="num main-col-amount">{formatKoNumber(pa)}</td>
+                        <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
+                        <td className="num main-col-amount">{formatKoNumber(sa)}</td>
+                        <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
+                        <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                {rows.length > 0 && (
+                  <tfoot>
+                    <tr className="main-table-foot-daily">
+                      <th className="main-col-date main-col-date--daily-narrow">합계</th>
+                      <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
+                      <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
+                      <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
+                      <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
+                      <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+
+          <div className="main-daily-section main-daily-section--breakdown">
+            <h2 className="main-daily-section-title">상품·거래처별 내역</h2>
+            <p className="main-daily-breakdown-sub">
+              같은 날짜·필터 기준으로, 상품과 거래처가 겹치는 매입·매출은 각각 행으로 구분됩니다.
+            </p>
+            <div className="main-table-wrap main-table-wrap--daily-breakdown">
+              <table className="main-table main-table--daily-breakdown">
+                <thead>
+                  <tr>
+                    <th className="main-col-product main-col-product--daily">상품</th>
+                    <th className="main-col-partner main-col-partner--daily">거래처</th>
+                    <th className="main-col-kind">구분</th>
+                    <th className="main-col-qty main-col-qty--daily">건수</th>
+                    <th className="main-col-qty main-col-qty--daily">수량</th>
+                    <th className="main-col-amount">금액</th>
+                    <th className="main-col-amount main-col-receivable">미수</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {breakdown.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="main-empty-cell">
+                        해당 일자·조건에 집계할 내역이 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    breakdown.map((r) => {
+                      const isPur = r.line_kind === 'purchase';
+                      const rec = Number(r.receivable_sum) || 0;
+                      return (
+                        <tr key={`${r.product_id}-${r.partner_id}-${r.line_kind}`}>
+                          <td className="main-td-scroll main-col-product main-col-product--daily">
+                            <CellText>{r.product_name || '—'}</CellText>
+                          </td>
+                          <td className="main-td-scroll main-col-partner main-col-partner--daily">
+                            <CellText>{r.partner_name || '—'}</CellText>
+                          </td>
+                          <td className="main-col-kind">
+                            <span className={isPur ? 'main-kind-badge main-kind-badge--purchase' : 'main-kind-badge main-kind-badge--sale'}>
+                              {isPur ? '매입' : '매출'}
+                            </span>
+                          </td>
+                          <td className="num main-col-qty main-col-qty--daily">{formatKoNumber(r.line_count)}</td>
+                          <td className="num main-col-qty main-col-qty--daily">
+                            <span className="main-qty-unit-inline">{formatKoNumber(r.qty_sum)}</span>
+                          </td>
+                          <td className="num main-col-amount">{formatKoNumber(r.amount_sum)}</td>
+                          <td className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
+                            {isPur ? '—' : formatKoNumber(rec)}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+                {breakdown.length > 0 && (
+                  <tfoot>
+                    <tr className="main-table-foot-daily main-table-foot-breakdown">
+                      <th colSpan={3}>합계 (매입 / 매출)</th>
+                      <td className="num main-col-qty main-col-qty--daily">
+                        {formatKoNumber(breakdownTotals.purchaseLines)} / {formatKoNumber(breakdownTotals.salesLines)}
+                      </td>
+                      <td className="num main-col-qty main-col-qty--daily">
+                        {formatKoNumber(breakdownTotals.purchaseQty)} / {formatKoNumber(breakdownTotals.salesQty)}
+                      </td>
+                      <td className="num main-col-amount">
+                        {formatKoNumber(breakdownTotals.purchaseAmt)} / {formatKoNumber(breakdownTotals.salesAmt)}
+                      </td>
+                      <td className="num main-col-amount main-col-receivable main-receivable-positive">
+                        {formatKoNumber(breakdownTotals.receivable)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        </>
       )}
     </>
   );

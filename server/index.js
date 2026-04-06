@@ -833,6 +833,69 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
   }
 });
 
+// 일별 매입·매출 — 상품 × 거래처(구입처/판매처)별 건수·수량·금액·미수(매출만)
+app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const from = String(req.query.from_date ?? '').trim();
+  const to = String(req.query.to_date ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ ok: false, message: 'from_date, to_date(YYYY-MM-DD)가 필요합니다.' });
+  }
+  if (from > to) {
+    return res.status(400).json({ ok: false, message: '시작일이 종료일보다 늦을 수 없습니다.' });
+  }
+  const partnerRaw = req.query.partner_id;
+  const partnerId = partnerRaw !== undefined && partnerRaw !== '' ? parseInt(partnerRaw, 10) : null;
+  const pid = partnerId && Number.isFinite(partnerId) ? partnerId : null;
+  try {
+    const r = await pool.query(
+      `SELECT * FROM (
+         SELECT pr.id AS product_id,
+                pr.name AS product_name,
+                ac.id AS partner_id,
+                ac.name AS partner_name,
+                'purchase'::text AS line_kind,
+                COUNT(*)::int AS line_count,
+                COALESCE(SUM(pu.quantity), 0)::numeric AS qty_sum,
+                COALESCE(SUM(pu.total_amount), 0)::numeric AS amount_sum,
+                0::numeric AS receivable_sum
+         FROM purchase pu
+         JOIN product pr ON pr.id = pu.product_id
+         JOIN account ac ON ac.id = pu.partner_id
+         WHERE pu.user_id = $1
+           AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
+           AND ($4::int IS NULL OR ac.id = $4)
+         GROUP BY pr.id, pr.name, ac.id, ac.name
+         UNION ALL
+         SELECT pr.id,
+                pr.name,
+                ac.id,
+                ac.name,
+                'sale'::text,
+                COUNT(*)::int,
+                COALESCE(SUM(sa.quantity), 0)::numeric,
+                COALESCE(SUM(sa.total_amount), 0)::numeric,
+                COALESCE(SUM(GREATEST(sa.total_amount - sa.paid_amount, 0)), 0)::numeric
+         FROM sale sa
+         JOIN product pr ON pr.id = sa.product_id
+         JOIN account ac ON ac.id = sa.partner_id
+         WHERE sa.user_id = $1
+           AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
+           AND sa.status NOT IN ('cancelled')
+           AND ($4::int IS NULL OR ac.id = $4)
+         GROUP BY pr.id, pr.name, ac.id, ac.name
+       ) sub
+       ORDER BY product_name ASC, line_kind ASC, partner_name ASC`,
+      [userId, from, to, pid]
+    );
+    res.json({ ok: true, data: r.rows });
+  } catch (err) {
+    console.error('daily-purchase-sales-breakdown error:', err);
+    res.status(500).json({ ok: false, message: err.message || '상세 집계를 불러오지 못했습니다.' });
+  }
+});
+
 // 수금정보 (중매인 번호 기준, 기간·거래처별 검색)
 app.get('/api/payments', async (req, res) => {
   const userId = await getUserId(req);

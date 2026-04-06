@@ -261,7 +261,7 @@ npm run smoke
 - 공급처/판매처가 없으면 스크립트가 DB에 2건 생성합니다. 상품은 `SMOKE-{타임스탬프}` 키로 1건 만듭니다.
 - 다른 포트로 띄운 경우: `set SMOKE_API_BASE=http://127.0.0.1:3001` (Windows) 후 `npm run smoke`
 
-**시나리오 문서 전체 점검 (`docs/테스트시나리오/API-통합-시나리오.md` S-001~S-021)**  
+**시나리오 문서 전체 점검 (`docs/80. 프로젝트 테스트(TE)/테스트시나리오/API-통합-시나리오.md` S-001~S-021)**  
 
 ```cmd
 cd server
@@ -269,7 +269,7 @@ npm run scenario
 ```
 
 - 인증·검증·재고부족·수금 불일치·환불 초과 등 **실패 케이스** 포함. 상품 키는 `SCENARIO-{타임스탬프}` 로 생성됩니다.
-- 실행 끝나면 `docs/테스트시나리오/시나리오-실행이력/` 에 **최근실행.md**, `runs/run-*.md` / `.progress.json`, **`run-*-API통합시나리오-실행결과.md`**, **history.jsonl** 한 줄이 쌓이고, **`docs/테스트시나리오/API-통합-시나리오-실행-통합대장.md`** 표가 전체 이력 기준으로 갱신됩니다. (`SCENARIO_HISTORY_DIR` 로 경로 변경 가능)
+- 실행 끝나면 `docs/80. 프로젝트 테스트(TE)/테스트시나리오/시나리오-실행이력/` 에 **최근실행.md**, `runs/run-*.md` / `.progress.json`, **`run-*-API통합시나리오-실행결과.md`**, **history.jsonl** 한 줄이 쌓이고, **`docs/80. 프로젝트 테스트(TE)/테스트시나리오/API-통합-시나리오-실행-통합대장.md`** 표가 전체 이력 기준으로 갱신됩니다. (`SCENARIO_HISTORY_DIR` 로 경로 변경 가능)
 - Git 반영(선택): `npm run scenario:git` — 위 경로만 커밋 후 push. 한 번에 돌리고 올리려면 `npm run scenario:push`
 - **삭제/수정**용 REST API는 없습니다. 스모크는 생성·조회 위주입니다.
 

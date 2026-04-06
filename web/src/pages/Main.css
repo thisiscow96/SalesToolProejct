@@ -1422,3 +1422,89 @@ td.main-td-scroll.main-col-source {
   font-weight: 600;
   border-top: 2px solid #e2e8f0;
 }
+
+/* 일별 매입·매출 — 상품·거래처별 */
+.main-daily-section {
+  margin-bottom: 1.75rem;
+}
+.main-daily-section--breakdown {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e2e8f0;
+}
+.main-daily-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+.main-daily-breakdown-sub {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  color: #64748b;
+  line-height: 1.45;
+}
+.main-table-wrap--daily-breakdown {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.main-table--daily-breakdown th.main-col-product--daily,
+.main-table--daily-breakdown td.main-col-product--daily {
+  min-width: 10rem;
+  width: 22%;
+}
+.main-table--daily-breakdown th.main-col-partner--daily,
+.main-table--daily-breakdown td.main-col-partner--daily {
+  min-width: 9rem;
+  width: 18%;
+}
+.main-table--daily-breakdown th.main-col-kind,
+.main-table--daily-breakdown td.main-col-kind {
+  width: 4.5rem;
+  min-width: 4.25rem;
+  text-align: center;
+  white-space: nowrap;
+}
+.main-table--daily-breakdown th.main-col-qty--daily,
+.main-table--daily-breakdown td.main-col-qty--daily {
+  min-width: 5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.main-table--daily-breakdown .main-col-receivable {
+  min-width: 6.5rem;
+  text-align: right;
+}
+.main-kind-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.main-kind-badge--purchase {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+.main-kind-badge--sale {
+  background: #dcfce7;
+  color: #166534;
+}
+.main-receivable-positive {
+  color: #b45309;
+  font-weight: 600;
+}
+.main-empty-cell {
+  text-align: center;
+  color: #64748b;
+  padding: 1.25rem 0.75rem;
+}
+.main-table-foot-breakdown th {
+  text-align: left;
+  vertical-align: middle;
+}
+.main-table-foot-breakdown .main-col-receivable {
+  font-weight: 700;
+}

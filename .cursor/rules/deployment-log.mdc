@@ -1,6 +1,6 @@
 ---
 description: 배포 시 배포일지에 무조건 기록 (배포ID/날짜별/시스템/배포 및 수정내용)
-globs: docs/배포/배포일지/**/*.md
+globs: docs/**/배포일지/**/*.md
 alwaysApply: false
 ---
 
@@ -10,9 +10,9 @@ alwaysApply: false
 
 - **형식**: 배포ID / 날짜 / 시스템 / 배포 및 수정내용 / **반영된 시스템**
 - **반영된 시스템**: 이 배포가 어디까지 올라갔는지 (예: GitHub만 / GitHub → Vercel, Render). Git push 시 연동 자동 배포 여부 확인 후 기입.
-- **위치**: `docs/배포/배포일지/YYYY-MM-DD.md`
+- **위치**: `docs/99. 배포관리/배포/배포일지/YYYY-MM-DD.md`
 - **배포ID**: 기존 일지에서 마지막 `DEP-XXX` 확인 후 다음 번호 채번
-- **목록**: `docs/배포/배포일지/README.md` 에 해당 날짜 링크 추가
+- **목록**: `docs/99. 배포관리/배포/배포일지/README.md` 에 해당 날짜 링크 추가
 
 ```markdown
 | 배포ID | 날짜 | 시스템 | 배포 및 수정내용 | 반영된 시스템 |

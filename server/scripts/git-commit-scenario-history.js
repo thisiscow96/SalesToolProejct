@@ -10,9 +10,10 @@ const { execSync } = require('child_process');
 
 const PROJECT_ROOT = path.join(__dirname, '..', '..');
 
+const TE_SCENARIO = path.join('docs', '80. 프로젝트 테스트(TE)', '테스트시나리오');
 const TO_ADD = [
-  path.join('docs', '테스트시나리오', '시나리오-실행이력'),
-  path.join('docs', '테스트시나리오', 'API-통합-시나리오-실행-통합대장.md'),
+  path.join(TE_SCENARIO, '시나리오-실행이력'),
+  path.join(TE_SCENARIO, 'API-통합-시나리오-실행-통합대장.md'),
 ];
 
 function shInherit(cmd) {
@@ -41,7 +42,7 @@ function main() {
 
   let status;
   try {
-    status = sh('git status --porcelain -- docs/테스트시나리오/');
+    status = sh('git status --porcelain -- "docs/80. 프로젝트 테스트(TE)/테스트시나리오/"');
   } catch (e) {
     console.error('[scenario:git] git status 실패:', e.message);
     process.exit(1);
