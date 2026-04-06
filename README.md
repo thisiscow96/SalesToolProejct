@@ -113,13 +113,12 @@
 
 ---
 
-## 📷 Screenshots
+## 📷 화면·UI 안내
 
-[매뉴얼용 캡처](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/)와 동일한 화면입니다.
+저장소 README에 로그인/초기 화면 캡처를 붙여 두면 첫인상이 산만해질 수 있어, **화면은 사용자 매뉴얼 쪽으로 모아 두었습니다.** (기능별 절차·스크린샷은 매뉴얼 본문에서 확인)
 
-| 메인·탭 | 재고 | 매출·목록 |
-|:---:|:---:|:---:|
-| ![메인 화면](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/images/00-main-layout.png) | ![재고](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/images/01-inventory.png) | ![매출 목록](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/images/03-sales-list.png) |
+- **[운영자·사용자 매뉴얼 (본문에 화면 캡처 포함)](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/%EC%9A%B4%EC%98%81%EC%9E%90-%EC%82%AC%EC%9A%A9%EC%9E%90-%EB%A7%A4%EB%89%B4%EC%96%BC.md)**
+- [매뉴얼 폴더 README](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/README.md) · [캡처 이미지 폴더](docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/images/)
 
 ---
 
