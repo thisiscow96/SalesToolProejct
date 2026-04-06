@@ -116,7 +116,7 @@
 ## 📷 Screenshots
 > 사용자 메뉴얼 링크
 > [`[.cursor/rules](https://github.com/thisiscow96/SalesToolProejct/blob/main/docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/%EC%9A%B4%EC%98%81%EC%9E%90-%EC%82%AC%EC%9A%A9%EC%9E%90-%EB%A7%A4%EB%89%B4%EC%96%BC.md)`](사용자 메뉴얼 링크)
-> ([`.cursor/rules`](.cursor/rules))
+> ([`https://github.com/thisiscow96/SalesToolProejct/blob/main/docs/90.%20%EB%A9%94%EB%89%B4%EC%96%BC%20%EA%B4%80%EB%A6%AC/%EB%A7%A4%EB%89%B4%EC%96%BC/%EC%9A%B4%EC%98%81%EC%9E%90-%EC%82%AC%EC%9A%A9%EC%9E%90-%EB%A7%A4%EB%89%B4%EC%96%BC.md`](.cursor/rules))
 
 ---
 
