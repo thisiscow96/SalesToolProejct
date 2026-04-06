@@ -1,0 +1,28 @@
+---
+description: Render/운영 DB 마이그레이션 요청 시 절차 (비밀번호·URL 비커밋)
+globs: server/migrations/**/*.sql
+alwaysApply: true
+---
+
+# 운영 DB 마이그레이션 프로세스
+
+## 원칙
+
+- **`DATABASE_URL`(postgres 연결 문자열)은 Git·문서·코드에 절대 커밋하지 않는다.** 로컬은 `server/.env`만 사용하고, 저장소에는 `server/.env.example` 플레이스홀더만 둔다.
+- 사용자가 채팅에 연결 문자열을 붙여 넣었을 경우: **Render Postgres에서 비밀번호를 재설정**하고, GitHub Actions 시크릿·로컬 `.env`를 새 URL로 갱신하도록 안내한다.
+
+## 사용자가 「마이그 해줘」「운영 DB 마이그」 등을 요청했을 때
+
+1. **GitHub에 `DATABASE_URL` 시크릿이 이미 있다고 가정**하고, **Actions로 마이그레이션**하도록 안내한다.  
+   - 레포 → **Actions** → **Migrate database (Render)** → **Run workflow**  
+   - 워크플로 파일: `.github/workflows/migrate-database.yml`
+2. **시드까지** 필요하면 기존 **Seed oper database (Render)** 워크플로에서 `run_migrate`만 켜거나, 마이그 전용 워크플로를 쓴다.
+3. **에이전트가 터미널에서 마이그를 실행**할 수 있는 경우: 사용자 PC의 `server/.env`에만 `DATABASE_URL`이 있어야 하며, 에이전트는 **`cd server && npm run migrate`** 만 실행한다. URL을 인수로 넣거나 파일에 새로 쓰지 않는다.
+
+## 로컬 개발 DB
+
+- `DATABASE_URL` 또는 `PG_*` 는 `server/.env` (gitignore).
+
+## Render Web Service
+
+- 배포 시 **Start Command**에 `npm run migrate && npm start` 가 있으면 배포마다 마이그레이션이 돌아간다. 수동 워크플로는 그 외 **즉시 반영**용.
