@@ -89,7 +89,7 @@ export async function fetchSales(params = {}) {
   return data.data;
 }
 
-/** 일별 매입·매출 집계: from_date, to_date 필수; partner_id 선택 시 매입=구입처·매출=판매처 기준 */
+/** 일별 매입·매출 집계: from_date, to_date 필수(같은 날짜면 당일만); partner_id 선택 시 매입=구입처·매출=판매처 기준 */
 export async function fetchDailyPurchaseSales(params = {}) {
   const q = new URLSearchParams(params).toString();
   const res = await fetch(`${API_BASE}/reports/daily-purchase-sales?${q}`, { headers: authHeaders() });

@@ -1379,6 +1379,14 @@ td.main-td-scroll.main-col-product {
   color: #64748b;
   line-height: 1.45;
 }
+.main-table--daily-trade th.main-col-date--daily-narrow,
+.main-table--daily-trade td.main-col-date--daily-narrow {
+  width: 10ch;
+  min-width: 10ch;
+  max-width: 10.5ch;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
 .main-table--daily-trade .main-col-amount {
   min-width: 7.5rem;
 }

@@ -2259,17 +2259,14 @@ function TabDailyTrade() {
   const [partners, setPartners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
-  const [fromDate, setFromDate] = useState(firstDayOfMonth());
-  const [toDate, setToDate] = useState(today());
+  const [reportDate, setReportDate] = useState(today());
   const [partnerId, setPartnerId] = useState('');
 
   const load = () => {
     setLoading(true);
     setErr('');
-    const params = {
-      from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
-      to_date: sanitizeYmd(toDate, today()),
-    };
+    const d = sanitizeYmd(reportDate, today());
+    const params = { from_date: d, to_date: d };
     if (partnerId) params.partner_id = partnerId;
     fetchDailyPurchaseSales(params)
       .then(setRows)
@@ -2302,9 +2299,7 @@ function TabDailyTrade() {
     <>
       <div className="main-filters main-filters--daily-trade" style={{ flexWrap: 'wrap', gap: '8px' }}>
         <label className="main-date-filter">
-          기간{' '}
-          <DateSearchField value={fromDate} onChange={setFromDate} id="daily-from" /> ~{' '}
-          <DateSearchField value={toDate} onChange={setToDate} id="daily-to" />
+          일자 <DateSearchField value={reportDate} onChange={setReportDate} id="daily-date" />
         </label>
         <label>
           거래처
@@ -2333,7 +2328,7 @@ function TabDailyTrade() {
           <table className="main-table main-table--daily-trade">
             <thead>
               <tr>
-                <th className="main-col-date">일자</th>
+                <th className="main-col-date main-col-date--daily-narrow">일자</th>
                 <th className="main-col-amount">매입액</th>
                 <th className="main-col-qty">매입 건수</th>
                 <th className="main-col-amount">매출액</th>
@@ -2347,8 +2342,8 @@ function TabDailyTrade() {
                 const sa = Number(r.sales_amount) || 0;
                 const diff = sa - pa;
                 return (
-                  <tr key={r.date}>
-                    <td className="main-col-date">{r.date}</td>
+                  <tr key={toYmd(r.date) || 'row'}>
+                    <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
                     <td className="num main-col-amount">{formatKoNumber(pa)}</td>
                     <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
                     <td className="num main-col-amount">{formatKoNumber(sa)}</td>
@@ -2361,7 +2356,7 @@ function TabDailyTrade() {
             {rows.length > 0 && (
               <tfoot>
                 <tr className="main-table-foot-daily">
-                  <th className="main-col-date">기간 합계</th>
+                  <th className="main-col-date main-col-date--daily-narrow">합계</th>
                   <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
                   <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
                   <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
