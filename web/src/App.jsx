@@ -4,21 +4,24 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Main from './pages/Main';
 
+// 저장된 로그인 정보 — 토큰(T-101)이 없는 예전 형식은 로그아웃 상태로 본다
+function readStoredUser() {
+  try {
+    const s = window.sessionStorage.getItem('user');
+    const u = s ? JSON.parse(s) : null;
+    return u && u.token ? u : null;
+  } catch {
+    return null;
+  }
+}
+
 function RequireAuth({ children }) {
-  const user = window.sessionStorage.getItem('user');
-  if (!user) return <Navigate to="/login" replace />;
+  if (!readStoredUser()) return <Navigate to="/login" replace />;
   return children;
 }
 
 export default function App() {
-  const [user, setUser] = useState(() => {
-    try {
-      const s = window.sessionStorage.getItem('user');
-      return s ? JSON.parse(s) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [user, setUser] = useState(readStoredUser);
 
   const handleLogin = (data) => {
     const userInfo = {
@@ -26,6 +29,7 @@ export default function App() {
       name: data.user?.name,
       agent_no: data.user?.agent_no,
       is_admin: !!data.user?.is_admin,
+      token: data.token,
     };
     window.sessionStorage.setItem('user', JSON.stringify(userInfo));
     setUser(userInfo);

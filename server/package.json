@@ -15,6 +15,7 @@
     "seed-april-daily-2026": "node scripts/seed-april-daily-2026.js",
     "seed-oper-april-flow-2026": "node scripts/seed-oper-april-flow-2026.js",
     "smoke": "node scripts/smoke-api-flow.js",
+    "test:auth": "node scripts/auth-token-test.js",
     "scenario": "node scripts/scenario-integration-test.js",
     "scenario:git": "node scripts/git-commit-scenario-history.js",
     "scenario:push": "node scripts/scenario-integration-test.js && node scripts/git-commit-scenario-history.js"

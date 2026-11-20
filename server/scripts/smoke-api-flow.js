@@ -1,5 +1,5 @@
 /**
- * 로컬 API 스모크 테스트 (admin001 / X-Agent-No)
+ * 로컬 API 스모크 테스트 (admin001 로그인 → Authorization: Bearer 토큰)
  * - server 폴더에서: node scripts/smoke-api-flow.js
  * - 전제: npm run seed-admin, DB 마이그레이션, 서버 기동 (PORT 기본 3000)
  */
@@ -64,7 +64,7 @@ function request(method, pathname, body, extraHeaders = {}) {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'X-Agent-No': AGENT,
+        ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
         ...extraHeaders,
       },
     };
@@ -85,6 +85,18 @@ function request(method, pathname, body, extraHeaders = {}) {
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
+}
+
+/** 로그인 토큰 (T-101) — 보호 API는 Authorization: Bearer <토큰> 만 받는다. 비밀번호는 seed-admin 의 로컬 샘플 값이 기본 */
+let TOKEN = null;
+async function login() {
+  const pw = process.env.SMOKE_PASSWORD || 'sample';
+  const r = await request('POST', '/api/auth/login', { agent_no: AGENT, password: pw }, {});
+  if (r.status !== 200 || !r.json?.token) {
+    throw new Error(`로그인 실패 status=${r.status} ${r.json?.message || ''} (SMOKE_PASSWORD 확인, npm run seed-admin)`);
+  }
+  TOKEN = r.json.token;
+  return r.json;
 }
 
 function requestNoAuth(method, pathname) {
@@ -169,6 +181,23 @@ async function main() {
   console.log('GET /health', h.status, h.json?.ok, h.json?.db);
   if (h.status !== 200 || !h.json?.ok) {
     console.error('[smoke] 서버가 응답하지 않습니다. server 폴더에서 npm start 후 재실행하세요.');
+    process.exit(1);
+  }
+
+  await login();
+  console.log('POST /api/auth/login 200 (토큰 발급)');
+  const noTok = await requestNoAuth('GET', '/api/partners');
+  const spoof = await new Promise((resolve, reject) => {
+    const rq = http.request({ hostname: HOST, port: PORT, path: '/api/partners', method: 'GET', headers: { 'X-Agent-No': AGENT } }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    rq.on('error', reject);
+    rq.end();
+  });
+  console.log('GET /api/partners 토큰 없음', noTok.status, '/ X-Agent-No 헤더만', spoof);
+  if (noTok.status !== 401 || spoof !== 401) {
+    console.error('[smoke] 실패: 토큰 없는 호출이 401이 아님');
     process.exit(1);
   }
 

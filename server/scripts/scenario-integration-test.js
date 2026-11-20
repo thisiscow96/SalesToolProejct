@@ -384,10 +384,11 @@ function getPoolConfig() {
 }
 
 function request(method, pathname, body, opts = {}) {
-  const { skipAgent = false, agentNo = AGENT, extraHeaders = {} } = opts;
+  // skipAgent: 토큰 없이 호출 · token: 다른 토큰으로 호출(위조·변조 시험) — T-101부터 X-Agent-No 는 인증에 쓰이지 않는다
+  const { skipAgent = false, token = TOKEN, extraHeaders = {} } = opts;
   return new Promise((resolve, reject) => {
     const headers = { 'Content-Type': 'application/json', ...extraHeaders };
-    if (!skipAgent) headers['X-Agent-No'] = agentNo;
+    if (!skipAgent && token) headers.Authorization = `Bearer ${token}`;
     const httpOpts = { hostname: HOST, port: PORT, path: pathname, method, headers };
     const req = http.request(httpOpts, (res) => {
       let data = '';
@@ -406,6 +407,18 @@ function request(method, pathname, body, opts = {}) {
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
+}
+
+/** 로그인 토큰 (T-101) — 보호 API는 Authorization: Bearer <토큰> 만 받는다. 비밀번호는 seed-admin 의 로컬 샘플 값이 기본 */
+let TOKEN = null;
+async function login() {
+  const pw = process.env.SMOKE_PASSWORD || 'sample';
+  const r = await request('POST', '/api/auth/login', { agent_no: AGENT, password: pw }, { skipAgent: true });
+  if (r.status !== 200 || !r.json?.token) {
+    throw new Error(`로그인 실패 status=${r.status} ${r.json?.message || ''} (SMOKE_PASSWORD 확인, npm run seed-admin)`);
+  }
+  TOKEN = r.json.token;
+  return r.json;
 }
 
 function requestNoAuth(method, pathname) {
@@ -484,9 +497,30 @@ async function main() {
   r = await requestNoAuth('GET', '/api/partners');
   record('S-002', r.status === 401, `status=${r.status} msg=${r.json?.message}`);
 
-  // ----- S-003
-  r = await request('GET', '/api/partners', null, { agentNo: 'NO_SUCH_AGENT_99999' });
+  // ----- 로그인 → 토큰
+  const loginRes = await login();
+
+  // ----- S-003 (토큰 없이 X-Agent-No 헤더만 — 예전 방식으로 남의 번호를 넣은 호출)
+  r = await request('GET', '/api/partners', null, { skipAgent: true, extraHeaders: { 'X-Agent-No': AGENT } });
   record('S-003', r.status === 401, `status=${r.status}`);
+
+  // ----- S-022 (서명 위조 — 서명 부분을 바꾼 토큰)
+  {
+    const [h, p] = TOKEN.split('.');
+    r = await request('GET', '/api/partners', null, { token: `${h}.${p}.${'A'.repeat(43)}` });
+    record('S-022', r.status === 401, `status=${r.status}`);
+  }
+
+  // ----- S-023 (내용 변조 — 사용자 ID·만료를 바꾸고 서명은 그대로)
+  {
+    const [h, p, sig] = TOKEN.split('.');
+    const payload = JSON.parse(Buffer.from(p.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    payload.sub = String(Number(payload.sub) + 1);
+    payload.exp = payload.exp + 86400 * 365;
+    const p2 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    r = await request('GET', '/api/partners', null, { token: `${h}.${p2}.${sig}` });
+    record('S-023', r.status === 401 && !!loginRes.token, `status=${r.status}`);
+  }
 
   // ----- S-004
   r = await request('GET', '/api/partners');

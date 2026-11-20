@@ -6,6 +6,7 @@ const multer = require('multer');
 const crypto = require('crypto');
 const { getPgConfig } = require('./lib/db-config');
 const { sendMail, configuredProviders } = require('./lib/mailer');
+const authToken = require('./lib/auth-token');
 const { Pool } = require('pg');
 
 // ---------- 입력값 검증 ----------
@@ -23,6 +24,16 @@ function normalizePhone(phone) {
   return String(phone).trim().replace(/[-\s]/g, '');
 }
 
+// 로그인 토큰 서명 비밀 (T-101) — 운영에서 AUTH_SECRET 이 없으면 여기서 throw 되어 서버가 시작하지 않는다
+let AUTH;
+try {
+  AUTH = authToken.resolveAuthSecret();
+} catch (err) {
+  console.error('[auth] ' + err.message);
+  process.exit(1);
+}
+const AUTH_TTL_SEC = authToken.ttlSeconds();
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -34,7 +45,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Agent-No');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -207,30 +218,29 @@ async function getSalesforceAccessToken() {
   };
 }
 
-// 로그인 사용자 ID — 중매인 번호(X-Agent-No)로 조회 (데이터는 user_id 기반으로 유지)
-async function getUserId(req) {
-  const agentNo = req.headers['x-agent-no']?.trim();
-  if (!agentNo) return null;
+// 로그인 사용자 확인 (T-101) — Authorization: Bearer <토큰> 만 믿는다.
+// 예전에는 X-Agent-No 헤더(중매인 번호)만으로 사용자를 정해, 번호만 알면 남의 매입·매출·미수를 볼 수 있었다.
+// 토큰 서명·만료를 확인한 뒤, 계정이 지금도 활성인지·관리자인지는 DB에서 다시 읽는다(비활성화 즉시 반영).
+async function getAuthUser(req) {
+  const v = authToken.verifyToken(AUTH.secret, authToken.bearerFrom(req));
+  if (!v.ok) return null;
   try {
-    const r = await pool.query('SELECT id FROM "user" WHERE agent_no = $1 AND status = $2', [agentNo, 'active']);
-    return r.rows[0] ? r.rows[0].id : null;
+    const r = await pool.query('SELECT id, is_admin FROM "user" WHERE id = $1 AND status = $2', [v.payload.sub, 'active']);
+    const row = r.rows[0];
+    return row ? { userId: row.id, isAdmin: !!row.is_admin } : null;
   } catch (err) {
-    console.error('getUserId error:', err.message);
+    console.error('getAuthUser error:', err.message);
     return null;
   }
 }
 
+async function getUserId(req) {
+  const auth = await getAuthUser(req);
+  return auth ? auth.userId : null;
+}
+
 async function getUserIdAndAdmin(req) {
-  const agentNo = req.headers['x-agent-no']?.trim();
-  if (!agentNo) return null;
-  try {
-    const r = await pool.query('SELECT id, is_admin FROM "user" WHERE agent_no = $1 AND status = $2', [agentNo, 'active']);
-    const row = r.rows[0];
-    return row ? { userId: row.id, isAdmin: !!row.is_admin } : null;
-  } catch (err) {
-    console.error('getUserIdAndAdmin error:', err.message);
-    return null;
-  }
+  return getAuthUser(req);
 }
 
 // 서버 상태 확인 (DB 없이도 동작)
@@ -419,7 +429,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 반환)
+// 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 + 로그인 토큰 반환)
 app.post('/api/auth/login', async (req, res) => {
   const { agent_no, password } = req.body || {};
   // 요청 본문 전체(비밀번호 포함)를 로그에 남기지 않는다 (S-01) — 중매인 번호만 기록
@@ -444,8 +454,11 @@ app.post('/api/auth/login', async (req, res) => {
     if (!match) {
       return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
     }
+    const token = authToken.signToken(AUTH.secret, { userId: row.id, agentNo: row.agent_no }, AUTH_TTL_SEC);
     res.json({
       ok: true,
+      token,
+      expires_in: AUTH_TTL_SEC,
       user: { id: row.id, user_key: row.user_key, name: row.name, agent_no: row.agent_no, is_admin: !!row.is_admin },
     });
   } catch (err) {
@@ -467,7 +480,7 @@ app.get('/api/capabilities', (req, res) => {
   });
 });
 
-// ---------- 메인 화면용 API (X-Agent-No 헤더 필수, 중매인 번호 기준으로 해당 회원 데이터 조회) ----------
+// ---------- 메인 화면용 API (Authorization: Bearer <로그인 토큰> 필수, 토큰의 사용자 데이터만 조회) ----------
 
 // 상품 목록 (대분류/중분류/소분류/이름 검색 가능)
 app.get('/api/products', async (req, res) => {
