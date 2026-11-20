@@ -11,8 +11,14 @@ const { Client } = require('pg');
 
 // 접속 설정은 서버와 같은 lib/db-config.js (Neon·Supabase SSL 포함)
 const { getPgConfig } = require('../lib/db-config');
+// MIGRATE_DATABASE_URL(Neon 이면 "-pooler" 없는 직접 연결 주소)이 있으면 그것을 먼저 쓴다 (T-219 R-04). 없으면 DATABASE_URL.
+// 주소 값은 로그에 남기지 않는다 — 어느 변수를 썼는지, 풀러 주소인지만
 function getConfig() {
-  return getPgConfig();
+  const direct = process.env.MIGRATE_DATABASE_URL && process.env.MIGRATE_DATABASE_URL.trim();
+  const cfg = getPgConfig(direct ? { url: direct } : {});
+  const pooled = /pooler\./i.test(cfg.host || '');
+  console.log(`[migrate] 접속: ${direct ? 'MIGRATE_DATABASE_URL' : 'DATABASE_URL'}${pooled ? ' (풀러 주소)' : ''}`);
+  return cfg;
 }
 
 async function run() {

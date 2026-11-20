@@ -395,6 +395,18 @@ async function main() {
   console.log('  ' + rowsOut.join('\n  '));
   check('검증식: 거래처 7곳 원장 잔액 = 매출별 미수 합 = 연령 총미수(옛 흔적 I만 diff 500)', allOk, rowsOut);
 
+  // R-07 (T-219) 거래명세서 합계 미수 = 총액 − 반품액 − 수금 = 같은 기간 원장 잔액(C상회 전체 기간)
+  {
+    const st = await request('GET', `/api/sales/statement?partner_id=${C.id}&from_date=2026-01-01&to_date=${TODAY}`, null, A);
+    const lc = (await ledger(A, C.id)).json.data;
+    const t = st.json?.data?.totals || {};
+    const itemDue = (st.json?.data?.items || []).reduce((acc, x) => acc + Number(x.unpaid_amount), 0);
+    check('R-07 명세서 미수 = 총액 − 반품액 − 수금 = 원장 잔액, 항목 미수 합과 같음',
+      st.status === 200 && Number(t.returned_amount) > 0 && eq(Number(t.unpaid_amount), lc.closing_balance)
+        && eq(Number(t.unpaid_amount), Number(t.total_amount) - Number(t.returned_amount) - Number(t.paid_amount)) && eq(itemDue, Number(t.unpaid_amount)),
+      { totals: t, closing: lc.closing_balance, itemDue });
+  }
+
   // AC-13c (T-219 R-06) refunded 라도 미수가 남은 매출은 수금 배분 가능 — 검증식 확인 뒤(F 잔액이 바뀌므로)
   {
     const p13 = await request('POST', '/api/payments', { partner_id: F.id, amount: 400, paid_at: `${TODAY}T10:00:00+09:00`, entry_kind: 'receive', allocations: [{ sale_id: S5, amount: 400 }] }, A);
