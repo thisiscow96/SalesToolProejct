@@ -1,7 +1,7 @@
 /**
  * Cloudflare Pages Function — /api/* 요청을 백엔드로 그대로 넘긴다 (Vercel rewrites와 같은 역할).
  * Pages 프로젝트 → Settings → Environment variables 에 API_ORIGIN 을 넣는다.
- *   예) API_ORIGIN = https://salestoolproejct.onrender.com   (끝에 / 없이)
+ *   예) API_ORIGIN = https://salestoolproejct-2a59.onrender.com   (끝에 / 없이)
  * 같은 도메인(/api)으로 부르므로 브라우저 CORS 설정이 필요 없다. 무료 플랜: 하루 10만 요청.
  */
 export async function onRequest({ request, env }) {
