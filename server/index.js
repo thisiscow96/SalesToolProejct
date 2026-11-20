@@ -3,6 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
+const crypto = require('crypto');
 const { getPgConfig } = require('./lib/db-config');
 const { sendMail, configuredProviders } = require('./lib/mailer');
 const { Pool } = require('pg');
@@ -269,21 +270,8 @@ app.post('/api/auth/check-email', async (req, res) => {
 });
 
 // 휴대폰번호 중복 확인 (양식 검사: 010 등 10~11자리)
-app.post('/api/auth/check-phone', async (req, res) => {
-  const raw = req.body?.phone?.trim();
-  if (!raw) return res.status(400).json({ ok: false, available: false, message: '휴대폰번호를 입력하세요.' });
-  if (!isValidPhone(raw)) return res.status(400).json({ ok: false, available: false, message: '휴대폰번호 형식이 올바르지 않습니다. (예: 010-1234-5678)' });
-  const phone = normalizePhone(raw);
-  try {
-    const r = await pool.query('SELECT 1 FROM "user" WHERE phone = $1', [phone]);
-    res.json({ ok: true, available: r.rows.length === 0 });
-  } catch (err) {
-    console.error('check-phone error:', err);
-    res.status(500).json({ ok: false, available: false, message: err.message || '확인할 수 없습니다.' });
-  }
-});
+// 휴대폰 중복 확인(check-phone)은 2026-11-20 제거 — 가입 본인 확인은 이메일 인증만 사용
 
-// 중매인 번호 중복 확인
 app.post('/api/auth/check-agent-no', async (req, res) => {
   const agent_no = req.body?.agent_no?.trim();
   if (!agent_no) return res.status(400).json({ ok: false, available: false, message: '중매인 번호를 입력하세요.' });
@@ -305,7 +293,8 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
   try {
     const r = await pool.query('SELECT 1 FROM "user" WHERE LOWER(email) = $1', [emailLower]);
     if (r.rows.length > 0) return res.status(409).json({ ok: false, message: '이미 가입된 이메일입니다.' });
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    verifyFails.delete(emailLower);
+    const code = String(crypto.randomInt(100000, 1000000)); // 예측 어려운 난수
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await pool.query(
       `INSERT INTO email_verification (email, code, expires_at) VALUES ($1, $2, $3)`,
@@ -329,19 +318,32 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
   }
 });
 
-// 이메일 인증번호 확인 (5분 이내 입력)
+// 이메일 인증번호 확인 (5분 이내 입력) — 이메일이 유일한 본인 확인이므로 오입력 5회면 그 번호를 무효로 하고 재발송을 요구한다
+const VERIFY_MAX_FAILS = 5;
+const verifyFails = new Map(); // email(소문자) → 실패 횟수, 새 인증번호를 보내면 초기화
 app.post('/api/auth/verify-email-code', async (req, res) => {
   const email = req.body?.email?.trim();
   const code = req.body?.code?.trim();
   if (!email || !code) return res.status(400).json({ ok: false, message: '이메일과 인증번호를 입력하세요.' });
+  const failKey = email.toLowerCase();
+  if ((verifyFails.get(failKey) || 0) >= VERIFY_MAX_FAILS) {
+    return res.status(429).json({ ok: false, message: '인증번호를 5회 잘못 입력했습니다. 인증번호를 다시 받아 주세요.' });
+  }
   try {
     const r = await pool.query(
       `SELECT id FROM email_verification WHERE email = $1 AND code = $2 AND expires_at > NOW() AND verified_at IS NULL ORDER BY created_at DESC LIMIT 1`,
       [email, code]
     );
     if (r.rows.length === 0) {
-      return res.status(400).json({ ok: false, message: '인증번호가 맞지 않거나 만료되었습니다. 5분 안에 입력해 주세요.' });
+      const n = (verifyFails.get(failKey) || 0) + 1;
+      verifyFails.set(failKey, n);
+      if (n >= VERIFY_MAX_FAILS) {
+        await pool.query(`UPDATE email_verification SET expires_at = NOW() WHERE email = $1 AND verified_at IS NULL`, [email]);
+        return res.status(429).json({ ok: false, message: '인증번호를 5회 잘못 입력했습니다. 인증번호를 다시 받아 주세요.' });
+      }
+      return res.status(400).json({ ok: false, message: `인증번호가 맞지 않거나 만료되었습니다. (남은 시도 ${VERIFY_MAX_FAILS - n}회)` });
     }
+    verifyFails.delete(failKey);
     await pool.query(`UPDATE email_verification SET verified_at = NOW() WHERE id = $1`, [r.rows[0].id]);
     res.json({ ok: true, message: '이메일 인증이 완료되었습니다.' });
   } catch (err) {
@@ -353,13 +355,14 @@ app.post('/api/auth/verify-email-code', async (req, res) => {
 // 회원가입 (user_key는 DB DEFAULT로 자동 생성. name=상호명, agent_no=중매인 번호)
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, phone, agent_no, password, terms_agreed } = req.body || {};
-  if (!name?.trim() || !email?.trim() || !phone?.trim() || !agent_no?.trim() || password === undefined) {
-    return res.status(400).json({ ok: false, message: '상호명, 이메일, 휴대폰번호, 중매인 번호, 비밀번호를 모두 입력하세요.' });
+  if (!name?.trim() || !email?.trim() || !agent_no?.trim() || password === undefined) {
+    return res.status(400).json({ ok: false, message: '상호명, 이메일, 중매인 번호, 비밀번호를 모두 입력하세요.' });
   }
   if (!terms_agreed) return res.status(400).json({ ok: false, message: '개인정보약관에 동의해 주세요.' });
   if (!isValidEmail(email)) return res.status(400).json({ ok: false, message: '이메일 형식이 올바르지 않습니다.' });
-  if (!isValidPhone(phone)) return res.status(400).json({ ok: false, message: '휴대폰번호 형식이 올바르지 않습니다.' });
-  const phoneNorm = normalizePhone(phone);
+  // 휴대폰번호는 선택 항목 (보내면 형식만 확인해 저장, 없으면 NULL — migrations/008)
+  if (phone?.trim() && !isValidPhone(phone)) return res.status(400).json({ ok: false, message: '휴대폰번호 형식이 올바르지 않습니다.' });
+  const phoneNorm = phone?.trim() ? normalizePhone(phone) : null;
   const client = await pool.connect();
   try {
     const v = await client.query(

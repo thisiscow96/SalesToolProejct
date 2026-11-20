@@ -9,19 +9,12 @@ function isValidEmail(email) {
   return typeof email === 'string' && EMAIL_REGEX.test(email.trim());
 }
 
-// 휴대폰 형식: 010 등 10~11자리 숫자 (하이픈 허용)
-const PHONE_REGEX = /^01[0-9]-?[0-9]{3,4}-?[0-9]{4}$/;
-function isValidPhone(phone) {
-  const s = String(phone).trim().replace(/\s/g, '');
-  return /^01[0-9][0-9]{7,8}$/.test(s) || PHONE_REGEX.test(s);
-}
-
 const PRIVACY_TERMS_TEXT = `제1조 (개인정보의 수집 및 이용 목적)
 판매툴은 다음의 목적을 위하여 개인정보를 처리합니다.
 - 회원 가입 및 관리, 서비스 제공, 민원 처리 등
 
 제2조 (수집하는 개인정보 항목)
-- 필수: 상호명, 이메일, 휴대폰번호, 중매인 번호, 비밀번호
+- 필수: 상호명, 이메일, 중매인 번호, 비밀번호
 - 선택: 주소, 연락처 등 (서비스에 따라 추가될 수 있음)
 
 제3조 (개인정보의 보유 및 이용 기간)
@@ -36,13 +29,11 @@ export default function Signup() {
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
   const [agentNo, setAgentNo] = useState('');
   const [password, setPassword] = useState('');
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [emailChecked, setEmailChecked] = useState(null);
-  const [phoneChecked, setPhoneChecked] = useState(null);
   const [agentNoChecked, setAgentNoChecked] = useState(null);
   const [emailVerified, setEmailVerified] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
@@ -153,28 +144,6 @@ export default function Signup() {
     }
   }
 
-  async function checkPhone() {
-    if (!phone.trim()) { setError('휴대폰번호를 입력하세요.'); return; }
-    if (!isValidPhone(phone)) { setError('휴대폰번호 형식이 올바르지 않습니다. (예: 010-1234-5678)'); setPhoneChecked(false); return; }
-    setChecking('phone');
-    setError('');
-    try {
-      const res = await fetch(`${API_BASE}/auth/check-phone`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phone.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      setPhoneChecked(data.available === true);
-      if (!data.available) setError('이미 사용 중인 휴대폰번호입니다.');
-    } catch {
-      setError('확인할 수 없습니다.');
-      setPhoneChecked(false);
-    } finally {
-      setChecking('');
-    }
-  }
-
   async function checkAgentNo() {
     if (!agentNo.trim()) { setError('중매인 번호를 입력하세요.'); return; }
     setChecking('agent_no');
@@ -196,8 +165,8 @@ export default function Signup() {
     }
   }
 
-  const canSubmit = name.trim() && email.trim() && phone.trim() && agentNo.trim() && password.length >= 1
-    && emailChecked === true && emailVerified && phoneChecked === true && agentNoChecked === true
+  const canSubmit = name.trim() && email.trim() && agentNo.trim() && password.length >= 1
+    && emailChecked === true && emailVerified && agentNoChecked === true
     && termsAgreed && !loading;
 
   async function handleSubmit(e) {
@@ -213,7 +182,6 @@ export default function Signup() {
         body: JSON.stringify({
           name: name.trim(),
           email: email.trim(),
-          phone: phone.trim(),
           agent_no: agentNo.trim(),
           password,
           terms_agreed: true,
@@ -300,24 +268,6 @@ export default function Signup() {
                 {emailVerified && <span className="signup-ok">이메일 인증 완료</span>}
               </div>
             )}
-          </label>
-
-          <label className="signup-label">
-            휴대폰번호
-            <div className="signup-input-row">
-              <input
-                type="tel"
-                value={phone}
-                onChange={(e) => { setPhone(e.target.value); setPhoneChecked(null); }}
-                placeholder="예: 010-1234-5678"
-                disabled={loading}
-              />
-              <button type="button" className="signup-check-btn" onClick={checkPhone} disabled={!!checking || loading}>
-                {checking === 'phone' ? '확인 중…' : '중복확인'}
-              </button>
-            </div>
-            {phoneChecked === true && <span className="signup-ok">사용 가능</span>}
-            {phoneChecked === false && <span className="signup-dup">사용 불가</span>}
           </label>
 
           <label className="signup-label">
