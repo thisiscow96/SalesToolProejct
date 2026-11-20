@@ -1,0 +1,17 @@
+{
+  "runId": "run-2026-11-20T19-56-27-741Z",
+  "startedAt": "2026-11-20T19:56:27.741Z",
+  "updatedAt": "2026-11-20T19:56:27.794Z",
+  "base": "http://127.0.0.1:3236",
+  "agent": "admin001",
+  "tag": "1795204587740",
+  "productKey": "SCENARIO-1795204587740",
+  "steps": [],
+  "lastCompletedStep": null,
+  "passedSoFar": 0,
+  "failedSoFar": 0,
+  "firstFailedScenario": null,
+  "fatalError": "Error: connect ECONNREFUSED 127.0.0.1:3236\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16)",
+  "exitCode": 1,
+  "status": "aborted"
+}
