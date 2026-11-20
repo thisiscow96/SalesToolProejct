@@ -1,4 +1,8 @@
-// 환불(반품) 계산 — 화면(Main.jsx)과 시험 스크립트(scripts/refund-calc-test.mjs)가 같이 쓴다.
+// 환불(반품) 계산 — 화면(Main.jsx)과 시험 스크립트(scripts/refund-calc-test.mjs, 서버 시나리오 S-024)가 같이 쓴다.
+// 반품 규칙 B (T-108 사용자 결정, T-111): "반품 = 미수 먼저 차감, 넘친 돈만 환불" — 서버 POST /api/sales/:id/refund 와 같은 식.
+//   순매출 N = 총액 − 누적 반품액,  미수 = N − 수금액
+//   반품 금액 V = N × (반품 수량 ÷ 반품 가능 수량)  (남은 수량 전부면 N 전부)
+//   미수 차감 = MIN(V, 미수),  환불금(현금) = V − 미수 차감
 
 /** 환불 가능 수량 = 총 수량 − 환불된 수량(환불 누적) */
 export function computeRefundPossibleQty(s) {
@@ -8,20 +12,45 @@ export function computeRefundPossibleQty(s) {
   return Math.max(0, q - rf);
 }
 
+const cents = (v) => Math.round((Number(v) || 0) * 100);
+
+/** 순매출(원) = 총액 − 누적 반품액 */
+export function computeNetAmount(s) {
+  return Math.max(0, cents(s.total_amount) - cents(s.returned_amount)) / 100;
+}
+
+/** 미수(원) = 총액 − 반품액 − 수금액 (0 미만은 0). 서버가 준 unpaid_amount 가 있으면 그 값 */
+export function computeUnpaidAmount(s) {
+  if (s.unpaid_amount != null && s.unpaid_amount !== '') return Math.max(0, Number(s.unpaid_amount) || 0);
+  return Math.max(0, cents(s.total_amount) - cents(s.returned_amount) - cents(s.paid_amount)) / 100;
+}
+
 /**
- * 반품(환불) 금액 = (환불 요청수량 ÷ 환불 가능 수량) × 현재 수금액 (T-106)
- * 환불할 때마다 수금액(paid_amount)에서 환불금이 빠지므로, 분모도 "아직 환불되지 않은 수량"이어야 한다.
- * 예전 식(분모 = 총 수량)은 두 번째 부분 환불부터 금액이 적게 나왔다.
- *   예) 10개·1,000원 수금 → 5개 환불 500원(남은 수금 500) → 남은 5개 환불: 예전 (5÷10)×500 = 250원, 지금 (5÷5)×500 = 500원
- * 남은 수량을 전부 환불하면 남은 수금액 전부가 돌아간다.
+ * 반품 미리보기 — { returnAmount: 반품 금액 V, creditAmount: 미수에서 빼는 금액, refundAmount: 현금으로 돌려줄 금액 }
+ * 예) 1,000원 완납 10개 중 5개 → V 500, 미수 차감 0, 환불 500 (가짜 미수 없음 — R1)
+ *     500원 외상 5개 전부 → V 500, 미수 차감 500, 환불 0 (받은 적 없는 돈은 돌려주지 않음 — R2)
+ *     1,000원 중 300원 수금 10개 중 5개 → V 500, 미수 차감 500, 환불 0, 남은 미수 200
+ */
+export function computeReturnPreview(s, requestQty) {
+  const zero = { returnAmount: 0, creditAmount: 0, refundAmount: 0 };
+  const remaining = computeRefundPossibleQty(s);
+  const rq = Number(requestQty);
+  if (!(remaining > 0) || !Number.isFinite(rq) || rq <= 0) return zero;
+  const netC = Math.max(0, cents(s.total_amount) - cents(s.returned_amount));
+  const paidC = cents(s.paid_amount);
+  const vC = rq >= remaining - 1e-9 ? netC : Math.round((netC * rq) / remaining);
+  const dueC = Math.max(0, netC - paidC);
+  const creditC = Math.min(vC, dueC);
+  const excessC = Math.max(0, paidC - netC); // 010 이전 데이터의 받은 돈 > 순매출 — 서버와 같이 함께 환불
+  return { returnAmount: vC / 100, creditAmount: creditC / 100, refundAmount: (vC - creditC + excessC) / 100 };
+}
+
+/**
+ * 환불금(현금으로 돌려줄 돈) — 반품 규칙 B. 예전(T-106) 이름을 그대로 둔다.
+ * 10개·1,000원 완납 → 5개 반품 500원 → 남은 5개 반품 500원 (두 번째도 적게 나오지 않음 — U2)
  */
 export function computeAutoRefundAmount(s, requestQty) {
-  const remaining = computeRefundPossibleQty(s);
-  const paid = Number(s.paid_amount);
-  const rq = Number(requestQty);
-  if (!(remaining > 0) || !Number.isFinite(rq) || rq <= 0 || !Number.isFinite(paid) || paid <= 0) return 0;
-  const ratio = Math.min(1, rq / remaining);
-  return Math.round(ratio * paid * 100) / 100;
+  return computeReturnPreview(s, requestQty).refundAmount;
 }
 
 /** 수량은 DB에 소수 셋째 자리까지(NUMERIC(12,3)) 저장된다 */
