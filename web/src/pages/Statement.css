@@ -202,6 +202,11 @@
   text-align: center;
 }
 
+.stmt-origin {
+  color: #4b5563;
+  font-size: 0.85em;
+}
+
 .stmt-refund {
   color: var(--c-danger-text);
   font-size: var(--fs-12);

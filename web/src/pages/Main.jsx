@@ -308,7 +308,7 @@ function Modal({
   );
 }
 
-const PURCHASE_ACCOUNT_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+const PURCHASE_ACCOUNT_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
 const SALE_ACCOUNT_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
 /** 환불 사유 픽리스트 */
@@ -378,6 +378,10 @@ function newPurchaseRow() {
     price_hint: null,
     purchase_date: today(),
     selected: false,
+    // T-401 10장: 생산자(선택)·산지·지급 대상(supplier=제공처 기본 | producer)
+    producer_id: '',
+    origin_region: '',
+    payee: 'supplier',
   };
 }
 
@@ -668,6 +672,7 @@ function TabPurchases({ onNavigate } = {}) {
   }, []);
 
   const purchasePartners = partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type));
+  const producerPartners = partners.filter((p) => p.type === 'producer'); // T-401 생산자(출하주)
   // T-210: 매입 등록 모달의 거래처 목록 — 최근 180일 매입한 거래처(최근 순)를 위, 나머지는 이름순
   const purchasePartnerGroups = (() => {
     const byId = new Map(purchasePartners.map((p) => [String(p.id), p]));
@@ -739,6 +744,9 @@ function TabPurchases({ onNavigate } = {}) {
       unit_price_auto: !!r.unit_price_auto,
       price_hint: r.price_hint ?? null,
       purchase_date: r.purchase_date,
+      producer_id: r.producer_id ?? '',
+      origin_region: r.origin_region ?? '',
+      payee: r.payee || 'supplier',
       selected: false,
     }));
     setPurchaseRows((prev) => [...prev, ...clones]);
@@ -794,6 +802,9 @@ function TabPurchases({ onNavigate } = {}) {
           unit_price: parseMoneyToNumber(r.unit_price),
           purchase_date: r.purchase_date,
           source_name: String(r.source_name ?? '').trim() || undefined,
+          ...(r.producer_id ? { producer_id: parseInt(r.producer_id, 10) } : {}),
+          ...(String(r.origin_region ?? '').trim() ? { origin_region: String(r.origin_region).trim() } : {}),
+          ...(r.producer_id && r.payee === 'producer' ? { payee: 'producer' } : {}),
         });
         savedKeys.add(r.key);
       }
@@ -905,8 +916,10 @@ function TabPurchases({ onNavigate } = {}) {
             setActionErr('');
             // T-201: 체크한 매입이 있으면 그 매입처·그 매입만 채운 상태로 연다(첫 번째 매입의 매입처 기준)
             const picked = list.filter((r) => selected[r.id] && r.status !== 'cancelled' && Number(r.unpaid_amount) > 0);
-            const pid = picked[0]?.partner_id;
-            const ids = picked.filter((r) => r.partner_id === pid).map((r) => r.id);
+            // T-401 PR-05: 지급은 지급 대상(payee) 기준 — 생산자에게 직접 주는 매입이면 생산자
+            const payeeOf = (r) => r.payee_partner_id ?? r.partner_id;
+            const pid = picked[0] ? payeeOf(picked[0]) : undefined;
+            const ids = picked.filter((r) => payeeOf(r) === pid).map((r) => r.id);
             if (picked.length > ids.length) setActionErr('지급 등록은 매입처 한 곳씩 합니다 — 첫 번째 매입처의 매입만 채웠습니다.');
             setPayModal(pid ? { partnerId: pid, purchaseIds: ids } : {});
           }}
@@ -969,6 +982,7 @@ function TabPurchases({ onNavigate } = {}) {
                   <th className="main-col-qty main-col-qty--purchase-input">수량</th>
                   <th className="main-col-unit-price main-col-unit-price--purchase-input">단가</th>
                   <th className="main-col-date main-col-date--purchase-input">매입일</th>
+                  <th className="main-col-origin">생산자·산지·지급</th>
                   <th className="main-col-row-actions" aria-label="행 삭제" />
                 </tr>
               </thead>
@@ -1091,6 +1105,44 @@ function TabPurchases({ onNavigate } = {}) {
                         value={row.purchase_date}
                         onChange={(e) => updatePurchaseRow(row.key, { purchase_date: e.target.value })}
                       />
+                    </td>
+                    <td data-card="wide" data-label="생산자·산지·지급" className="main-col-origin">
+                      <div className="main-origin-cell">
+                        <select
+                          aria-label="생산자(출하주)"
+                          value={row.producer_id}
+                          onChange={(e) => {
+                            const pr = producerPartners.find((x) => String(x.id) === e.target.value);
+                            updatePurchaseRow(row.key, {
+                              producer_id: e.target.value,
+                              origin_region: row.origin_region || pr?.origin_region || '',
+                              payee: e.target.value ? row.payee : 'supplier',
+                            });
+                          }}
+                        >
+                          <option value="">생산자 없음</option>
+                          {producerPartners.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}{p.origin_region ? ` (${p.origin_region})` : ''}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          aria-label="산지"
+                          placeholder="산지(예: 해남군)"
+                          maxLength={100}
+                          value={row.origin_region}
+                          onChange={(e) => updatePurchaseRow(row.key, { origin_region: e.target.value })}
+                        />
+                        <select
+                          aria-label="지급 대상"
+                          value={row.producer_id ? row.payee : 'supplier'}
+                          disabled={!row.producer_id}
+                          onChange={(e) => updatePurchaseRow(row.key, { payee: e.target.value })}
+                        >
+                          <option value="supplier">지급: 제공처</option>
+                          <option value="producer">지급: 생산자</option>
+                        </select>
+                      </div>
                     </td>
                     <td data-card="action" className="main-col-row-actions">
                       <button
@@ -1251,7 +1303,7 @@ function TabPurchases({ onNavigate } = {}) {
                       <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소된 매입'}>취소</span>
                     )}
                   </td>
-                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
+                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText>{row.producer_name || row.origin_region ? <small className="main-origin-note">{[row.producer_name, row.origin_region].filter(Boolean).join(' · ')}{row.payee_partner_id && row.payee_partner_id !== row.partner_id ? ' · 지급: 생산자' : ''}</small> : null}</td>
                   <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                   <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>

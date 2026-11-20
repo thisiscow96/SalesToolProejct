@@ -743,15 +743,16 @@ app.get('/api/partners', async (req, res) => {
     // payable_amount: 매입 가능 유형만 미지급 합(T-201 W-08), 그 밖은 null
     const r = await pool.query(
       `SELECT a.id, a.name, a.type, a.contact, a.phone, a.email, a.location, a.address, a.credit_limit,
-              (CASE WHEN a.type IN ('supplier', 'wholesaler', 'market_wholesaler', 'same_market')
+              a.origin_region, a.bank_name, a.bank_account, a.bank_holder,
+              (CASE WHEN a.type::text IN ('supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer')
                     THEN COALESCE((SELECT SUM(pu.total_amount - pu.paid_amount) FROM purchase pu
-                                    WHERE pu.user_id = a.user_id AND pu.partner_id = a.id AND pu.status = 'active'
+                                    WHERE pu.user_id = a.user_id AND pu.payee_partner_id = a.id AND pu.status = 'active'
                                       AND pu.payment_status IN ('unpaid', 'partial')), 0)
                END)::numeric AS payable_amount
          FROM account a WHERE a.user_id = $1 ORDER BY a.name`,
       [userId]
     );
-    res.json({ ok: true, data: r.rows });
+    res.json({ ok: true, data: r.rows.map((x) => maskPartnerRow(x, isOwnerReq(req))) });
   } catch (err) {
     console.error('Partners error:', err);
     res.status(500).json({ ok: false, message: err.message || '거래처 목록을 불러오지 못했습니다.' });
@@ -759,14 +760,28 @@ app.get('/api/partners', async (req, res) => {
 });
 
 // 거래처 등록·수정 (T-102) — 유형은 partner_type enum(001·004)과 같게 유지
-const PARTNER_TYPES = ['supplier', 'customer', 'same_market', 'wholesaler', 'market_wholesaler'];
-const PARTNER_TEXT_LIMITS = { name: 200, contact: 100, phone: 50, email: 255, location: 200, address: 2000, memo: 2000 };
+// T-401 10장: producer(생산자·출하주) — 023 에서 enum 추가
+const PARTNER_TYPES = ['supplier', 'customer', 'same_market', 'wholesaler', 'market_wholesaler', 'producer'];
+const PARTNER_TEXT_LIMITS = { name: 200, contact: 100, phone: 50, email: 255, location: 200, address: 2000, memo: 2000,
+  origin_region: 100, bank_name: 50, bank_account: 50, bank_holder: 100 };
+const BANK_KEYS = ['bank_name', 'bank_account', 'bank_holder'];
+/** 계좌번호 마스킹 — 뒤 4자리만 (PR-08: 직원 응답·변경 이력) */
+function maskBankAccount(v) {
+  if (v == null || v === '') return v;
+  const d = String(v).replace(/[^0-9]/g, '');
+  return `****${d.slice(-4)}`;
+}
+function maskPartnerRow(row, full) {
+  if (!row || full || row.bank_account == null) return row;
+  return { ...row, bank_account: maskBankAccount(row.bank_account) };
+}
+const isOwnerReq = (req) => !req.auth || !req.auth.role || req.auth.role === 'owner';
 
 /** 본문에서 거래처 필드를 읽어 검증한다. partial=true(수정)면 본문에 없는 필드는 건드리지 않는다. */
 function readPartnerBody(body, partial) {
   const b = body && typeof body === 'object' ? body : {};
   const out = {};
-  for (const key of ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo']) {
+  for (const key of ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo', 'origin_region', ...BANK_KEYS]) {
     if (!(key in b)) continue;
     const v = b[key] == null ? '' : String(b[key]).trim();
     out[key] = v;
@@ -782,8 +797,19 @@ function readPartnerBody(body, partial) {
   }
   // 입금 안내 이메일 (T-214) — 비우면 없음
   if (out.email && !isValidEmail(out.email)) return { error: '이메일 형식이 올바르지 않습니다.' };
+  // T-401 PR-01 입금 계좌 — 셋 다 있거나 셋 다 없게, 계좌번호는 숫자·하이픈 4~50자
+  const bankGiven = BANK_KEYS.filter((k) => k in out);
+  if (bankGiven.length) {
+    const filled = BANK_KEYS.filter((k) => out[k]);
+    if (bankGiven.length !== 3 || (filled.length !== 0 && filled.length !== 3)) {
+      return { error: '입금 계좌는 은행·계좌번호·예금주를 모두 넣거나 모두 비우세요.', field: 'bank_account' };
+    }
+    if (out.bank_account && !/^[0-9-]{4,50}$/.test(out.bank_account)) {
+      return { error: '계좌번호는 숫자와 하이픈(-)만 4~50자로 입력하세요.', field: 'bank_account' };
+    }
+  }
   // 선택 항목은 빈 문자열 대신 NULL 로 저장
-  for (const key of ['contact', 'phone', 'email', 'location', 'address', 'memo']) {
+  for (const key of ['contact', 'phone', 'email', 'location', 'address', 'memo', 'origin_region', ...BANK_KEYS]) {
     if (key in out && out[key] === '') out[key] = null;
   }
   // 외상 한도 (T-207) — 비우면 한도 없음(NULL)
@@ -793,7 +819,7 @@ function readPartnerBody(body, partial) {
   return { fields: out };
 }
 
-const PARTNER_RETURNING = 'id, name, type, contact, phone, email, location, address, memo, credit_limit, created_at, updated_at';
+const PARTNER_RETURNING = 'id, name, type, contact, phone, email, location, address, memo, credit_limit, origin_region, bank_name, bank_account, bank_holder, created_at, updated_at';
 // 외상 한도 (T-207) — 판매·매출 수정 저장 후 미수가 한도를 넘으면 409 CREDIT_LIMIT(확인 후 저장)
 const credit = require('./lib/credit-limit');
 
@@ -812,7 +838,7 @@ app.post('/api/partners', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const parsed = readPartnerBody(req.body, false);
-  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error });
+  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error, ...(parsed.field ? { code: 'VALIDATION', field: parsed.field } : {}) });
   const f = parsed.fields;
   const client = await connectOr503(res);
   if (!client) return;
@@ -826,14 +852,16 @@ app.post('/api/partners', async (req, res) => {
       return res.status(409).json({ ok: false, message: `이미 같은 이름의 거래처가 있습니다: ${dup.name}`, data: { duplicate_id: dup.id } });
     }
     const r = await client.query(
-      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo, credit_limit, email)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10)
+      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo, credit_limit, email,
+                            origin_region, bank_name, bank_account, bank_holder)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10, $11, $12, $13, $14)
        RETURNING ${PARTNER_RETURNING}`,
-      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null, f.credit_limit ?? null, f.email ?? null]
+      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null, f.credit_limit ?? null, f.email ?? null,
+        f.origin_region ?? null, f.bank_name ?? null, f.bank_account ?? null, f.bank_holder ?? null]
     );
-    await recordAudit(client, { userId, entityType: 'account', entityId: r.rows[0].id, partnerId: r.rows[0].id, action: 'create', before: null, after: r.rows[0] }); // T-212
+    await recordAudit(client, { userId, entityType: 'account', entityId: r.rows[0].id, partnerId: r.rows[0].id, action: 'create', before: null, after: maskPartnerRow(r.rows[0], false) }); // T-212 · 계좌는 뒤 4자리만(PR-08)
     await client.query('COMMIT');
-    res.status(201).json({ ok: true, data: r.rows[0] });
+    res.status(201).json({ ok: true, data: maskPartnerRow(r.rows[0], isOwnerReq(req)) });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') return res.status(409).json({ ok: false, message: '이미 같은 이름의 거래처가 있습니다.' });
@@ -852,7 +880,7 @@ app.put('/api/partners/:id', async (req, res) => {
     return res.status(400).json({ ok: false, message: '거래처 번호가 올바르지 않습니다.' });
   }
   const parsed = readPartnerBody(req.body, true);
-  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error });
+  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error, ...(parsed.field ? { code: 'VALIDATION', field: parsed.field } : {}) });
   const f = parsed.fields;
   const keys = Object.keys(f);
   if (keys.length === 0) return res.status(400).json({ ok: false, message: '수정할 항목이 없습니다.' });
@@ -882,9 +910,9 @@ app.put('/api/partners/:id', async (req, res) => {
         RETURNING ${PARTNER_RETURNING}`,
       [id, userId, ...keys.map((k) => f[k])]
     );
-    await recordAudit(client, { userId, entityType: 'account', entityId: id, partnerId: id, action: 'update', before: cur.rows[0], after: f }); // T-212
+    await recordAudit(client, { userId, entityType: 'account', entityId: id, partnerId: id, action: 'update', before: maskPartnerRow(cur.rows[0], false), after: maskPartnerRow(f, false) }); // T-212 · 계좌는 뒤 4자리만(PR-08)
     await client.query('COMMIT');
-    res.json({ ok: true, data: r.rows[0] });
+    res.json({ ok: true, data: maskPartnerRow(r.rows[0], isOwnerReq(req)) });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') return res.status(409).json({ ok: false, message: '이미 같은 이름의 거래처가 있습니다.' });
@@ -941,6 +969,7 @@ app.get('/api/inventory', async (req, res) => {
               lp.purchase_date AS last_purchase_date,
               lp.created_at AS last_purchase_created_at,
               NULLIF(BTRIM(lp.source_name::text), '') AS last_source_name,
+              NULLIF(BTRIM(lp.origin_region::text), '') AS last_origin_region, -- T-401 PR-07
               NULLIF(BTRIM(pt.name::text), '') AS last_partner_name,
               to_char(COALESCE(op.oldest_date, lp.purchase_date), 'YYYY-MM-DD') AS aging_base_date,
               ($2::date - COALESCE(op.oldest_date, lp.purchase_date))::int AS aging_days,
@@ -949,7 +978,7 @@ app.get('/api/inventory', async (req, res) => {
        FROM inventory i
        JOIN product p ON p.id = i.product_id
        LEFT JOIN LATERAL (
-         SELECT pu.purchase_date, pu.created_at, pu.partner_id, pu.source_name
+         SELECT pu.purchase_date, pu.created_at, pu.partner_id, pu.source_name, pu.origin_region
          FROM purchase pu
          WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
          ORDER BY pu.purchase_date DESC, pu.created_at DESC NULLS LAST, pu.id DESC
@@ -1038,6 +1067,13 @@ app.get('/api/purchases', async (req, res) => {
              pu.paid_amount, pu.payment_status,
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
+             -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
+             pu.producer_id, (SELECT ap.name FROM account ap WHERE ap.id = pu.producer_id) AS producer_name, pu.origin_region,
+             pu.payee_partner_id, (SELECT ay.name FROM account ay WHERE ay.id = pu.payee_partner_id) AS payee_name,
+             (SELECT COALESCE(SUM(spa.amount), 0) FROM supplier_payment_allocation spa JOIN supplier_payment sp ON sp.id = spa.supplier_payment_id
+                WHERE spa.purchase_id = pu.id AND sp.status = 'active' AND sp.kind = 'discount')::numeric AS discount_amount,
+             (SELECT COALESCE(SUM(spa.amount), 0) FROM supplier_payment_allocation spa JOIN supplier_payment sp ON sp.id = spa.supplier_payment_id
+                WHERE spa.purchase_id = pu.id AND sp.status = 'active' AND sp.kind = 'offset')::numeric AS offset_amount,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
              (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty,
              pu.created_by_staff_id, ${CREATED_BY_NAME}
@@ -1057,6 +1093,13 @@ app.get('/api/purchases', async (req, res) => {
     if (partnerFilter) {
       params.push(partnerFilter);
       q += ` AND pu.partner_id = $${params.length}`;
+    }
+    // T-401 PR-05: 지급 대상 기준 필터(지급 등록 화면) — partner_id(제공처) 필터는 그대로
+    if (req.query.payee_id) {
+      const pf = parsePositiveIdParam(req.query.payee_id);
+      if (!pf) return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'payee_id', message: '지급 대상 번호가 올바르지 않습니다.' });
+      params.push(pf);
+      q += ` AND pu.payee_partner_id = $${params.length}`;
     }
     if (productId && Number.isFinite(productId)) {
       params.push(productId);
@@ -1256,7 +1299,12 @@ app.get('/api/sales/statement', async (req, res) => {
               GREATEST(s.total_amount - s.returned_amount - s.paid_amount - s.discount_amount - s.offset_amount, 0)::numeric AS unpaid_amount,
               p.name AS product_name, p.unit,
               COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty,
-              COALESCE((SELECT SUM(r.refund_amount) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_amount
+              COALESCE((SELECT SUM(r.refund_amount) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_amount,
+              -- T-401 PR-07 원산지(배분된 매입의 생산자·산지, 중복 제거)
+              COALESCE((SELECT jsonb_agg(DISTINCT jsonb_build_object('producer_name', ap.name, 'origin_region', pu.origin_region))
+                          FROM purchase_allocation pa JOIN purchase pu ON pu.id = pa.purchase_id
+                          LEFT JOIN account ap ON ap.id = pu.producer_id
+                         WHERE pa.sale_id = s.id AND (pu.producer_id IS NOT NULL OR pu.origin_region IS NOT NULL)), '[]'::jsonb) AS origins
        FROM sale s
        JOIN product p ON p.id = s.product_id
        WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
@@ -1509,7 +1557,8 @@ app.get('/api/payments', async (req, res) => {
 });
 
 // ---------- 거래 흐름: 매입·매출 전환·수금·환불·폐기 ----------
-const PURCHASE_PARTNER_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+// T-401 PR-02: producer(생산자) — 산지 직거래 때 생산자 = 제공처 가능
+const PURCHASE_PARTNER_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']);
 const SALE_PARTNER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
 function accountLocationLine(row) {
@@ -1525,6 +1574,33 @@ async function getUserWarehouseLabel(client, userId) {
   const r = u.rows[0];
   if (!r) return '내 창고';
   return `${r.name} (중매 ${r.agent_no})`;
+}
+
+/**
+ * T-401 PR-03 매입의 생산자·산지·지급 대상 읽기. b = 요청 본문, supplierId = 제공처(partner_id)
+ * 반환 { producerId, origin, payeeId, given } — 칸이 하나도 없으면 given=false(지금과 같이 지급 대상 = 제공처)
+ * 틀리면 { error:{field,message} }
+ */
+async function readPurchaseOrigin(client, userId, b, supplierId) {
+  const has = (k) => b && b[k] != null && String(b[k]).trim() !== '';
+  const given = has('producer_id') || has('origin_region') || has('payee');
+  let producerId = null;
+  let producer = null;
+  if (has('producer_id')) {
+    producerId = parseInt(b.producer_id, 10);
+    const r = Number.isFinite(producerId)
+      ? await client.query(`SELECT id, type::text AS type, origin_region FROM account WHERE id = $1 AND user_id = $2`, [producerId, userId])
+      : { rows: [] };
+    producer = r.rows[0];
+    if (!producer || producer.type !== 'producer') return { error: { field: 'producer_id', message: '생산자(출하주) 거래처를 선택하세요.' } };
+  }
+  const payee = has('payee') ? String(b.payee).trim() : 'supplier';
+  if (payee !== 'supplier' && payee !== 'producer') return { error: { field: 'payee', message: '지급 대상은 supplier(제공처) 또는 producer(생산자)입니다.' } };
+  if (payee === 'producer' && !producerId) return { error: { field: 'payee', message: '생산자에게 지급하려면 생산자를 선택하세요.' } };
+  let origin = has('origin_region') ? String(b.origin_region).trim() : null;
+  if (origin && origin.length > 100) return { error: { field: 'origin_region', message: '산지는 100자 이내로 입력하세요.' } };
+  if (!origin && producer && producer.origin_region) origin = producer.origin_region; // 생산자 산지 스냅숏
+  return { given, producerId, origin, payeeId: payee === 'producer' ? producerId : supplierId };
 }
 
 // 미수 상태 — 반품 규칙 B(T-108): 받을 돈 = 순매출(총액 − 반품액). 반품으로 순매출이 줄면 미수도 같이 줄어든다(T-111 가짜 미수 방지)
@@ -1645,12 +1721,19 @@ app.post('/api/purchases', async (req, res) => {
       await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
     }
+    const og = await readPurchaseOrigin(client, userId, req.body, pid); // T-401 생산자·산지·지급 대상
+    if (og.error) {
+      await client.query('ROLLBACK').catch(() => {});
+      return res.status(400).json({ ok: false, code: 'VALIDATION', field: og.error.field, message: og.error.message });
+    }
     const src = source_name != null && String(source_name).trim() ? String(source_name).trim().slice(0, 200) : null;
     const ins = await client.query(
-      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name, payment_status, created_by_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $6::numeric <= 0 THEN 'paid'::payment_status ELSE 'unpaid'::payment_status END, $10)
+      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name, payment_status, created_by_staff_id,
+                           producer_id, origin_region, payee_partner_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $6::numeric <= 0 THEN 'paid'::payment_status ELSE 'unpaid'::payment_status END, $10, $11, $12, $13)
        RETURNING id`,
-      [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src, staffIdOf(req)]
+      [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src, staffIdOf(req),
+        og.producerId, og.origin, og.payeeId]
     );
     const purchaseId = ins.rows[0].id;
     await upsertInventoryDelta(client, userId, prid, n.qty);
@@ -1670,7 +1753,7 @@ app.post('/api/purchases', async (req, res) => {
       memo: memo?.trim() || null,
     });
     await client.query('COMMIT');
-    res.status(201).json({ ok: true, data: { id: purchaseId, total_amount: total } });
+    res.status(201).json({ ok: true, data: { id: purchaseId, total_amount: total, producer_id: og.producerId, origin_region: og.origin, payee_partner_id: og.payeeId } });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST purchases error:', err);
@@ -2169,6 +2252,13 @@ const PURCHASE_ROW_SQL = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchas
        pu.paid_amount, pu.payment_status,
        (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
        p.name AS product_name, p.unit, pt.name AS partner_name,
+       -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
+       pu.producer_id, (SELECT ap.name FROM account ap WHERE ap.id = pu.producer_id) AS producer_name, pu.origin_region,
+       pu.payee_partner_id, (SELECT ay.name FROM account ay WHERE ay.id = pu.payee_partner_id) AS payee_name,
+       (SELECT COALESCE(SUM(spa.amount), 0) FROM supplier_payment_allocation spa JOIN supplier_payment sp ON sp.id = spa.supplier_payment_id
+          WHERE spa.purchase_id = pu.id AND sp.status = 'active' AND sp.kind = 'discount')::numeric AS discount_amount,
+       (SELECT COALESCE(SUM(spa.amount), 0) FROM supplier_payment_allocation spa JOIN supplier_payment sp ON sp.id = spa.supplier_payment_id
+          WHERE spa.purchase_id = pu.id AND sp.status = 'active' AND sp.kind = 'offset')::numeric AS offset_amount,
        COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
        (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
   FROM purchase pu
@@ -2188,6 +2278,7 @@ const SALE_ROW_SQL = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.cr
 // 정정 이력에 남길 행 모양 — DATE 는 문자열(YYYY-MM-DD)로 남겨 시간대에 따라 하루 밀리지 않게
 const PURCHASE_LOCK_SQL = `SELECT id, partner_id, product_id, quantity::text AS quantity, unit_price::text AS unit_price,
        total_amount::text AS total_amount, purchase_date::text AS purchase_date, memo, source_name, status,
+       producer_id, origin_region, payee_partner_id,
        (EXTRACT(EPOCH FROM updated_at) * 1000)::float8 AS updated_epoch_ms
   FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`;
 const SALE_LOCK_SQL = `SELECT id, partner_id, product_id, quantity::text AS quantity, unit_price::text AS unit_price,
@@ -2315,7 +2406,8 @@ app.post('/api/purchases/:id/cancel', async (req, res) => {
   }
 });
 
-const PURCHASE_EDITABLE = ['quantity', 'unit_price', 'partner_id', 'source_name', 'purchase_date', 'memo', 'product_id'];
+const PURCHASE_EDITABLE = ['quantity', 'unit_price', 'partner_id', 'source_name', 'purchase_date', 'memo', 'product_id',
+  'producer_id', 'origin_region', 'payee']; // T-401 PR-04
 const SALE_EDITABLE = ['quantity', 'unit_price', 'partner_id', 'sale_date', 'memo'];
 
 /** changes 객체 확인 — 허용 칸만, 빈 객체는 400 */
@@ -2390,6 +2482,17 @@ app.patch('/api/purchases/:id', async (req, res) => {
       if (s && s.length > 200) throw corrError(400, 'VALIDATION', '출처는 200자 이내로 입력하세요.', { field: 'source_name' });
       want.source_name = s;
     }
+    // T-401 PR-04 생산자·산지·지급 대상
+    if ('producer_id' in ch) want.producer_id = ch.producer_id == null || ch.producer_id === '' ? null : readIntField(ch.producer_id, 'producer_id');
+    if ('origin_region' in ch) {
+      const s = readMemo(ch.origin_region);
+      if (s && s.length > 100) throw corrError(400, 'VALIDATION', '산지는 100자 이내로 입력하세요.', { field: 'origin_region' });
+      want.origin_region = s;
+    }
+    if ('payee' in ch) {
+      if (ch.payee !== 'supplier' && ch.payee !== 'producer') throw corrError(400, 'VALIDATION', '지급 대상은 supplier(제공처) 또는 producer(생산자)입니다.', { field: 'payee' });
+      want.payee = ch.payee;
+    }
 
     await client.query('BEGIN');
     const pr = await client.query(PURCHASE_LOCK_SQL, [id, userId]);
@@ -2415,6 +2518,22 @@ app.patch('/api/purchases/:id', async (req, res) => {
       memo: 'memo' in want ? want.memo : p.memo,
       source_name: 'source_name' in want ? want.source_name : p.source_name,
     };
+    next.producer_id = 'producer_id' in want ? want.producer_id : p.producer_id;
+    next.origin_region = 'origin_region' in want ? want.origin_region : p.origin_region;
+    {
+      const curKind = p.payee_partner_id === p.partner_id ? 'supplier' : 'producer';
+      const kind = want.payee || curKind;
+      if (kind === 'producer' && !next.producer_id) throw corrError(400, 'VALIDATION', '생산자에게 지급하려면 생산자를 선택하세요.', { field: 'payee' });
+      next.payee_partner_id = kind === 'producer' ? next.producer_id : next.partner_id;
+    }
+    if ('producer_id' in want && next.producer_id != null && next.producer_id !== p.producer_id) {
+      const pa = await client.query(`SELECT type::text AS type FROM account WHERE id = $1 AND user_id = $2`, [next.producer_id, userId]);
+      if (pa.rows[0]?.type !== 'producer') throw corrError(400, 'VALIDATION', '생산자(출하주) 거래처를 선택하세요.', { field: 'producer_id' });
+    }
+    if (!next.origin_region && next.producer_id && next.producer_id !== p.producer_id) {
+      const po = await client.query(`SELECT origin_region FROM account WHERE id = $1 AND user_id = $2`, [next.producer_id, userId]);
+      next.origin_region = po.rows[0]?.origin_region || null; // 생산자 산지 스냅숏
+    }
     const cmp = await client.query(
       `SELECT $1::numeric <> $2::numeric AS qty_changed, $3::numeric <> $4::numeric AS price_changed,
               $5::numeric <> $6::numeric AS total_changed, ($1::numeric - $2::numeric)::text AS delta,
@@ -2431,6 +2550,9 @@ app.patch('/api/purchases/:id', async (req, res) => {
     if (next.purchase_date !== p.purchase_date) changed.push('purchase_date');
     if ((next.memo ?? null) !== (p.memo ?? null)) changed.push('memo');
     if ((next.source_name ?? null) !== (p.source_name ?? null)) changed.push('source_name');
+    if ((next.producer_id ?? null) !== (p.producer_id ?? null)) changed.push('producer_id');
+    if ((next.origin_region ?? null) !== (p.origin_region ?? null)) changed.push('origin_region');
+    if (next.payee_partner_id !== p.payee_partner_id) changed.push('payee_partner_id');
     if (changed.length === 0) throw corrError(400, 'VALIDATION', '바뀐 내용이 없습니다.', { field: 'changes' });
 
     // RULE-P2·P3 — 전환된 매입은 상품 변경 불가, 수량은 전환 수량 이상만
@@ -2451,6 +2573,11 @@ app.patch('/api/purchases/:id', async (req, res) => {
     if (paidRow.has_paid && changed.includes('partner_id')) {
       const payments = await activePaymentsOfPurchase(client, userId, id);
       throw corrError(409, 'PURCHASE_HAS_PAYMENT', `지급 ${payments.length}건이 있어 매입처를 바꿀 수 없습니다. 지급정보에서 지급을 먼저 취소하세요.`, { payments });
+    }
+    // T-401 PR-04 — 지급(할인·상계 포함)이 있으면 지급 대상이 바뀌는 수정 불가 (이미 준 돈이 다른 장부로 옮겨 가므로)
+    if (paidRow.has_paid && changed.includes('payee_partner_id')) {
+      const payments = await activePaymentsOfPurchase(client, userId, id);
+      throw corrError(409, 'PURCHASE_HAS_PAYMENT', '지급(할인·상계 포함)이 있는 매입은 지급 대상을 바꿀 수 없습니다. 지급을 먼저 취소하세요.', { payments });
     }
     if (c.total_changed && paidRow.below_paid) {
       throw corrError(409, 'PAID_OVER_TOTAL', `이미 지급한 금액(${Number(paidRow.paid_amount).toLocaleString('ko-KR')})보다 매입 금액을 적게 바꿀 수 없습니다.`, {
@@ -2517,9 +2644,11 @@ app.patch('/api/purchases/:id', async (req, res) => {
 
     await client.query(
       `UPDATE purchase SET quantity = $1::numeric, unit_price = $2::numeric, total_amount = $3::numeric,
-              partner_id = $4, product_id = $5, purchase_date = $6::date, memo = $7, source_name = $8, updated_at = NOW()
+              partner_id = $4, product_id = $5, purchase_date = $6::date, memo = $7, source_name = $8,
+              producer_id = $10, origin_region = $11, payee_partner_id = $12, updated_at = NOW()
        WHERE id = $9`,
-      [n.qty, n.price, n.total, next.partner_id, next.product_id, next.purchase_date, next.memo, next.source_name, id]
+      [n.qty, n.price, n.total, next.partner_id, next.product_id, next.purchase_date, next.memo, next.source_name, id,
+        next.producer_id, next.origin_region, next.payee_partner_id]
     );
     // T-201 RULE-06 — 총액이 바뀌면 지급 상태 다시 계산(지급 0이어도 0원 ↔ 양수 매입 상태가 바뀜)
     if (c.total_changed) await syncPurchasePaymentStatus(client, [id]);

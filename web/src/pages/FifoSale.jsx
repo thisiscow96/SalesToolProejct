@@ -325,7 +325,7 @@ export function FifoSaleModal({ row, onClose, onDone }) {
                     {preview.allocations.map((a) => (
                       <li key={a.purchase_id}>
                         <span className="fifo-lot-name">
-                          {mmdd(a.purchase_date)} {a.partner_name || '매입'}{a.source_name ? `(${a.source_name})` : ''}
+                          {mmdd(a.purchase_date)} {a.partner_name || '매입'}{a.source_name ? `(${a.source_name})` : ''}{a.producer_name || a.origin_region ? ` · ${[a.producer_name, a.origin_region].filter(Boolean).join(' ')}` : ''}
                         </span>
                         <span className="fifo-lot-calc num">
                           {fmt(a.quantity)} × {fmt(a.unit_cost)} = {fmt(a.cost)}

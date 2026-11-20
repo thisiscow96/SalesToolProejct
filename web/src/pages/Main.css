@@ -1897,3 +1897,34 @@ td.main-td-scroll.main-col-source {
   flex-direction: row;
   align-items: center;
 }
+
+/* T-401 10장 매입 입력: 생산자·산지·지급 대상 */
+.main-origin-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.main-origin-note {
+  display: block;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+/* T-401 10장: 매입 등록 표에 생산자·산지·지급 칸이 들어가도 한 화면에 보이게 거래처·상품 칸 폭을 줄인다 */
+.main-modal .main-table--purchase-modal th.main-col-partner,
+.main-modal .main-table--purchase-modal td.main-col-partner,
+.main-modal .main-table--purchase-modal th.main-col-product,
+.main-modal .main-table--purchase-modal td.main-col-product {
+  width: 13rem;
+  max-width: 15rem;
+  min-width: 11rem;
+}
+.main-modal .main-table--purchase-modal th.main-col-origin,
+.main-modal .main-table--purchase-modal td.main-col-origin {
+  min-width: 11rem;
+  width: 12rem;
+}
+.main-origin-cell select,
+.main-origin-cell input {
+  width: 100%;
+}

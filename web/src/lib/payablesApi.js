@@ -46,7 +46,7 @@ export const fetchPayableLedger = (partnerId, params) => req('GET', `/partners/$
 /** 미지급 연령 — params: partner_id(주면 매입별 상세 purchases) */
 export const fetchPayablesAging = (params) => req('GET', `/payables/aging${qs(params)}`);
 /** 매입처의 미지급 매입(오래된 순) — 지급 등록 모달용 */
-export const fetchUnpaidPurchases = (partnerId) => req('GET', `/purchases${qs({ unpaid_only: 1, partner_id: partnerId })}`);
+export const fetchUnpaidPurchases = (partnerId) => req('GET', `/purchases${qs({ unpaid_only: 1, payee_id: partnerId })}`); // T-401 PR-05 지급 대상 기준
 
 export const PAY_METHOD_OPTIONS = [
   { value: 'transfer', label: '계좌이체' },
