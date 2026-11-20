@@ -18,6 +18,7 @@ import {
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
 import { computeRefundPossibleQty, computeAutoRefundAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
+import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import './Main.css';
 
@@ -427,6 +428,9 @@ function TabReorder() {
   const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
   return (
     <>
+      <div className="main-filters main-filters--csv-only">
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('inventory', list)}>엑셀(CSV) 다운로드</button>
+      </div>
       <div className="main-aging-summary" role="status">
         <span className="main-aging-badge main-aging-badge--danger">{AGING_DANGER_DAYS}일 이상 {dangerCount}건</span>
         <span className="main-aging-badge main-aging-badge--warn">{AGING_WARN_DAYS}일 이상 {warnCount}건</span>
@@ -721,6 +725,7 @@ function TabPurchases() {
           매입 등록
         </button>
         <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('purchases', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
         open={showForm}
@@ -1278,6 +1283,7 @@ function TabSales() {
         <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
           거래명세서
         </button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('sales', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
       <Modal
@@ -1746,6 +1752,7 @@ function TabPayments() {
         </label>
         <label>거래처 <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}><option value="">전체</option>{partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('payments', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
@@ -2190,6 +2197,7 @@ function TabDisposals() {
         <button type="button" className="main-btn" onClick={openDisposalModal}>
           폐기 등록
         </button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('disposals', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
         open={showDisposalModal}
@@ -2417,6 +2425,8 @@ function TabDailyTrade() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [reportDate, setReportDate] = useState(today());
+  /** T-204 CSV 일자 = 마지막으로 검색한 일자(검색 후 달력만 바꾼 경우 화면 표와 달라지지 않게) */
+  const [loadedDate, setLoadedDate] = useState(today());
   /** 기본 전체: 빈 값이면 모든 거래처(구입처·판매처) 행 표시 */
   const [partnerId, setPartnerId] = useState('');
   /** T-202 이익률(%) — 원가를 아는 매출액 대비. 원가 아는 매출이 없으면 null */
@@ -2432,6 +2442,7 @@ function TabDailyTrade() {
     setLoading(true);
     setErr('');
     const d = sanitizeYmd(reportDate, today());
+    setLoadedDate(d);
     const params = { from_date: d, to_date: d };
     if (partnerId) params.partner_id = partnerId;
     Promise.all([fetchDailyPurchaseSales(params), fetchDailyPurchaseSalesBreakdown(params)])
@@ -2522,6 +2533,17 @@ function TabDailyTrade() {
         </label>
         <button type="button" className="main-btn main-btn--secondary" onClick={load}>
           검색
+        </button>
+        <button
+          type="button"
+          className="main-btn main-btn--secondary"
+          disabled={loading || breakdown.length === 0}
+          title="지금 화면의 상품·거래처별 내역(마지막 검색 결과)을 저장합니다"
+          onClick={() => {
+            downloadListCsv('dailyTrade', breakdown.map((r) => ({ ...r, __date: loadedDate })), { date: loadedDate });
+          }}
+        >
+          엑셀(CSV) 다운로드
         </button>
         <span className="main-modal-hint main-daily-trade-hint">
           하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다. 원가는 그 매출에 배분된 매입의 단가 × 수량, 이익 = 매출액 − 원가, 이익률 = 이익 ÷ 매출액입니다(환불은 차감하지 않음).
