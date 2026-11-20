@@ -26,6 +26,7 @@ import TabPartners, { PartnerFormModal } from './TabPartners';
 import TabDashboard from './TabDashboard';
 import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
+import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
 import { PersonalProductModal, ProductRequestAdminPanel, productOptionLabel } from './ProductRequest';
 import {
   RowActionMenu,
@@ -401,22 +402,57 @@ function TabReorder() {
   // T-205 재고에서 바로 판매: 모달을 연 재고 행, 저장 알림
   const [sellRow, setSellRow] = useState(null);
   const [sellNotice, setSellNotice] = useState('');
-  const loadInventory = (quiet) => {
+  // T-211 검색(서버: 품목·출처·최근 매입 거래처)과 페이지(화면에서 50건씩).
+  // 재고는 품목 수만큼만 행이 생겨 전체를 받아도 작고, 경과일 주의·경고 건수를 검색 결과 전체로 세기 위해 화면에서 나눈다.
+  const [partners, setPartners] = useState([]);
+  const [partnerFilter, setPartnerFilter] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [invOffset, setInvOffset] = useState(0);
+  const [appliedParams, setAppliedParams] = useState({});
+  const buildParams = () => {
+    const params = {};
+    if (partnerFilter) params.partner_id = partnerFilter;
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
+  };
+  const loadInventory = (quiet, params = appliedParams) => {
     if (!quiet) setLoading(true);
     setErr('');
-    return fetchInventory()
-      .then(setList)
+    return fetchInventory(params)
+      .then((rows) => {
+        setList(rows);
+        // 판매 뒤 행이 줄어 지금 쪽이 비면 마지막 쪽으로
+        setInvOffset((o) => (o >= rows.length ? Math.max(0, Math.floor((rows.length - 1) / PAGE_SIZE) * PAGE_SIZE) : o));
+      })
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
   };
+  const runSearch = () => {
+    const params = buildParams();
+    setAppliedParams(params);
+    setInvOffset(0);
+    return loadInventory(false, params);
+  };
   useEffect(() => {
     loadInventory();
+    fetchPartners().then(setPartners).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 1회
   }, []);
-  if (loading) return <p className="main-loading">불러오는 중…</p>;
-  if (err) return <p className="main-error">{err}</p>;
-  if (list.length === 0) return <p className="main-empty">등록된 재고가 없습니다.</p>;
+  const filtered = Object.keys(appliedParams).length > 0;
+  const pageRows = list.slice(invOffset, invOffset + PAGE_SIZE);
   const dangerCount = list.filter((row) => agingLevel(row.aging_days) === 'danger').length;
   const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
+  const filterBar = (
+    <div className="main-filters">
+      <label>매입 거래처 <select value={partnerFilter} onChange={(e) => setPartnerFilter(e.target.value)}><option value="">전체</option>{partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      <SearchTextField id="inv-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·출처·거래처" />
+      <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+      <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('inventory', list)} disabled={loading || list.length === 0} title="검색 조건에 맞는 전체 재고(모든 페이지)를 저장합니다">엑셀(CSV) 다운로드</button>
+    </div>
+  );
+  if (loading) return <>{filterBar}<p className="main-loading">불러오는 중…</p></>;
+  if (err) return <>{filterBar}<p className="main-error">{err}</p></>;
+  if (list.length === 0) return <>{filterBar}<p className="main-empty">{filtered ? '검색 조건에 맞는 재고가 없습니다.' : '등록된 재고가 없습니다.'}</p></>;
   return (
     <>
       <CorrectionNotice text={sellNotice} onClear={() => setSellNotice('')} />
@@ -430,14 +466,13 @@ function TabReorder() {
           }}
         />
       )}
-      <div className="main-filters main-filters--csv-only">
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('inventory', list)}>엑셀(CSV) 다운로드</button>
-      </div>
+      {filterBar}
       <div className="main-aging-summary" role="status">
         <span className="main-aging-badge main-aging-badge--danger">{AGING_DANGER_DAYS}일 이상 {dangerCount}건</span>
         <span className="main-aging-badge main-aging-badge--warn">{AGING_WARN_DAYS}일 이상 {warnCount}건</span>
         <span className="main-modal-hint">경과일 = 오늘 − 남은 재고 중 가장 오래된 매입일 (먼저 들어온 물건부터 나간다고 보고 계산)</span>
       </div>
+      <Pager total={list.length} offset={invOffset} count={pageRows.length} loading={loading} onPage={setInvOffset} />
       <div className="main-table-wrap">
         <table className="main-table main-table--cards">
           <thead>
@@ -454,7 +489,7 @@ function TabReorder() {
             </tr>
           </thead>
           <tbody>
-            {list.map((row) => {
+            {pageRows.map((row) => {
               const level = agingLevel(row.aging_days);
               const days = Number(row.aging_days);
               return (
@@ -495,14 +530,16 @@ function TabReorder() {
 }
 
 function TabPurchases({ onNavigate } = {}) {
-  const [list, setList] = useState([]);
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('purchases');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
+  const [partnerFilter, setPartnerFilter] = useState('');
   // 정정(T-103): { type: 'edit' | 'cancel', row } | null, 성공 알림
   const [correction, setCorrection] = useState(null);
   const [correctionNotice, setCorrectionNotice] = useState('');
   const [products, setProducts] = useState([]);
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [productId, setProductId] = useState('');
@@ -590,27 +627,31 @@ function TabPurchases({ onNavigate } = {}) {
     if (row) suggestUnitPrice(row.key, String(p.id), row.partner_id);
   };
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {
       from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
       to_date: sanitizeYmd(toDate, today()),
     };
     if (productId) params.product_id = productId;
     if (unpaidOnly) params.unpaid_only = 1; // T-201: 기간과 상관없이 미지급·일부 매입 전체
-    fetchPurchases(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (partnerFilter) params.partner_id = partnerFilter;
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  /** 검색 버튼·Enter — 새 조건으로 첫 페이지 */
+  const runSearch = () => {
+    setSelected({});
+    return paged.search(buildParams());
+  };
+  /** 등록·정정 뒤 — 마지막 검색 조건으로 지금 페이지 다시 */
+  const load = () => paged.reload();
   useEffect(() => {
     fetchProducts().then(setProducts).catch(() => {});
     fetchPartners().then(setPartners).catch(() => {});
     loadRecentPartners();
   }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
@@ -818,7 +859,9 @@ function TabPurchases({ onNavigate } = {}) {
           <DateSearchField value={toDate} onChange={setToDate} id="pur-to" />
         </label>
         <label>제품 <select value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">전체</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
+        <label>거래처 <select value={partnerFilter} onChange={(e) => setPartnerFilter(e.target.value)}><option value="">전체</option>{purchasePartners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <SearchTextField id="pur-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·출처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
         <button
           type="button"
           className="main-btn"
@@ -848,7 +891,7 @@ function TabPurchases({ onNavigate } = {}) {
         >
           지급 등록
         </button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('purchases', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('purchases', fetchPurchases)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
         open={showForm}
@@ -1126,6 +1169,7 @@ function TabPurchases({ onNavigate } = {}) {
           </div>
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">매입 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
           <table className="main-table main-table--cards">
@@ -1242,10 +1286,11 @@ function TabPurchases({ onNavigate } = {}) {
 }
 
 function TabSales({ navFilter } = {}) {
-  const [list, setList] = useState([]);
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('sales');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
   // 매입 취소가 연결 매출로 막혀 넘어온 경우(T-103) 그 기간·판매처로 시작
   const [fromDate, setFromDate] = useState(() => navFilter?.from_date || firstDayOfMonth());
   const [toDate, setToDate] = useState(() => navFilter?.to_date || today());
@@ -1275,22 +1320,20 @@ function TabSales({ navFilter } = {}) {
   /** [saleId]: { quantity, reasonCode, reasonOther } */
   const [refundDraft, setRefundDraft] = useState({});
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
     if (partnerId) params.partner_id = partnerId;
     if (!showAllSales) params.paid_only = '1';
-    fetchSales(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
+  const load = () => paged.reload();
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
@@ -1520,7 +1563,8 @@ function TabSales({ navFilter } = {}) {
           <input type="checkbox" checked={showAllSales} onChange={(e) => setShowAllSales(e.target.checked)} />
           미수·일부 포함
         </label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
+        <SearchTextField id="sale-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·거래처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
         <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>
         <button type="button" className="main-btn main-btn--secondary" onClick={openRefundModal}>
           환불 처리
@@ -1528,7 +1572,7 @@ function TabSales({ navFilter } = {}) {
         <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
           거래명세서
         </button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('sales', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('sales', fetchSales)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
       <Modal
@@ -1922,6 +1966,7 @@ function TabSales({ navFilter } = {}) {
           )}
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? (
         <p className="main-loading">불러오는 중…</p>
       ) : err ? (
@@ -2007,28 +2052,26 @@ function TabSales({ navFilter } = {}) {
 }
 
 function TabPayments() {
-  const [list, setList] = useState([]);
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('payments');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [partnerId, setPartnerId] = useState('');
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
     if (partnerId) params.partner_id = partnerId;
-    fetchPayments(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
   return (
@@ -2039,9 +2082,11 @@ function TabPayments() {
           <DateSearchField value={toDate} onChange={setToDate} id="pay-to" />
         </label>
         <label>거래처 <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}><option value="">전체</option>{partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('payments', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <SearchTextField id="pay-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="메모·거래처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('payments', fetchPayments)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
           <table className="main-table main-table--cards">
@@ -2298,9 +2343,10 @@ function TabProductMaster() {
 }
 
 function TabDisposals() {
-  const [list, setList] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
+  // T-211 목록 검색·페이지(서버 limit/offset) — 폐기는 거래처가 없어 텍스트 검색만
+  const paged = usePagedList('disposals');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [inventoryForDisposal, setInventoryForDisposal] = useState([]);
@@ -2314,19 +2360,17 @@ function TabDisposals() {
   const [submitting, setSubmitting] = useState(false);
   const [showDisposalModal, setShowDisposalModal] = useState(false);
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
-    fetchDisposals(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
+  const load = () => paged.reload();
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
@@ -2486,11 +2530,12 @@ function TabDisposals() {
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="disp-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="disp-to" />
         </label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
+        <SearchTextField id="disp-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·사유·메모" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
         <button type="button" className="main-btn" onClick={openDisposalModal}>
           폐기 등록
         </button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('disposals', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('disposals', fetchDisposals)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
         open={showDisposalModal}
@@ -2681,6 +2726,7 @@ function TabDisposals() {
           )}
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">폐기 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
           <table className="main-table main-table--cards">

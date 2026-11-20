@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { getPgConfig } = require('./lib/db-config');
 const { sendMail, configuredProviders } = require('./lib/mailer');
 const authToken = require('./lib/auth-token');
+const { parseListOptions, searchClause, runList } = require('./lib/list-query'); // T-211 목록 검색·페이지
 const { Pool } = require('pg');
 
 // ---------- 입력값 검증 ----------
@@ -837,11 +838,23 @@ registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, parsePaidA
 //   남은 재고 = 매출로 배분되지 않은 매입 묶음(purchase.quantity − purchase_allocation 합).
 //   폐기·환불은 매입 묶음을 줄이거나 늘리지 않으므로, 최근 매입부터 재고 수량만큼만 남아 있다고 보고
 //   (오래된 것부터 나간다고 가정) 그 범위에서 가장 오래된 매입일을 쓴다. 남은 묶음이 없으면(환불로만 생긴 재고 등) 마지막 매입일.
+// T-211: q(품목·출처·최근 매입 거래처), partner_id(최근 매입 거래처), limit·offset — 없으면 예전과 같은 전체 목록
 app.get('/api/inventory', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const opts = parseListOptions(req.query);
+  if (opts.error) return res.status(400).json(opts.error);
+  const partnerFilter = req.query.partner_id ? parsePositiveIdParam(req.query.partner_id) : null;
+  if (req.query.partner_id && !partnerFilter) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'partner_id', message: '거래처 번호가 올바르지 않습니다.' });
+  }
   try {
-    const r = await pool.query(
+    const params = [userId, kstToday()];
+    let where = '';
+    if (partnerFilter) { params.push(partnerFilter); where += ` AND lp.partner_id = $${params.length}`; }
+    where += searchClause(opts, params, ['p.name', 'lp.source_name', 'pt.name']);
+    const payload = await runList(
+      pool,
       `SELECT i.id, i.product_id, i.quantity, i.updated_at, p.name AS product_name, p.unit,
               lp.purchase_date AS last_purchase_date,
               lp.created_at AS last_purchase_created_at,
@@ -886,11 +899,12 @@ app.get('/api/inventory', async (req, res) => {
          WHERE v.user_id = i.user_id AND v.product_id = i.product_id
        ) fl ON true
        LEFT JOIN account pt ON pt.id = lp.partner_id AND pt.user_id = i.user_id
-       WHERE i.user_id = $1 AND i.quantity > 0
-       ORDER BY p.name`,
-      [userId, kstToday()]
+       WHERE i.user_id = $1 AND i.quantity > 0${where}`,
+      params,
+      ' ORDER BY p.name, i.id',
+      opts
     );
-    res.json({ ok: true, data: r.rows });
+    res.json(payload);
   } catch (err) {
     console.error('Inventory error:', err);
     res.status(500).json({ ok: false, message: err.message || '재고현황을 불러오지 못했습니다.' });
@@ -910,6 +924,8 @@ app.get('/api/purchases', async (req, res) => {
   if (req.query.partner_id && !partnerFilter) {
     return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'partner_id', message: '거래처 번호가 올바르지 않습니다.' });
   }
+  const opts = parseListOptions(req.query); // T-211: q(품목·메모·출처·거래처), limit·offset
+  if (opts.error) return res.status(400).json(opts.error);
   try {
     let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
              pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
@@ -938,9 +954,9 @@ app.get('/api/purchases', async (req, res) => {
       params.push(productId);
       q += ` AND pu.product_id = $${params.length}`;
     }
-    q += unpaidOnly ? ' ORDER BY pu.purchase_date, pu.id' : ' ORDER BY pu.purchase_date DESC, pu.id DESC';
-    const r = await pool.query(q, params);
-    res.json({ ok: true, data: r.rows });
+    q += searchClause(opts, params, ['p.name', 'pu.memo', 'pu.source_name', 'pt.name']);
+    const orderBy = unpaidOnly ? ' ORDER BY pu.purchase_date, pu.id' : ' ORDER BY pu.purchase_date DESC, pu.id DESC';
+    res.json(await runList(pool, q, params, orderBy, opts));
   } catch (err) {
     console.error('Purchases error:', err);
     res.status(500).json({ ok: false, message: err.message || '매입정보를 불러오지 못했습니다.' });
@@ -1050,6 +1066,8 @@ app.get('/api/sales', async (req, res) => {
   const unpaidOnly = req.query.unpaid_only === '1' || req.query.unpaid_only === 'true';
   const paidOnly = req.query.paid_only === '1' || req.query.paid_only === 'true';
   const refundableOnly = req.query.refundable_only === '1' || req.query.refundable_only === 'true';
+  const opts = parseListOptions(req.query); // T-211: q(품목·메모·거래처), limit·offset
+  if (opts.error) return res.status(400).json(opts.error);
   try {
     let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.status, s.memo,
@@ -1081,9 +1099,8 @@ app.get('/api/sales', async (req, res) => {
       if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
     }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND s.partner_id = $${params.length}`; }
-    q += ' ORDER BY s.sale_date DESC, s.id DESC';
-    const r = await pool.query(q, params);
-    res.json({ ok: true, data: r.rows });
+    q += searchClause(opts, params, ['p.name', 's.memo', 'pt.name']);
+    res.json(await runList(pool, q, params, ' ORDER BY s.sale_date DESC, s.id DESC', opts));
   } catch (err) {
     console.error('Sales error:', err);
     res.status(500).json({ ok: false, message: err.message || '매출정보를 불러오지 못했습니다.' });
@@ -1340,6 +1357,8 @@ app.get('/api/payments', async (req, res) => {
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
+  const opts = parseListOptions(req.query); // T-211: q(메모·거래처), limit·offset
+  if (opts.error) return res.status(400).json(opts.error);
   try {
     let q = `SELECT py.id, py.paid_at, py.created_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name
              FROM payment py
@@ -1351,9 +1370,8 @@ app.get('/api/payments', async (req, res) => {
     if (from) { params.push(from); q += ` AND py.paid_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Asia/Seoul')`; }
     if (to) { params.push(to); q += ` AND py.paid_at < (($${params.length}::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')`; }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND py.partner_id = $${params.length}`; }
-    q += ' ORDER BY py.paid_at DESC, py.id DESC';
-    const r = await pool.query(q, params);
-    res.json({ ok: true, data: r.rows });
+    q += searchClause(opts, params, ['py.memo', 'pt.name']);
+    res.json(await runList(pool, q, params, ' ORDER BY py.paid_at DESC, py.id DESC', opts));
   } catch (err) {
     console.error('Payments error:', err);
     res.status(500).json({ ok: false, message: err.message || '수금정보를 불러오지 못했습니다.' });
@@ -2800,6 +2818,8 @@ app.get('/api/disposals', async (req, res) => {
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
+  const opts = parseListOptions(req.query); // T-211: q(품목·사유·메모), limit·offset (폐기는 거래처 없음)
+  if (opts.error) return res.status(400).json(opts.error);
   try {
     let q = `SELECT d.id, d.disposal_date, d.created_at, d.quantity, d.reason, d.memo, p.name AS product_name, p.unit
              FROM disposal d JOIN product p ON p.id = d.product_id WHERE d.user_id = $1`;
@@ -2812,9 +2832,8 @@ app.get('/api/disposals', async (req, res) => {
       params.push(to);
       q += ` AND d.disposal_date <= $${params.length}`;
     }
-    q += ' ORDER BY d.disposal_date DESC, d.id DESC';
-    const r = await pool.query(q, params);
-    res.json({ ok: true, data: r.rows });
+    q += searchClause(opts, params, ['p.name', 'd.reason', 'd.memo']);
+    res.json(await runList(pool, q, params, ' ORDER BY d.disposal_date DESC, d.id DESC', opts));
   } catch (err) {
     console.error('GET disposals error:', err);
     res.status(500).json({ ok: false, message: err.message || '폐기 목록을 불러오지 못했습니다.' });
