@@ -8,26 +8,11 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 
+// 접속 설정은 서버와 같은 lib/db-config.js — 예전 자체 설정은 NODE_ENV=production 이 아니면 SSL 없이 붙어
+// sslmode=require 인 Neon·Supabase URL에서 실패했다 (O-03)
+const { getPgConfig } = require('../lib/db-config');
 function getPoolConfig() {
-  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
-  if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
-    const u = new URL(raw);
-    return {
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 5432,
-      user: u.username || undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-      database: u.pathname ? u.pathname.slice(1).replace(/\?.*$/, '') : undefined,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
-    };
-  }
-  return {
-    host: process.env.PG_HOST || 'localhost',
-    port: Number(process.env.PG_PORT) || 5432,
-    user: process.env.PG_USER || 'postgres',
-    password: process.env.PG_PASSWORD != null ? String(process.env.PG_PASSWORD) : undefined,
-    database: process.env.PG_DATABASE || 'sales_tool',
-  };
+  return getPgConfig();
 }
 
 const SAMPLE = {

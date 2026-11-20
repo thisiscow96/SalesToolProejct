@@ -43,6 +43,18 @@ app.use((req, res, next) => {
 const pool = new Pool(getPgConfig({ pool: true }));
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
+// 트랜잭션용 연결 얻기 — 연결 대기 시간 초과(Neon이 깨어나는 중, 풀이 가득 참) 때 처리되지 않은 Promise 거부로
+// 서버 프로세스가 죽지 않게 503으로 응답한다 (T-03)
+async function connectOr503(res) {
+  try {
+    return await pool.connect();
+  } catch (err) {
+    console.error('[DB] connect error:', err.message);
+    res.status(503).json({ ok: false, message: 'DB 연결이 잠시 원활하지 않습니다. 잠시 후 다시 시도해 주세요.' });
+    return null;
+  }
+}
+
 // 이메일 발송 — lib/mailer.js (Resend → Brevo → SMTP 순서로 무료 한도를 이어 씀)
 async function sendVerificationEmail(email, code) {
   const text = `판매툴 인증\n\n인증번호 : ${code}\n\n5분 안에 입력해 주세요.`;
@@ -229,9 +241,8 @@ app.get('/', (req, res) => {
 // DB 연결 확인용 API
 app.get('/health', async (req, res) => {
   try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT NOW() as now');
-    client.release();
+    // pool.query 는 오류가 나도 연결을 반납한다 (D-04)
+    const result = await pool.query('SELECT NOW() as now');
     res.json({
       ok: true,
       db: 'connected',
@@ -294,11 +305,15 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
     const r = await pool.query('SELECT 1 FROM "user" WHERE LOWER(email) = $1', [emailLower]);
     if (r.rows.length > 0) return res.status(409).json({ ok: false, message: '이미 가입된 이메일입니다.' });
     verifyFails.delete(emailLower);
+    // 만료된 지 하루 넘은 인증번호는 쓸 일이 없으므로 발송할 때마다 정리 (D-10, 무료 DB 용량)
+    // 가입은 인증 후 15분 안에만 가능하므로 하루 지난 행은 가입 확인에도 쓰이지 않는다
+    await pool.query(`DELETE FROM email_verification WHERE expires_at < NOW() - INTERVAL '1 day'`).catch((e) => console.error('email_verification 정리 실패:', e.message));
     const code = String(crypto.randomInt(100000, 1000000)); // 예측 어려운 난수
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    // 이메일은 소문자로 저장·조회 — 발송·확인·가입에서 대소문자를 다르게 입력해도 같은 인증으로 본다 (D-09)
     await pool.query(
       `INSERT INTO email_verification (email, code, expires_at) VALUES ($1, $2, $3)`,
-      [email, code, expiresAt]
+      [emailLower, code, expiresAt]
     );
     let sendResult;
     try {
@@ -332,13 +347,13 @@ app.post('/api/auth/verify-email-code', async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT id FROM email_verification WHERE email = $1 AND code = $2 AND expires_at > NOW() AND verified_at IS NULL ORDER BY created_at DESC LIMIT 1`,
-      [email, code]
+      [failKey, code]
     );
     if (r.rows.length === 0) {
       const n = (verifyFails.get(failKey) || 0) + 1;
       verifyFails.set(failKey, n);
       if (n >= VERIFY_MAX_FAILS) {
-        await pool.query(`UPDATE email_verification SET expires_at = NOW() WHERE email = $1 AND verified_at IS NULL`, [email]);
+        await pool.query(`UPDATE email_verification SET expires_at = NOW() WHERE email = $1 AND verified_at IS NULL`, [failKey]);
         return res.status(429).json({ ok: false, message: '인증번호를 5회 잘못 입력했습니다. 인증번호를 다시 받아 주세요.' });
       }
       return res.status(400).json({ ok: false, message: `인증번호가 맞지 않거나 만료되었습니다. (남은 시도 ${VERIFY_MAX_FAILS - n}회)` });
@@ -363,17 +378,19 @@ app.post('/api/auth/register', async (req, res) => {
   // 휴대폰번호는 선택 항목 (보내면 형식만 확인해 저장, 없으면 NULL — migrations/008)
   if (phone?.trim() && !isValidPhone(phone)) return res.status(400).json({ ok: false, message: '휴대폰번호 형식이 올바르지 않습니다.' });
   const phoneNorm = phone?.trim() ? normalizePhone(phone) : null;
-  const client = await pool.connect();
+  // 회원 행과 약관 동의 행을 한 트랜잭션으로 — 둘 중 하나만 남지 않게 (T-01)
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
     const v = await client.query(
       `SELECT 1 FROM email_verification WHERE email = $1 AND verified_at IS NOT NULL AND verified_at > NOW() - INTERVAL '15 minutes' LIMIT 1`,
-      [email.trim()]
+      [email.trim().toLowerCase()]
     );
     if (v.rows.length === 0) {
-      client.release();
       return res.status(400).json({ ok: false, message: '이메일 인증을 먼저 완료해 주세요. (인증번호 발송 후 5분 안에 입력)' });
     }
     const hash = await bcrypt.hash(String(password), 10);
+    await client.query('BEGIN');
     const r = await client.query(
       `INSERT INTO "user" (name, phone, email, agent_no, password_hash, terms_agreed_at, status)
        VALUES ($1, $2, $3, $4, $5, NOW(), 'active')
@@ -385,35 +402,37 @@ app.post('/api/auth/register', async (req, res) => {
       `INSERT INTO terms_agreement (user_id, terms_type, agreed_at) VALUES ($1, 'privacy', NOW())`,
       [user.id]
     );
-    client.release();
+    await client.query('COMMIT');
     res.json({ ok: true, user: { id: user.id, user_key: user.user_key, name: user.name, email: user.email, agent_no: user.agent_no } });
   } catch (err) {
-    client.release();
+    await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') {
-      const msg = err.constraint === 'user_email_key' ? '이미 사용 중인 이메일입니다.'
+      const msg = err.constraint === 'user_email_key' || err.constraint === 'ux_user_email_lower' ? '이미 사용 중인 이메일입니다.'
         : err.constraint === 'user_phone_key' ? '이미 사용 중인 휴대폰번호입니다.'
         : err.constraint === 'user_agent_no_key' ? '이미 사용 중인 중매인 번호입니다.' : '이미 등록된 정보가 있습니다.';
       return res.status(409).json({ ok: false, message: msg });
     }
     console.error('Register error:', err);
     res.status(500).json({ ok: false, message: '회원가입 처리 중 오류가 발생했습니다.' });
+  } finally {
+    client.release();
   }
 });
 
 // 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 반환)
 app.post('/api/auth/login', async (req, res) => {
   const { agent_no, password } = req.body || {};
-  console.log('[login] body =', req.body);
+  // 요청 본문 전체(비밀번호 포함)를 로그에 남기지 않는다 (S-01) — 중매인 번호만 기록
+  console.log('[login] agent_no =', String(agent_no ?? '').trim().slice(0, 50));
   if (!agent_no || password === undefined) {
     return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
   try {
-    const client = await pool.connect();
-    const r = await client.query(
+    // pool.query 는 조회 오류가 나도 연결을 반납한다 — 예전 코드는 오류 시 release 를 건너뛰어 5번이면 풀이 바닥났다 (D-04)
+    const r = await pool.query(
       `SELECT id, user_key, name, agent_no, password_hash, status, is_admin FROM "user" WHERE agent_no = $1`,
       [String(agent_no).trim()]
     );
-    client.release();
     const row = r.rows[0];
     if (!row) {
       return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
@@ -500,7 +519,8 @@ app.post('/api/products', async (req, res) => {
   if (!auth.isAdmin) return res.status(403).json({ ok: false, message: '관리자만 등록할 수 있습니다.' });
   const { name, unit, category_large, category_mid, category_small, memo } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ ok: false, message: '상품명을 입력하세요.' });
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
     const productKey = await generateProductKey(client);
     const r = await client.query(
@@ -526,8 +546,11 @@ app.post('/api/products/bulk', async (req, res) => {
   const products = Array.isArray(req.body?.products) ? req.body.products : [];
   if (products.length === 0) return res.status(400).json({ ok: false, message: '등록할 상품 목록을 입력하세요.' });
   const created = [];
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
+    // 중간에 한 건이 실패하면 앞 건들만 등록되어 남지 않게 전체를 한 트랜잭션으로 (T-02)
+    await client.query('BEGIN');
     for (const p of products) {
       const name = (p.name != null && String(p.name)).trim();
       if (!name) continue;
@@ -548,12 +571,14 @@ app.post('/api/products/bulk', async (req, res) => {
       );
       created.push(r.rows[0]);
     }
-    client.release();
+    await client.query('COMMIT');
     res.status(201).json({ ok: true, data: created, count: created.length });
   } catch (err) {
-    client.release();
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Product bulk create error:', err);
     res.status(500).json({ ok: false, message: err.message || '다건 등록에 실패했습니다.' });
+  } finally {
+    client.release();
   }
 });
 
@@ -609,7 +634,7 @@ app.get('/api/inventory', async (req, res) => {
 app.get('/api/purchases', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = kstToday();
   const from = req.query.from_date || today;
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
@@ -833,8 +858,10 @@ app.get('/api/payments', async (req, res) => {
              JOIN account pt ON pt.id = py.partner_id
              WHERE py.user_id = $1`;
     const params = [userId];
-    if (from) { params.push(from); q += ` AND py.paid_at::date >= $${params.length}::date`; }
-    if (to) { params.push(to); q += ` AND py.paid_at::date <= $${params.length}::date`; }
+    // 수금일시는 timestamptz — 날짜 필터는 DB 세션 시간대(Neon 기본 UTC)와 상관없이 한국 날짜 기준 (D-05)
+    // 범위 비교라 (user_id, paid_at) 인덱스도 쓴다
+    if (from) { params.push(from); q += ` AND py.paid_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Asia/Seoul')`; }
+    if (to) { params.push(to); q += ` AND py.paid_at < (($${params.length}::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')`; }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND py.partner_id = $${params.length}`; }
     q += ' ORDER BY py.paid_at DESC, py.id DESC';
     const r = await pool.query(q, params);
@@ -878,31 +905,46 @@ async function syncSalePaymentStatus(client, saleId) {
   );
 }
 
+// 재고 증감 — 계산은 DB(NUMERIC)에서 한 문장으로 한다 (2026-11-20 DB 점검 D-01)
+// - 증가: INSERT … ON CONFLICT 로 "재고 행이 아직 없는 상품"에 동시 매입이 와도 중복 키 오류가 나지 않음
+// - 감소: 조건부 UPDATE 로 남은 재고가 모자라면 0행 → 재고 부족 (JS 부동소수 계산 없음)
 async function upsertInventoryDelta(client, userId, productId, delta) {
-  const existing = await client.query(
-    `SELECT quantity FROM inventory WHERE user_id = $1 AND product_id = $2 FOR UPDATE`,
-    [userId, productId]
+  const d = String(delta);
+  if (Number(d) > 0) {
+    await client.query(
+      `INSERT INTO inventory (user_id, product_id, quantity) VALUES ($1, $2, $3::numeric)
+       ON CONFLICT (user_id, product_id)
+       DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity, updated_at = NOW()`,
+      [userId, productId, d]
+    );
+    return;
+  }
+  const r = await client.query(
+    `UPDATE inventory SET quantity = quantity + $3::numeric, updated_at = NOW()
+     WHERE user_id = $1 AND product_id = $2 AND quantity + $3::numeric >= 0`,
+    [userId, productId, d]
   );
-  const cur = existing.rows[0] ? Number(existing.rows[0].quantity) : 0;
-  const next = cur + delta;
-  if (next < 0) {
+  if (r.rowCount === 0) {
     const e = new Error('재고가 부족합니다.');
     e.code = 'NEGATIVE_INVENTORY';
     throw e;
   }
-  if (existing.rows[0]) {
-    await client.query(
-      `UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE user_id = $2 AND product_id = $3`,
-      [next, userId, productId]
-    );
-  } else {
-    if (delta <= 0) {
-      const e = new Error('재고가 부족합니다.');
-      e.code = 'NEGATIVE_INVENTORY';
-      throw e;
-    }
-    await client.query(`INSERT INTO inventory (user_id, product_id, quantity) VALUES ($1,$2,$3)`, [userId, productId, next]);
-  }
+}
+
+// 수량(소수 3자리)·단가(2자리)를 컬럼과 같은 자릿수로 맞추고, 금액은 맞춘 값으로 DB에서 계산 (D-03)
+// 반환: { qty, price, total } — qty·total 은 NUMERIC 문자열(그대로 SQL에 넘김), 응답에는 Number(total)
+async function roundQtyPrice(client, quantity, unitPrice) {
+  const r = await client.query(
+    `SELECT ROUND($1::numeric, 3) AS qty, ROUND($2::numeric, 2) AS price,
+            ROUND(ROUND($1::numeric, 3) * ROUND($2::numeric, 2), 2) AS total`,
+    [String(quantity), String(unitPrice)]
+  );
+  return r.rows[0];
+}
+
+// 오늘 날짜(한국 시간) — 서버가 UTC로 돌아도 00~09시에 어제 날짜가 되지 않게 (D-06)
+function kstToday() {
+  return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 async function insertTransfer(client, row) {
@@ -945,19 +987,24 @@ app.post('/api/purchases', async (req, res) => {
   if (!Number.isFinite(pid) || !Number.isFinite(prid) || !(qty > 0) || !(up >= 0) || !purchase_date) {
     return res.status(400).json({ ok: false, message: '거래처·상품·수량·단가·매입일을 올바르게 입력하세요.' });
   }
-  const total = Math.round(qty * up * 100) / 100;
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
+    const n = await roundQtyPrice(client, quantity, unit_price);
+    if (!(Number(n.qty) > 0)) {
+      return res.status(400).json({ ok: false, message: '거래처·상품·수량·단가·매입일을 올바르게 입력하세요.' });
+    }
+    const total = Number(n.total);
     await client.query('BEGIN');
     const acc = await client.query(`SELECT id, type, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [pid, userId]);
     const a = acc.rows[0];
     if (!a || !PURCHASE_PARTNER_TYPES.has(a.type)) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '매입 가능한 거래처(공급/도매 등)를 선택하세요.' });
     }
     const pr = await client.query(`SELECT id FROM product WHERE id = $1`, [prid]);
     if (!pr.rows[0]) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
     }
     const src = source_name != null && String(source_name).trim() ? String(source_name).trim().slice(0, 200) : null;
@@ -965,15 +1012,15 @@ app.post('/api/purchases', async (req, res) => {
       `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id`,
-      [userId, pid, prid, qty, up, total, String(purchase_date).slice(0, 10), memo?.trim() || null, src]
+      [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src]
     );
     const purchaseId = ins.rows[0].id;
-    await upsertInventoryDelta(client, userId, prid, qty);
+    await upsertInventoryDelta(client, userId, prid, n.qty);
     const wh = await getUserWarehouseLabel(client, userId);
     await insertTransfer(client, {
       userId,
       productId: prid,
-      quantity: qty,
+      quantity: n.qty,
       actionType: 'purchase',
       fromType: 'supplier',
       toType: 'inventory',
@@ -987,7 +1034,7 @@ app.post('/api/purchases', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: { id: purchaseId, total_amount: total } });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('POST purchases error:', err);
     if (err.code === 'NEGATIVE_INVENTORY') {
       return res.status(400).json({ ok: false, message: err.message });
@@ -1004,21 +1051,37 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
   if (items.length === 0) return res.status(400).json({ ok: false, message: '전환할 매입 행을 입력하세요.' });
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   const created = [];
   try {
     await client.query('BEGIN');
     const wh = await getUserWarehouseLabel(client, userId);
+    // 교착 방지 (D-11): 이 요청이 건드릴 매입 행과 재고 행을 처음에 id 순서로 한꺼번에 잠근다.
+    // 여러 요청이 행 순서를 서로 반대로 보내도 잠그는 순서가 같아 deadlock 이 나지 않는다. (응답 순서는 요청 순서 그대로)
+    const lockIds = [...new Set(items.map((it) => parseInt(it.purchase_id, 10)).filter(Number.isFinite))];
+    if (lockIds.length) {
+      await client.query(`SELECT id FROM purchase WHERE user_id = $1 AND id = ANY($2::int[]) ORDER BY id FOR UPDATE`, [userId, lockIds]);
+      await client.query(
+        `SELECT product_id FROM inventory
+         WHERE user_id = $1 AND product_id IN (SELECT product_id FROM purchase WHERE user_id = $1 AND id = ANY($2::int[]))
+         ORDER BY product_id FOR UPDATE`,
+        [userId, lockIds]
+      );
+    }
     for (const it of items) {
       const purchaseId = parseInt(it.purchase_id, 10);
       const custId = parseInt(it.partner_id, 10);
-      const qty = Number(it.quantity);
-      const up = Number(it.unit_price);
+      const qtyIn = Number(it.quantity);
+      const upIn = Number(it.unit_price);
       const saleDate = it.sale_date;
       const smemo = it.memo?.trim() || null;
-      if (!Number.isFinite(purchaseId) || !Number.isFinite(custId) || !(qty > 0) || !(up >= 0) || !saleDate) {
+      if (!Number.isFinite(purchaseId) || !Number.isFinite(custId) || !(qtyIn > 0) || !(upIn >= 0) || !saleDate) {
         throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       }
+      const n = await roundQtyPrice(client, it.quantity, it.unit_price);
+      const qty = Number(n.qty);
+      if (!(qty > 0)) throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       const pu = await client.query(
         `SELECT id, partner_id, product_id, quantity FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [purchaseId, userId]
@@ -1034,24 +1097,23 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       const c = cust.rows[0];
       if (!c || !SALE_PARTNER_TYPES.has(c.type)) throw new Error('판매 가능한 거래처를 선택하세요.');
 
-      await upsertInventoryDelta(client, userId, p.product_id, -qty);
+      await upsertInventoryDelta(client, userId, p.product_id, `-${n.qty}`);
 
-      const totalAmt = Math.round(qty * up * 100) / 100;
       const saleIns = await client.query(
         `INSERT INTO sale (user_id, partner_id, product_id, quantity, unit_price, total_amount, sale_date, payment_status, paid_amount, status, memo)
          VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid',0,'active',$8)
          RETURNING id`,
-        [userId, custId, p.product_id, qty, up, totalAmt, String(saleDate).slice(0, 10), smemo]
+        [userId, custId, p.product_id, n.qty, n.price, n.total, String(saleDate).slice(0, 10), smemo]
       );
       const saleId = saleIns.rows[0].id;
       await client.query(
         `INSERT INTO purchase_allocation (user_id, purchase_id, sale_id, quantity) VALUES ($1,$2,$3,$4)`,
-        [userId, purchaseId, saleId, qty]
+        [userId, purchaseId, saleId, n.qty]
       );
       await insertTransfer(client, {
         userId,
         productId: p.product_id,
-        quantity: qty,
+        quantity: n.qty,
         actionType: 'sale',
         fromType: 'inventory',
         toType: 'customer',
@@ -1068,7 +1130,7 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: created });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('convert-to-sales error:', err);
     const msg = err.message || '매출 전환에 실패했습니다.';
     const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
@@ -1101,12 +1163,13 @@ app.post('/api/payments', async (req, res) => {
   if (kind === 'receive' && Math.abs(sumAlloc - amt) > 0.01) {
     return res.status(400).json({ ok: false, message: `배분 합계(${sumAlloc})가 수금액(${amt})과 일치해야 합니다.` });
   }
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
     await client.query('BEGIN');
     const acc = await client.query(`SELECT id, type FROM account WHERE id = $1 AND user_id = $2`, [pid, userId]);
     if (!acc.rows[0]) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '거래처를 찾을 수 없습니다.' });
     }
     const payIns = await client.query(
@@ -1127,6 +1190,11 @@ app.post('/api/payments', async (req, res) => {
         );
         const sale = s.rows[0];
         if (!sale || sale.partner_id !== pid) throw new Error(`매출 ${sid} 는 선택한 거래처와 맞지 않습니다.`);
+        // 과수금 방지 (D-02): 배분액이 이 매출의 남은 미수보다 크면 거절 — 화면(Main.jsx)과 같은 규칙, DB CHECK(009)도 같음
+        const dueCents = Math.round(Number(sale.total_amount) * 100) - Math.round(Number(sale.paid_amount) * 100);
+        if (Math.round(al * 100) > dueCents) {
+          throw new Error(`매출 ${sid} 의 남은 미수(${(dueCents / 100).toLocaleString('ko-KR')})보다 많이 배분할 수 없습니다.`);
+        }
         await client.query(`UPDATE sale SET paid_amount = paid_amount + $1, updated_at = NOW() WHERE id = $2`, [al, sid]);
         await syncSalePaymentStatus(client, sid);
         await client.query(`INSERT INTO payment_allocation (payment_id, sale_id, amount) VALUES ($1,$2,$3)`, [paymentId, sid, al]);
@@ -1135,7 +1203,7 @@ app.post('/api/payments', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: { id: paymentId } });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('POST payments error:', err);
     res.status(500).json({ ok: false, message: err.message || '수금 등록에 실패했습니다.' });
   } finally {
@@ -1159,7 +1227,8 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
   if (ra != null && (!Number.isFinite(ra) || ra < 0)) {
     return res.status(400).json({ ok: false, message: '환불금액이 올바르지 않습니다.' });
   }
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
     await client.query('BEGIN');
     const s = await client.query(
@@ -1168,22 +1237,22 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
     );
     const sale = s.rows[0];
     if (!sale) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(404).json({ ok: false, message: '매출을 찾을 수 없습니다.' });
     }
     if (sale.status === 'cancelled') {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '이미 취소된 매출입니다.' });
     }
     const rf = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM refund WHERE sale_id = $1`, [saleId]);
     const already = Number(rf.rows[0].s);
     const maxQty = Number(sale.quantity) - already;
     if (qty > maxQty + 1e-9) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: `환불 가능 수량은 최대 ${maxQty} 입니다.` });
     }
     const wh = await getUserWarehouseLabel(client, userId);
-    const cust = await client.query(`SELECT id, name, location, address FROM account WHERE id = $1`, [sale.partner_id]);
+    const cust = await client.query(`SELECT id, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [sale.partner_id, userId]);
     const c = cust.rows[0];
     await upsertInventoryDelta(client, userId, sale.product_id, qty);
     const refIns = await client.query(
@@ -1226,7 +1295,7 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: { refund_id: refundId } });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('refund error:', err);
     const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
     res.status(code).json({ ok: false, message: err.message || '환불 처리에 실패했습니다.' });
@@ -1246,11 +1315,12 @@ app.post('/api/disposals', async (req, res) => {
   if (!Number.isFinite(prid) || !(qty > 0) || !ddate) {
     return res.status(400).json({ ok: false, message: '상품·수량·폐기일을 입력하세요.' });
   }
-  const client = await pool.connect();
+  const client = await connectOr503(res);
+  if (!client) return;
   try {
     await client.query('BEGIN');
     const wh = await getUserWarehouseLabel(client, userId);
-    await upsertInventoryDelta(client, userId, prid, -qty);
+    await upsertInventoryDelta(client, userId, prid, `-${qty}`);
     const dIns = await client.query(
       `INSERT INTO disposal (user_id, product_id, quantity, disposal_date, reason, memo)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -1274,7 +1344,7 @@ app.post('/api/disposals', async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: { id: disposalId } });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     console.error('disposal error:', err);
     const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
     res.status(code).json({ ok: false, message: err.message || '폐기 등록에 실패했습니다.' });

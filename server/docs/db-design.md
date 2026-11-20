@@ -292,3 +292,17 @@ purchases            sales ←—— payment_allocations ——→ payments
 - **거래처 타입**: 한 거래처가 구매처+판매처면 `partner_types` 배열 또는 별도 관계 테이블로 확장 가능.
 
 이 설계를 기준으로 PostgreSQL 테이블 DDL은 `schema-full.sql` 에 있습니다.
+
+---
+
+## 무결성·동시성 규칙 (2026-11-20, migrations/009 · DB 점검)
+
+- **금액·상태 CHECK**: `purchase`·`sale`의 `unit_price`·`total_amount` ≥ 0, `sale.status` ∈ (active, refunded, cancelled), `payment.entry_kind` ∈ (receive, refund), `product_daily_price` 단가 ≥ 0.
+- **과수금 금지**: `sale.paid_amount` ≤ `sale.total_amount` (DB CHECK + `POST /api/payments`에서 매출별 남은 미수 초과 배분 거절).
+- **회원 간 교차 참조 금지**: `(partner_id, user_id) → account(id, user_id)`, `(purchase_id|sale_id, user_id) → purchase|sale(id, user_id)` 복합 FK. 다른 회원의 거래처·매입·매출을 가리키는 행은 DB가 거절한다.
+- **이메일**: `LOWER(email)` UNIQUE(`ux_user_email_lower`). 인증번호(`email_verification.email`)는 소문자로 저장·조회, 만료 후 1일 지난 행은 인증번호 발송 때 정리.
+- **재고 증감**: 한 SQL 문장으로 계산(증가 `INSERT … ON CONFLICT DO UPDATE`, 감소 조건부 `UPDATE … WHERE quantity + Δ >= 0`). 수량은 소수 3자리, 단가 2자리로 맞춘 뒤 금액 = ROUND(수량 × 단가, 2)를 DB에서 계산.
+- **잠금 순서**: 매출 전환은 대상 매입 행 → 재고 행을 id 순으로 먼저 잠근다(교착 방지).
+- **시간대**: `payment.paid_at`(timestamptz) 날짜 필터는 한국 날짜 기준 범위식(`AT TIME ZONE 'Asia/Seoul'`). DB 세션 시간대(Neon 기본 UTC)와 무관.
+- **인덱스**: 목록·보고서는 모두 `user_id + 날짜` 조건 → `(user_id, purchase_date)`, `(user_id, sale_date)`, `(user_id, paid_at)`, `(user_id, disposal_date)`, 재고현황용 `(user_id, product_id, purchase_date DESC)`, 미수 부분 인덱스 `sale(user_id, partner_id) WHERE payment_status IN ('unpaid','partial')`. `user_id` 단독 인덱스는 제거.
+- **마이그레이션 실행**: 파일 하나를 한 트랜잭션으로 적용하고 advisory lock으로 동시 실행을 막는다. 기존 데이터가 새 제약을 어기면 NOT VALID로 남기고 NOTICE를 출력 — 위반 행을 정리한 뒤 `ALTER TABLE … VALIDATE CONSTRAINT …`.
