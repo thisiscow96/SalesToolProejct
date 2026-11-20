@@ -24,6 +24,25 @@ const AGING_BUCKETS = [
   { key: 'd91p', label: '90일 초과', min: 91, max: null },
 ];
 
+/**
+ * 미수 연령 대상 매출 CTE — 연령 API와 대시보드(T-208)가 같은 정의를 쓴다.
+ * 연령 대상 = 취소 안 된 매출 중 미수 > 0 (status='refunded'로 거르지 않음 — F-3). 기준일 = 매출일(RULE-04)
+ * 매개변수: $1 user_id · $2 기준일(KST 오늘, 'YYYY-MM-DD') · $3 partner_id(없으면 NULL)
+ */
+const RECEIVABLE_DUE_CTE = `
+        WITH due AS (
+          SELECT s.id, s.partner_id, s.sale_date, s.product_id, s.quantity,
+                 s.total_amount, s.returned_amount, s.paid_amount,
+                 (s.total_amount - s.returned_amount - s.paid_amount) AS due,
+                 GREATEST($2::date - s.sale_date, 0)                 AS days
+          FROM sale s
+          WHERE s.user_id = $1
+            AND s.status <> 'cancelled'
+            AND s.payment_status IN ('unpaid', 'partial')
+            AND s.total_amount - s.returned_amount - s.paid_amount > 0.005
+            AND ($3::int IS NULL OR s.partner_id = $3::int)
+        )`;
+
 /** 판매 가능한 거래처 유형(index.js SALE_PARTNER_TYPES와 같음). 그 밖(supplier)은 받을 돈 장부가 없다 — RULE-10 */
 const RECEIVABLE_PARTNER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
@@ -299,20 +318,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         const pr = await pool.query('SELECT id FROM account WHERE id = $1 AND user_id = $2', [partnerId, userId]);
         if (!pr.rows[0]) return res.status(404).json({ ok: false, code: 'NOT_FOUND', message: '거래처를 찾을 수 없습니다.' });
       }
-      // 연령 대상 = 취소 안 된 매출 중 미수 > 0 (status='refunded'로 거르지 않음 — F-3). 기준일 = 매출일(RULE-04)
-      const dueCte = `
-        WITH due AS (
-          SELECT s.id, s.partner_id, s.sale_date, s.product_id, s.quantity,
-                 s.total_amount, s.returned_amount, s.paid_amount,
-                 (s.total_amount - s.returned_amount - s.paid_amount) AS due,
-                 GREATEST($2::date - s.sale_date, 0)                 AS days
-          FROM sale s
-          WHERE s.user_id = $1
-            AND s.status <> 'cancelled'
-            AND s.payment_status IN ('unpaid', 'partial')
-            AND s.total_amount - s.returned_amount - s.paid_amount > 0.005
-            AND ($3::int IS NULL OR s.partner_id = $3::int)
-        )`;
+      const dueCte = RECEIVABLE_DUE_CTE;
       const r = await pool.query(
         `${dueCte}
          SELECT d.partner_id, a.name AS partner_name, a.type AS partner_type,
@@ -394,4 +400,4 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
   });
 }
 
-module.exports = { registerLedgerRoutes, AGING_BUCKETS, LEDGER_MAX_ROWS };
+module.exports = { registerLedgerRoutes, AGING_BUCKETS, LEDGER_MAX_ROWS, RECEIVABLE_DUE_CTE, RECEIVABLE_PARTNER_TYPES, money };
