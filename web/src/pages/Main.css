@@ -1744,3 +1744,92 @@ td.main-td-scroll.main-col-source {
     white-space: normal;
   }
 }
+
+/* =========================================================
+ * T-209 재고 경과일 — 배지·행 강조 (tokens.css 상태 색 사용)
+ * ========================================================= */
+.main-aging-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+
+.main-table th.main-col-aging,
+.main-table td.main-col-aging {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.main-aging-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+  border-radius: var(--radius-full);
+}
+
+.main-aging-badge--warn::before,
+.main-aging-badge--danger::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.main-aging-badge--warn {
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+}
+
+.main-aging-badge--danger {
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+}
+
+.main-table tbody tr.main-row-aging-danger > td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-danger);
+}
+
+.main-table tbody tr.main-row-aging-warn > td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-warning);
+}
+
+/* =========================================================
+ * T-202 일별 원가·이익 표시
+ * ========================================================= */
+.main-col-profit {
+  color: var(--c-success-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-col-profit.main-profit-negative {
+  color: var(--c-danger-text);
+}
+
+.main-profit-pct {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  opacity: 0.85;
+}
+
+.main-cost-missing {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-warning-text);
+  white-space: nowrap;
+}

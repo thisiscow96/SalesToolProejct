@@ -398,6 +398,17 @@ function newProductMasterRow() {
 }
 
 function TabReorder() {
+  // T-209 재고 경과일 기준 [가정]: 3일 이상 주의, 7일 이상 경고.
+  // 경과일은 서버가 계산(오늘 − 남은 재고 중 가장 오래된 매입일). 여기서는 색 단계만 정한다.
+  const AGING_WARN_DAYS = 3;
+  const AGING_DANGER_DAYS = 7;
+  const agingLevel = (days) => {
+    if (days == null || days === '' || !Number.isFinite(Number(days))) return null;
+    const n = Number(days);
+    if (n >= AGING_DANGER_DAYS) return 'danger';
+    if (n >= AGING_WARN_DAYS) return 'warn';
+    return 'ok';
+  };
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -412,33 +423,63 @@ function TabReorder() {
   if (loading) return <p className="main-loading">불러오는 중…</p>;
   if (err) return <p className="main-error">{err}</p>;
   if (list.length === 0) return <p className="main-empty">등록된 재고가 없습니다.</p>;
+  const dangerCount = list.filter((row) => agingLevel(row.aging_days) === 'danger').length;
+  const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
   return (
-    <div className="main-table-wrap">
-      <table className="main-table">
-        <thead>
-          <tr>
-            <th className="main-col-product">상품명</th>
-            <th className="main-col-source">출처</th>
-            <th className="main-col-partner">매입 거래처</th>
-            <th className="main-col-qty">수량</th>
-            <th>단위</th>
-            <th className="main-col-date">매입일</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((row) => (
-            <tr key={row.id}>
-              <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-              <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
-              <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
-              <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-              <td>{row.unit}</td>
-              <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
+    <>
+      <div className="main-aging-summary" role="status">
+        <span className="main-aging-badge main-aging-badge--danger">{AGING_DANGER_DAYS}일 이상 {dangerCount}건</span>
+        <span className="main-aging-badge main-aging-badge--warn">{AGING_WARN_DAYS}일 이상 {warnCount}건</span>
+        <span className="main-modal-hint">경과일 = 오늘 − 남은 재고 중 가장 오래된 매입일 (먼저 들어온 물건부터 나간다고 보고 계산)</span>
+      </div>
+      <div className="main-table-wrap">
+        <table className="main-table">
+          <thead>
+            <tr>
+              <th className="main-col-product">상품명</th>
+              <th className="main-col-source">출처</th>
+              <th className="main-col-partner">매입 거래처</th>
+              <th className="main-col-qty">수량</th>
+              <th>단위</th>
+              <th className="main-col-date">최근 매입일</th>
+              <th className="main-col-aging">경과일</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {list.map((row) => {
+              const level = agingLevel(row.aging_days);
+              const days = Number(row.aging_days);
+              return (
+                <tr
+                  key={row.id}
+                  className={level === 'danger' ? 'main-row-aging-danger' : level === 'warn' ? 'main-row-aging-warn' : undefined}
+                >
+                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
+                  <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
+                  <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td>{row.unit}</td>
+                  <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                  <td className="main-col-aging">
+                    {level ? (
+                      <span
+                        className={`main-aging-badge main-aging-badge--${level}`}
+                        title={`가장 오래된 남은 매입일 ${row.aging_base_date ? toYmd(row.aging_base_date) : '—'}`}
+                        aria-label={`경과 ${days}일${level === 'danger' ? ' (경고)' : level === 'warn' ? ' (주의)' : ''}`}
+                      >
+                        {days}일
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -2378,6 +2419,14 @@ function TabDailyTrade() {
   const [reportDate, setReportDate] = useState(today());
   /** 기본 전체: 빈 값이면 모든 거래처(구입처·판매처) 행 표시 */
   const [partnerId, setPartnerId] = useState('');
+  /** T-202 이익률(%) — 원가를 아는 매출액 대비. 원가 아는 매출이 없으면 null */
+  const marginPct = (profit, costedSales) => {
+    const cs = Number(costedSales) || 0;
+    if (!(cs > 0)) return null;
+    return ((Number(profit) || 0) / cs) * 100;
+  };
+  const formatPct = (v) => (v == null ? '—' : `${v.toFixed(1)}%`);
+  const profitClass = (v) => (v < 0 ? 'main-profit-negative' : '');
 
   const load = () => {
     setLoading(true);
@@ -2409,9 +2458,13 @@ function TabDailyTrade() {
         acc.sales += Number(r.sales_amount) || 0;
         acc.purchaseCount += Number(r.purchase_count) || 0;
         acc.salesCount += Number(r.sales_count) || 0;
+        acc.cost += Number(r.cost_amount) || 0;
+        acc.costedSales += Number(r.costed_sales_amount) || 0;
+        acc.profit += Number(r.profit_amount) || 0;
+        acc.costMissing += Number(r.cost_missing_count) || 0;
         return acc;
       },
-      { purchase: 0, sales: 0, purchaseCount: 0, salesCount: 0 },
+      { purchase: 0, sales: 0, purchaseCount: 0, salesCount: 0, cost: 0, costedSales: 0, profit: 0, costMissing: 0 },
     );
   }, [rows]);
 
@@ -2431,6 +2484,8 @@ function TabDailyTrade() {
           acc.salesAmt += amt;
           acc.salesLines += c;
           acc.receivable += rec;
+          acc.cost += Number(r.cost_sum) || 0;
+          acc.profit += Number(r.profit_sum) || 0;
         }
         return acc;
       },
@@ -2442,6 +2497,8 @@ function TabDailyTrade() {
         salesAmt: 0,
         salesLines: 0,
         receivable: 0,
+        cost: 0,
+        profit: 0,
       },
     );
   }, [breakdown]);
@@ -2467,7 +2524,7 @@ function TabDailyTrade() {
           검색
         </button>
         <span className="main-modal-hint main-daily-trade-hint">
-          하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다.
+          하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다. 원가는 그 매출에 배분된 매입의 단가 × 수량, 이익 = 매출액 − 원가, 이익률 = 이익 ÷ 매출액입니다(환불은 차감하지 않음).
         </span>
       </div>
       {loading ? (
@@ -2487,6 +2544,9 @@ function TabDailyTrade() {
                     <th className="main-col-qty">매입 건수</th>
                     <th className="main-col-amount">매출액</th>
                     <th className="main-col-qty">매출 건수</th>
+                    <th className="main-col-amount">매출 원가</th>
+                    <th className="main-col-amount">이익</th>
+                    <th className="main-col-qty">이익률</th>
                     <th className="main-col-amount">차이(매출−매입)</th>
                   </tr>
                 </thead>
@@ -2495,6 +2555,9 @@ function TabDailyTrade() {
                     const pa = Number(r.purchase_amount) || 0;
                     const sa = Number(r.sales_amount) || 0;
                     const diff = sa - pa;
+                    const cost = Number(r.cost_amount) || 0;
+                    const profit = Number(r.profit_amount) || 0;
+                    const missing = Number(r.cost_missing_count) || 0;
                     return (
                       <tr key={toYmd(r.date) || 'row'}>
                         <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
@@ -2502,6 +2565,16 @@ function TabDailyTrade() {
                         <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
                         <td className="num main-col-amount">{formatKoNumber(sa)}</td>
                         <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
+                        <td className="num main-col-amount">
+                          {formatKoNumber(cost)}
+                          {missing > 0 && (
+                            <span className="main-cost-missing" title="매입 배분이 없어 원가를 알 수 없는 매출 — 이익·이익률 계산에서 뺐습니다">
+                              원가 미확인 {formatKoNumber(missing)}건
+                            </span>
+                          )}
+                        </td>
+                        <td className={`num main-col-amount main-col-profit ${profitClass(profit)}`}>{formatKoNumber(profit)}</td>
+                        <td className={`num main-col-qty main-col-profit ${profitClass(profit)}`}>{formatPct(marginPct(profit, r.costed_sales_amount))}</td>
                         <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
                       </tr>
                     );
@@ -2515,6 +2588,9 @@ function TabDailyTrade() {
                       <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
                       <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
                       <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
+                      <td className="num main-col-amount">{formatKoNumber(totals.cost)}</td>
+                      <td className={`num main-col-amount main-col-profit ${profitClass(totals.profit)}`}>{formatKoNumber(totals.profit)}</td>
+                      <td className={`num main-col-qty main-col-profit ${profitClass(totals.profit)}`}>{formatPct(marginPct(totals.profit, totals.costedSales))}</td>
                       <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
                     </tr>
                   </tfoot>
@@ -2539,12 +2615,14 @@ function TabDailyTrade() {
                     <th className="main-col-qty main-col-qty--daily">수량</th>
                     <th className="main-col-amount">금액</th>
                     <th className="main-col-amount main-col-receivable">미수</th>
+                    <th className="main-col-amount">원가</th>
+                    <th className="main-col-amount">이익(률)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {breakdown.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="main-empty-cell">
+                      <td colSpan={9} className="main-empty-cell">
                         해당 일자·조건에 집계할 내역이 없습니다.
                       </td>
                     </tr>
@@ -2552,6 +2630,12 @@ function TabDailyTrade() {
                     breakdown.map((r) => {
                       const isPur = r.line_kind === 'purchase';
                       const rec = Number(r.receivable_sum) || 0;
+                      const lineCount = Number(r.line_count) || 0;
+                      const lineMissing = Number(r.cost_missing_count) || 0;
+                      const allMissing = !isPur && lineMissing > 0 && lineMissing >= lineCount;
+                      const lineProfit = Number(r.profit_sum) || 0;
+                      // 원가 미확인 매출이 섞이면 행 단위 이익률은 계산하지 않는다(분모를 행에서 나눌 수 없음)
+                      const linePct = isPur || lineMissing > 0 ? null : marginPct(lineProfit, r.amount_sum);
                       return (
                         <tr key={`${r.product_id}-${r.partner_id}-${r.line_kind}`}>
                           <td className="main-td-scroll main-col-product main-col-product--daily">
@@ -2573,6 +2657,24 @@ function TabDailyTrade() {
                           <td className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
                             {isPur ? '—' : formatKoNumber(rec)}
                           </td>
+                          <td className="num main-col-amount">
+                            {isPur ? '—' : allMissing ? (
+                              <span className="main-cost-missing">원가 미확인</span>
+                            ) : (
+                              <>
+                                {formatKoNumber(r.cost_sum)}
+                                {lineMissing > 0 && <span className="main-cost-missing">미확인 {formatKoNumber(lineMissing)}건 제외</span>}
+                              </>
+                            )}
+                          </td>
+                          <td className={`num main-col-amount main-col-profit ${isPur ? '' : profitClass(lineProfit)}`}>
+                            {isPur || allMissing ? '—' : (
+                              <>
+                                {formatKoNumber(lineProfit)}
+                                {linePct != null && <span className="main-profit-pct">{formatPct(linePct)}</span>}
+                              </>
+                            )}
+                          </td>
                         </tr>
                       );
                     })
@@ -2593,6 +2695,10 @@ function TabDailyTrade() {
                       </td>
                       <td className="num main-col-amount main-col-receivable main-receivable-positive">
                         {formatKoNumber(breakdownTotals.receivable)}
+                      </td>
+                      <td className="num main-col-amount">{formatKoNumber(breakdownTotals.cost)}</td>
+                      <td className={`num main-col-amount main-col-profit ${profitClass(breakdownTotals.profit)}`}>
+                        {formatKoNumber(breakdownTotals.profit)}
                       </td>
                     </tr>
                   </tfoot>
