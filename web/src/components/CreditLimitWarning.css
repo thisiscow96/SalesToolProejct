@@ -1,0 +1,98 @@
+/* 외상 한도 경고 (T-207) — 토큰만 사용(styles/tokens.css), 휴대폰에서는 버튼을 세로로 쌓는다 */
+.credit-warn {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--c-warning);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--c-warning-soft);
+  color: var(--c-text);
+}
+.credit-warn-title {
+  margin: 0 0 var(--sp-2);
+  font-weight: 700;
+  color: var(--c-warning-text);
+}
+.credit-warn-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+.credit-warn-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-14);
+}
+.credit-warn-nums {
+  font-variant-numeric: tabular-nums;
+}
+.credit-warn-over {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+  font-weight: 600;
+  font-size: var(--fs-13);
+}
+.credit-warn-sub,
+.credit-warn-hint {
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.credit-warn-hint {
+  margin: var(--sp-2) 0 0;
+}
+.credit-warn-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+@media (max-width: 767px) {
+  .credit-warn-actions {
+    flex-direction: column-reverse;
+  }
+  .credit-warn-actions .main-modal-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+  .credit-warn-over {
+    margin-left: 0;
+    margin-top: 2px;
+  }
+}
+
+/* 저장 뒤 안내(한도 넘겨 저장함) */
+.credit-saved-note {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+  font-size: var(--fs-13);
+}
+
+/* 거래처 표의 한도 표시 */
+.credit-limit-line {
+  display: block;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.credit-limit-line--over {
+  color: var(--c-danger-text);
+  font-weight: 600;
+}
+
+/* T-213 입력 직원: "한도 넘어도 저장" 대신 안내 */
+.credit-warn-owner-only {
+  align-self: center;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-warning-text);
+}

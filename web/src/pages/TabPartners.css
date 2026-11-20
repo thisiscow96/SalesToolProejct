@@ -1,0 +1,125 @@
+/* 거래처 탭 (T-102) — Main.css 토큰·클래스를 그대로 쓰고 이 화면에만 필요한 것만 둔다 */
+
+.partner-search {
+  min-width: 14rem;
+}
+
+.partner-count {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.partner-notice {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--c-success-text);
+  background: var(--c-success-soft);
+  border-radius: var(--radius-md);
+}
+
+.partner-table .partner-name {
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  white-space: nowrap;
+}
+
+.partner-table .partner-address {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partner-edit-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-12);
+}
+
+/* 유형 배지 — 매입 쪽(파랑) · 매출 쪽(초록) · 양쪽(회색) */
+.partner-type {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+  border-radius: var(--radius-full);
+}
+.partner-type--supplier {
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+}
+.partner-type--customer {
+  color: var(--c-success-text);
+  background: var(--c-success-soft);
+}
+
+/* 등록·수정 모달 — 매입 모달 위에 겹칠 수 있게 한 단계 위 */
+.partner-modal-backdrop {
+  z-index: 1010;
+}
+.main-modal-backdrop .main-modal.partner-modal {
+  width: min(40rem, 100%);
+  max-width: 40rem;
+}
+.main-modal-form .main-modal-fields.partner-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.main-modal-form .main-modal-fields.partner-form-grid .partner-field-wide,
+.main-modal-form .main-modal-fields.partner-form-grid .partner-field-full {
+  grid-column: 1 / -1;
+}
+.main-modal-form .main-modal-fields.partner-form-grid input,
+.main-modal-form .main-modal-fields.partner-form-grid select,
+.main-modal-form .main-modal-fields.partner-form-grid textarea {
+  width: 100%;
+  min-width: 0;
+}
+.main-modal-form .main-modal-fields.partner-form-grid textarea {
+  padding: var(--sp-2) var(--sp-3);
+  font: inherit;
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  resize: vertical;
+}
+.partner-required {
+  color: var(--c-danger);
+}
+
+/* 매입·매출 모달 안 "새 거래처" 버튼 */
+.partner-inline-add {
+  align-self: end;
+  height: var(--control-h);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .main-modal-form .main-modal-fields.partner-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .partner-search {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* 라벨 글자와 필수 표시를 한 줄로 (label 이 세로 flex 라서 묶음) */
+.partner-label {
+  display: inline-flex;
+  gap: 2px;
+}
+
+/* 외상 한도 입력 안내 (T-207) */
+.partner-hint {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+  font-weight: 400;
+}

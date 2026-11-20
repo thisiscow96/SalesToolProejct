@@ -1,29 +1,64 @@
+@import './styles/tokens.css';
+
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f1f5f9;
-  color: #334155;
+  background: var(--c-bg);
+  color: var(--c-text);
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
-input, button {
+input,
+button,
+select,
+textarea {
   font-family: inherit;
-  font-size: 1rem;
+  font-size: var(--fs-14);
+  letter-spacing: inherit;
+  color: inherit;
 }
 
 button {
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* 키보드 사용자에게만 보이는 공통 포커스 링 */
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+::placeholder {
+  color: var(--c-text-3);
+  opacity: 1;
+}
+
+input[type='checkbox'] {
+  accent-color: var(--c-accent);
 }
 
 /* number 입력 스피너(위/아래 화살표) 숨김 — 모든 화면 공통 */
@@ -35,4 +70,13 @@ input[type='number']::-webkit-inner-spin-button {
 input[type='number'] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }

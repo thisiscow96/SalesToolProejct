@@ -1,0 +1,389 @@
+/* 거래명세서 (T-105) — 화면은 디자인 토큰을 쓰고, 인쇄는 흰 종이·검정 글자로 고정한다 */
+
+.stmt-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--sp-4) var(--sp-4) var(--sp-10);
+}
+
+.stmt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-4);
+}
+
+.stmt-toolbar-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.stmt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius-md);
+  background: var(--c-accent);
+  color: var(--c-text-on-accent);
+  font-weight: var(--fw-semibold);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.stmt-btn:hover:not(:disabled) {
+  background: var(--c-accent-hover);
+}
+
+.stmt-btn--ghost {
+  background: var(--c-surface);
+  color: var(--c-text);
+  border-color: var(--c-border-strong);
+}
+
+.stmt-btn--ghost:hover:not(:disabled) {
+  background: var(--c-surface-2);
+}
+
+.stmt-btn:disabled {
+  opacity: 0.5;
+}
+
+.stmt-notice,
+.stmt-hint {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-13);
+}
+
+.stmt-notice {
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+}
+
+.stmt-hint {
+  background: var(--c-info-soft);
+  color: var(--c-info-text);
+}
+
+.stmt-state {
+  padding: var(--sp-6) 0;
+  text-align: center;
+  color: var(--c-text-2);
+}
+
+.stmt-state--error {
+  color: var(--c-danger-text);
+}
+
+.stmt-sheet {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--sp-6);
+}
+
+.stmt-head {
+  text-align: center;
+  margin-bottom: var(--sp-5);
+}
+
+.stmt-title {
+  margin: 0;
+  font-size: var(--fs-24);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.2em;
+}
+
+.stmt-sub {
+  margin: var(--sp-2) 0 0;
+  color: var(--c-text-2);
+  font-size: var(--fs-13);
+}
+
+.stmt-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.stmt-party {
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3);
+}
+
+.stmt-party h2 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+
+.stmt-party dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-13);
+}
+
+.stmt-party dt {
+  color: var(--c-text-2);
+}
+
+.stmt-party dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.stmt-total-line {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--c-surface-2);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-16);
+}
+
+.stmt-total-line strong {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-20);
+}
+
+.stmt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+}
+
+.stmt-table th,
+.stmt-table td {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.stmt-table thead th {
+  background: var(--c-surface-2);
+  font-weight: var(--fw-semibold);
+  border-bottom: 1px solid var(--c-border-strong);
+}
+
+.stmt-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stmt-table tfoot th {
+  text-align: right;
+  font-weight: var(--fw-semibold);
+}
+
+.stmt-table tfoot tr:first-child th,
+.stmt-table tfoot tr:first-child td {
+  border-top: 2px solid var(--c-border-strong);
+}
+
+.stmt-unpaid th,
+.stmt-unpaid td {
+  font-weight: var(--fw-bold);
+}
+
+.stmt-col-status {
+  width: 4.5em;
+  text-align: center;
+}
+
+.stmt-refund {
+  color: var(--c-danger-text);
+  font-size: var(--fs-12);
+}
+
+.stmt-foot {
+  margin-top: var(--sp-5);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+  text-align: center;
+}
+
+.stmt-foot p {
+  margin: var(--sp-1) 0;
+}
+
+/* 휴대폰 폭 — 표를 카드 형태로 쌓아 가로 스크롤 없이 본다 */
+@media (max-width: 600px) {
+  .stmt-page {
+    padding: var(--sp-3) var(--sp-4) var(--sp-8);
+  }
+
+  .stmt-sheet {
+    padding: var(--sp-4);
+  }
+
+  .stmt-title {
+    font-size: var(--fs-20);
+  }
+
+  .stmt-parties {
+    grid-template-columns: 1fr;
+  }
+
+  .stmt-toolbar-actions {
+    width: 100%;
+  }
+
+  .stmt-toolbar-actions .stmt-btn {
+    flex: 1;
+  }
+
+  .stmt-table thead {
+    display: none;
+  }
+
+  .stmt-table tbody tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-1) var(--sp-3);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .stmt-table tbody td {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    padding: 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .stmt-table tbody td::before {
+    content: attr(data-label);
+    color: var(--c-text-2);
+    text-align: left;
+  }
+
+  .stmt-table tbody td.stmt-col-status {
+    width: auto;
+  }
+
+  /* 품목은 한 줄 전체를 써서 긴 상품명이 글자 단위로 꺾이지 않게 */
+  .stmt-table tbody td.stmt-col-product {
+    grid-column: 1 / -1;
+    order: -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    text-align: left;
+    font-weight: var(--fw-semibold);
+  }
+
+  .stmt-table tbody td.stmt-col-product::before {
+    content: none;
+  }
+
+  .stmt-table tfoot tr {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .stmt-table tfoot th,
+  .stmt-table tfoot td,
+  .stmt-table tfoot tr:first-child th,
+  .stmt-table tfoot tr:first-child td {
+    border: 0;
+  }
+
+  /* 합계 줄 위 구분선은 행 전체에 한 번(칸마다 그으면 끊겨 보임) */
+  .stmt-table tfoot tr:first-child {
+    border-top: 2px solid var(--c-border-strong);
+  }
+
+  .stmt-table tfoot tr {
+    padding: var(--sp-1) 0;
+  }
+
+  .stmt-table tfoot tr th,
+  .stmt-table tfoot tr td {
+    padding: var(--sp-1) 0;
+  }
+
+  .stmt-table tfoot .stmt-col-status {
+    display: none;
+  }
+}
+
+/* 인쇄 — A4 세로, 버튼·안내 숨김, 색은 흑백 고정(어두운 테마에서도) */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  body,
+  #root {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .stmt-page {
+    max-width: none;
+    padding: 0;
+  }
+
+  .stmt-sheet {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    background: #fff;
+    color: #000;
+  }
+
+  .stmt-sub,
+  .stmt-party dt,
+  .stmt-foot {
+    color: #333;
+  }
+
+  .stmt-party {
+    border-color: #000;
+  }
+
+  .stmt-total-line,
+  .stmt-table thead th {
+    background: #eee !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .stmt-table th,
+  .stmt-table td {
+    border-bottom-color: #999;
+    color: #000;
+  }
+
+  .stmt-table thead th,
+  .stmt-table tfoot tr:first-child th,
+  .stmt-table tfoot tr:first-child td {
+    border-color: #000;
+  }
+
+  .stmt-refund {
+    color: #000;
+  }
+
+  .stmt-table tr {
+    break-inside: avoid;
+  }
+}

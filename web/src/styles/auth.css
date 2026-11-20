@@ -1,0 +1,91 @@
+/* 로그인·회원가입 공통 레이아웃 — ≥1024: 좌측 브랜드 패널 + 우측 폼 / 그 아래: 폼만 */
+.auth-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr;
+  background: var(--c-bg);
+}
+
+.auth-brand {
+  display: none;
+}
+
+.auth-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-10) var(--sp-4);
+}
+
+@media (min-width: 1024px) {
+  .auth-page {
+    grid-template-columns: minmax(380px, 5fr) 7fr;
+  }
+
+  .auth-brand {
+    display: flex;
+    align-items: flex-end;
+    padding: var(--sp-12);
+    color: #ecfdf5;
+    background:
+      radial-gradient(120% 80% at 0% 0%, rgba(52, 211, 153, 0.22) 0%, transparent 60%),
+      #064e3b;
+  }
+
+  .auth-brand-inner {
+    max-width: 360px;
+  }
+
+  .auth-brand-mark {
+    display: block;
+    width: 40px;
+    height: 40px;
+    margin-bottom: var(--sp-6);
+    border-radius: var(--radius-md);
+    background: #34d399;
+    box-shadow: inset -12px -12px 0 rgba(6, 78, 59, 0.35);
+  }
+
+  .auth-brand-name {
+    margin: 0 0 var(--sp-3);
+    font-size: var(--fs-14);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0;
+    color: #a7f3d0;
+  }
+
+  .auth-brand-copy {
+    margin: 0 0 var(--sp-8);
+    font-size: var(--fs-30);
+    line-height: var(--lh-tight);
+    font-weight: var(--fw-bold);
+    letter-spacing: -0.03em;
+    color: #ffffff;
+  }
+
+  .auth-brand-points {
+    display: grid;
+    gap: var(--sp-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-14);
+    color: #d1fae5;
+  }
+
+  .auth-brand-points li {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+
+  .auth-brand-points li::before {
+    content: '';
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: #34d399;
+  }
+}

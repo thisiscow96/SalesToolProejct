@@ -1,0 +1,30 @@
+{
+  "runId": "run-2026-11-20T19-08-57-892Z",
+  "startedAt": "2026-11-20T19:08:57.892Z",
+  "updatedAt": "2026-11-20T19:08:58.122Z",
+  "base": "http://127.0.0.1:3232",
+  "agent": "admin001",
+  "tag": "1795201737891",
+  "productKey": "SCENARIO-1795201737891",
+  "steps": [
+    {
+      "id": "S-001",
+      "ok": true,
+      "detail": "status=200 db=connected",
+      "mark": "○"
+    },
+    {
+      "id": "S-002",
+      "ok": true,
+      "detail": "status=401 msg=로그인이 필요합니다.",
+      "mark": "○"
+    }
+  ],
+  "lastCompletedStep": "S-002",
+  "passedSoFar": 2,
+  "failedSoFar": 0,
+  "firstFailedScenario": null,
+  "fatalError": "Error: 로그인 실패 status=401 중매인 번호 또는 비밀번호가 올바르지 않습니다. (SMOKE_PASSWORD 확인, npm run seed-admin)\n    at login (C:\\Users\\user\\Desktop\\이건우\\개인\\SalesToolProejct\\server\\scripts\\scenario-integration-test.js:418:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async main (C:\\Users\\user\\Desktop\\이건우\\개인\\SalesToolProejct\\server\\scripts\\scenario-integration-test.js:501:20)",
+  "exitCode": 1,
+  "status": "aborted"
+}

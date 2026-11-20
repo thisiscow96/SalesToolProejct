@@ -1,122 +1,413 @@
-/* 판매툴 메인 — 슬레이트·인디고 톤, 그린 최소화 */
+/*
+ * 판매툴 메인(업무 화면) — 토큰은 src/styles/tokens.css
+ * 구성: 1 앱 셸(상단바·메뉴) · 2 툴바·입력 · 3 버튼 · 4 표 · 5 열 폭(입력값 가시성) · 6 상태 표시
+ *       7 모달 · 8 모달별 규칙 · 9 일별 매입·매출 · 10 반응형
+ * 원칙: 숫자는 오른쪽 정렬 + tabular-nums, 입력 중인 값이 칸에 가려지지 않게 열 최소 폭 유지(.cursor/rules/ui-ux-input-visibility)
+ */
+
+/* =========================================================
+ * 1. 앱 셸 — 상단바 + 메뉴(≥1280 좌측 사이드바, 그 아래 가로 탭)
+ * ========================================================= */
 .main-page {
   min-height: 100vh;
+  min-height: 100dvh;
   min-width: 0;
-  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   display: flex;
   flex-direction: column;
+  background: var(--c-bg);
 }
 
 .main-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.875rem 1.5rem;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  gap: var(--sp-4);
+  height: var(--header-h);
+  padding: 0 var(--sp-6);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .main-logo {
+  flex: none;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  gap: var(--sp-2);
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: #334155;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
   letter-spacing: -0.02em;
+  color: var(--c-text);
+}
+
+.main-logo-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--c-accent);
+  box-shadow: inset -7px -7px 0 rgba(0, 0, 0, 0.18);
 }
 
 .main-user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   margin-left: auto;
-  font-size: 0.9rem;
-  color: #64748b;
+  min-width: 0;
+  font-size: var(--fs-14);
+  color: var(--c-text-2);
+}
+
+.main-user-avatar {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-accent-text);
+  background: var(--c-accent-soft);
+  border-radius: var(--radius-full);
+}
+
+.main-user-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .main-logout {
-  padding: 0.45rem 0.95rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #475569;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  flex: none;
+  white-space: nowrap;
+  height: 32px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+  background: transparent;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .main-logout:hover {
-  background: #e2e8f0;
-  color: #334155;
+  color: var(--c-text);
+  background: var(--c-surface-3);
 }
 
-.main-tabs {
+.main-shell {
+  flex: 1;
   display: flex;
-  gap: 0;
-  padding: 0 1.5rem;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 메뉴 — 기본(＜1280): 상단바 아래 가로 탭, 넘치면 가로 스크롤 */
+.main-tabs {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 40;
+  display: flex;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-6);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.main-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* 탭 줄이 넘칠 때 양 끝을 흐리게 해 "옆에 메뉴가 더 있다"를 보여 준다(T-110).
+   스크롤 위치에 따라 보이고 사라지며(scroll-driven animation), 넘치지 않거나
+   지원하지 않는 브라우저에서는 나타나지 않는다. */
+.main-tabs::before,
+.main-tabs::after {
+  content: '';
+  position: sticky;
+  z-index: 1;
+  flex: none;
+  width: var(--sp-8);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.main-tabs::before {
+  left: 0;
+  order: -1;
+  margin-right: calc(var(--sp-8) * -1 - var(--sp-1));
+  background: linear-gradient(to right, var(--c-surface), transparent);
+}
+
+.main-tabs::after {
+  right: 0;
+  order: 99;
+  margin-left: calc(var(--sp-8) * -1 - var(--sp-1));
+  background: linear-gradient(to left, var(--c-surface), transparent);
+}
+
+@supports (animation-timeline: scroll()) {
+  .main-tabs::before,
+  .main-tabs::after {
+    animation-duration: auto;
+    animation-timeline: scroll(inline);
+    animation-fill-mode: both;
+    animation-timing-function: linear;
+  }
+
+  .main-tabs::before {
+    animation-name: main-tabs-fade-start;
+  }
+
+  .main-tabs::after {
+    animation-name: main-tabs-fade-end;
+  }
+}
+
+@keyframes main-tabs-fade-start {
+  0% { opacity: 0; }
+  12%, 100% { opacity: 1; }
+}
+
+@keyframes main-tabs-fade-end {
+  0%, 88% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 .main-tab {
-  padding: 0.9rem 1.25rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: #64748b;
+  position: relative;
+  flex: none;
+  height: 44px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  color: var(--c-text-3);
   background: none;
   border: none;
-  border-bottom: 3px solid transparent;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  border-radius: 0;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.main-tab::after {
+  content: '';
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .main-tab:hover {
-  color: #475569;
+  color: var(--c-text);
 }
 
 .main-tab.active {
-  color: #4f46e5;
-  border-bottom-color: #4f46e5;
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-tab.active::after {
+  background: var(--c-accent);
+}
+
+.main-tab:focus-visible {
+  outline-offset: -2px;
 }
 
 .main-content {
   flex: 1;
-  padding: 1.5rem;
-  overflow-x: auto;
-  overflow-y: auto;
   min-width: 0;
-  -webkit-overflow-scrolling: touch;
+  padding: var(--sp-6);
 }
 
-/* 검색 기간: yyyy-mm-dd (type=date — 달력/키보드 입력) */
+.main-page-title {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-20);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+}
+
+/* ≥1280: 좌측 사이드바 */
+@media (min-width: 1280px) {
+  .main-shell {
+    flex-direction: row;
+  }
+
+  .main-tabs {
+    flex: none;
+    flex-direction: column;
+    gap: 2px;
+    width: var(--sidebar-w);
+    height: calc(100dvh - var(--header-h));
+    padding: var(--sp-4) var(--sp-3);
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-bottom: none;
+    border-right: 1px solid var(--c-border);
+  }
+
+  .main-tab {
+    height: 36px;
+    padding: 0 var(--sp-3);
+    text-align: left;
+    color: var(--c-text-2);
+    border-radius: var(--radius-md);
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+
+  .main-tab::after,
+  .main-tabs::before,
+  .main-tabs::after {
+    display: none;
+  }
+
+  .main-tab:hover {
+    background: var(--c-surface-3);
+  }
+
+  .main-tab.active {
+    color: var(--c-accent-text);
+    background: var(--c-accent-soft);
+  }
+
+  .main-tab:focus-visible {
+    outline-offset: 0;
+  }
+
+  .main-content {
+    padding: var(--sp-6) var(--sp-8);
+  }
+}
+
+/* =========================================================
+ * 2. 툴바(검색 조건) · 입력
+ * ========================================================= */
+.main-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+}
+
+.main-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+/* 등록 버튼은 오른쪽으로 모으지 않고 검색 바로 뒤에 둔다(입력 → 검색 → 등록 순서 유지) */
+
 .main-date-filter {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--sp-2);
 }
 
 .main-filter-checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.875rem;
-  color: #475569;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
   cursor: pointer;
   user-select: none;
 }
+
 .main-filter-checkbox input {
-  width: 1rem;
-  height: 1rem;
+  width: 16px;
+  height: 16px;
+  margin: 0;
   cursor: pointer;
 }
+
+/* 입력 공통 — 텍스트·날짜·숫자·선택 */
+.main-content input[type='text'],
+.main-content input[type='search'],
+.main-content input[type='date'],
+.main-content input[type='datetime-local'],
+.main-content input[type='number'],
+.main-content input:not([type]),
+.main-content select {
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-14);
+  color: var(--c-text);
+  background-color: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.main-content select {
+  padding-right: var(--sp-8);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a94a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  cursor: pointer;
+}
+
+.main-content input:hover:not(:disabled):not([type='checkbox']),
+.main-content select:hover:not(:disabled) {
+  border-color: var(--c-text-3);
+}
+
+.main-content input:focus:not([type='checkbox']),
+.main-content select:focus {
+  outline: none;
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 3px var(--c-accent-soft);
+}
+
+.main-content input:disabled:not([type='checkbox']),
+.main-content select:disabled {
+  color: var(--c-text-3);
+  background-color: var(--c-surface-3);
+  border-color: var(--c-border);
+  cursor: not-allowed;
+}
+
+.main-content input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* 검색 기간 yyyy-mm-dd (type=date — 달력/키보드 입력) */
 .main-date-input-ymd {
-  min-width: 10.5rem;
+  min-width: 9.75rem;
   width: auto;
   max-width: 100%;
-  padding: 0.5rem 0.55rem;
-  font-size: 0.9rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  box-sizing: border-box;
+}
+
+.main-input-search {
+  width: 10rem;
 }
 
 /* 긴 상품명·거래처: hover 시 title로 전체, 셀 내 가로 스크롤 */
@@ -127,12 +418,267 @@
   overflow-y: hidden;
   white-space: nowrap;
   vertical-align: bottom;
+  scrollbar-width: thin;
   cursor: default;
 }
-td.main-td-scroll {
-  max-width: min(18rem, 42vw);
+
+/* =========================================================
+ * 3. 버튼 — 기본(강조)·보조·모달·툴바·행 삭제
+ * ========================================================= */
+.main-btn,
+.main-modal-btn,
+.main-modal-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+/* 기본(강조) — 등록·저장 */
+.main-btn,
+.main-modal-btn.primary {
+  color: var(--c-text-on-accent);
+  background: var(--c-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.main-btn:hover:not(:disabled),
+.main-modal-btn.primary:hover:not(:disabled) {
+  background: var(--c-accent-hover);
+}
+
+/* 보조 — 검색·전환·취소·행 추가 */
+.main-btn.main-btn--secondary,
+.main-modal-btn.secondary,
+.main-modal-toolbar-btn {
+  color: var(--c-text);
+  background: var(--c-surface);
+  border-color: var(--c-border-strong);
+  box-shadow: none;
+}
+
+.main-btn.main-btn--secondary:hover:not(:disabled),
+.main-modal-btn.secondary:hover:not(:disabled),
+.main-modal-toolbar-btn:hover:not(:disabled) {
+  background: var(--c-surface-3);
+}
+
+.main-btn:active:not(:disabled),
+.main-modal-btn:active:not(:disabled),
+.main-modal-toolbar-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.main-btn:disabled,
+.main-modal-btn:disabled,
+.main-modal-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.main-modal-toolbar-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-13);
+}
+
+/* 행 삭제(×) — 고스트, 위험 색은 hover에서만 */
+.main-modal-row-del {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: var(--fs-20);
+  line-height: 1;
+  color: var(--c-text-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.main-modal-row-del:hover:not(:disabled) {
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+}
+
+.main-modal-row-del:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* =========================================================
+ * 4. 표 — 머리 고정, 행 hover, 숫자 오른쪽 정렬, 합계 행 하단 고정
+ * ========================================================= */
+.main-table-wrap {
+  max-width: 100%;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 탭 본문의 목록 표: 화면 안에서 스크롤해 머리글이 항상 보이게 */
+.main-content > .main-table-wrap,
+.main-daily-section > .main-table-wrap {
+  max-height: max(360px, calc(100dvh - 260px));
+}
+
+.main-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-14);
+  line-height: var(--lh-tight);
+}
+
+.main-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 36px;
+  padding: 0 var(--sp-3);
+  text-align: left;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0;
+  color: var(--c-text-2);
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+
+.main-table td {
+  height: var(--row-h);
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  color: var(--c-text);
+  border-bottom: 1px solid var(--c-border);
   vertical-align: middle;
 }
+
+.main-table th:first-child,
+.main-table td:first-child {
+  padding-left: var(--sp-4);
+}
+
+.main-table th:last-child,
+.main-table td:last-child {
+  padding-right: var(--sp-4);
+}
+
+.main-table tbody tr {
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.main-table tbody tr:hover {
+  background: var(--c-surface-2);
+}
+
+.main-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.main-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-medium);
+  color: var(--c-text);
+}
+
+/* 합계 행 — 표 아래에 고정 */
+.main-table tfoot th,
+.main-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: var(--row-h);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-bold);
+  color: var(--c-text);
+  background: var(--c-surface-2);
+  border-top: 1px solid var(--c-border-strong);
+  border-bottom: none;
+}
+
+.main-table tfoot th:first-child {
+  padding-left: var(--sp-4);
+}
+
+.main-table tfoot td:last-child {
+  padding-right: var(--sp-4);
+}
+
+/* 표 안 입력칸 — 행 높이에 맞춘 작은 크기 */
+.main-table td input:not([type='checkbox']),
+.main-table td select {
+  width: 100%;
+  min-width: 60px;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-14);
+}
+
+.main-table td select {
+  padding-right: var(--sp-8);
+}
+
+/* 체크박스 열 */
+.main-table th.main-col-check,
+.main-table td.main-col-check {
+  width: 3rem;
+  min-width: 2.75rem;
+  max-width: 4.5rem;
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-3);
+  text-align: center;
+}
+
+.main-table th.main-col-check:first-child,
+.main-table td.main-col-check:first-child {
+  padding-left: var(--sp-4);
+}
+
+.main-table th.main-col-check input[type='checkbox'],
+.main-table td.main-col-check input[type='checkbox'] {
+  vertical-align: middle;
+}
+
+.main-table th.main-col-row-actions,
+.main-table td.main-col-row-actions {
+  width: 2.5rem;
+  min-width: 2.5rem;
+  max-width: 2.75rem;
+  padding-left: var(--sp-1);
+  padding-right: var(--sp-2);
+  text-align: center;
+}
+
+.main-col-amount-readonly {
+  color: var(--c-text-2);
+  background: var(--c-surface-2);
+}
+
+/* =========================================================
+ * 5. 열 폭 — 입력값·긴 이름이 가려지지 않게 (기존 폭 규칙 유지)
+ * ========================================================= */
+td.main-td-scroll {
+  max-width: min(18rem, 42vw);
+}
+
 /* 거래처·상품 열은 항상 가장 넓게 */
 .main-table th.main-col-partner,
 .main-table td.main-col-partner {
@@ -149,13 +695,445 @@ td.main-td-scroll {
   min-width: 12rem;
   width: 28%;
 }
+/* 비고: 좁은 화면에서 글이 3~4줄로 접혀 행 높이가 2배가 되지 않게 최소 폭(T-110) */
+.main-table th.main-col-memo,
+.main-table td.main-col-memo {
+  min-width: 14rem;
+}
 td.main-td-scroll.main-col-partner,
 td.main-td-scroll.main-col-product,
 td.main-td-scroll.main-col-source {
   max-width: none;
 }
 
-/* 모달 안 테이블: 매입처·거래처·상품·납품 등 긴 텍스트/선택 열을 본문보다 넓게 */
+/* 수량: 정수 1~3자리 + 소수·천단위 콤마 */
+.main-col-qty,
+.main-table th.main-col-qty,
+.main-table td.main-col-qty {
+  min-width: 3ch;
+  max-width: 9ch;
+  width: 6ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.main-input-qty {
+  width: 100%;
+  min-width: 3ch;
+  max-width: 9ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 수량+단위 한 줄 */
+.main-col-qty--singleline,
+.main-table th.main-col-qty--singleline,
+.main-table td.main-col-qty--singleline {
+  white-space: nowrap;
+  max-width: none;
+  min-width: 4.5rem;
+}
+.main-qty-unit-inline {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* 단가: 5~9자리 + 콤마 */
+.main-col-unit-price,
+.main-table th.main-col-unit-price,
+.main-table td.main-col-unit-price {
+  min-width: 5ch;
+  max-width: 12ch;
+  width: 9ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.main-input-unit-price {
+  width: 100%;
+  min-width: 5ch;
+  max-width: 12ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 금액(총액·미수·수금액) */
+.main-col-amount,
+.main-table th.main-col-amount,
+.main-table td.main-col-amount {
+  min-width: 5ch;
+  max-width: 14ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 날짜만 YYYY-MM-DD */
+.main-col-date,
+.main-table th.main-col-date,
+.main-table td.main-col-date {
+  min-width: 10ch;
+  max-width: 12ch;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.main-input-date {
+  min-width: 9.5rem;
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+/* YYYY-MM-DD HH:mm */
+.main-col-datetime,
+.main-table th.main-col-datetime,
+.main-table td.main-col-datetime {
+  min-width: 16ch;
+  max-width: 19ch;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-2);
+}
+.main-input-datetime-local {
+  min-width: 18ch;
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 매출일: 일시 전체 표시 */
+.main-col-datetime-full,
+.main-table th.main-col-datetime-full,
+.main-table td.main-col-datetime-full {
+  min-width: 18ch;
+  max-width: none;
+  width: auto;
+  white-space: nowrap;
+}
+.main-sale-datetime-line {
+  font-variant-numeric: tabular-nums;
+}
+
+/* =========================================================
+ * 6. 상태 표시 — 배지(색 + 점 + 글자), 빈 상태, 로딩, 오류
+ * ========================================================= */
+.main-status,
+.main-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+  border-radius: var(--radius-full);
+}
+
+.main-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.main-status--pay-paid,
+.main-status--entry-receive,
+.main-kind-badge--sale {
+  color: var(--c-success-text);
+  background: var(--c-success-soft);
+}
+
+.main-status--pay-partial,
+.main-status--entry-refund,
+.main-status--sale-refunded {
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+}
+
+.main-status--pay-unpaid {
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+}
+
+.main-status--sale-cancelled {
+  text-decoration: line-through;
+}
+
+.main-kind-badge--purchase {
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+}
+
+.main-receivable-positive {
+  color: var(--c-warning-text);
+  font-weight: var(--fw-semibold);
+}
+
+/* 빈 상태 · 로딩 · 오류 */
+.main-loading,
+.main-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: var(--sp-12) var(--sp-4);
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+  text-align: center;
+  color: var(--c-text-3);
+  background: var(--c-surface);
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.main-loading::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--c-border-strong);
+  border-top-color: var(--c-accent);
+  border-radius: var(--radius-full);
+  animation: main-spin 0.8s linear infinite;
+}
+
+@keyframes main-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.main-modal .main-loading,
+.main-modal .main-empty {
+  margin-top: var(--sp-3);
+  padding: var(--sp-8) var(--sp-4);
+}
+
+.main-error,
+.main-alert-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-base);
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.main-error::before,
+.main-alert-banner::before {
+  content: '!';
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-bold);
+  color: var(--c-surface);
+  background: var(--c-danger);
+  border-radius: var(--radius-full);
+}
+
+.main-alert-banner {
+  margin-bottom: var(--sp-3);
+}
+
+.main-error--inline {
+  margin-bottom: var(--sp-3);
+}
+
+/* =========================================================
+ * 7. 모달 — 공통 크기, 머리·본문·바닥(취소·저장)
+ * ========================================================= */
+.main-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: var(--c-overlay);
+  overscroll-behavior: contain;
+  animation: main-fade-in var(--dur) var(--ease);
+}
+
+.main-modal {
+  width: min(720px, 100%);
+  max-height: min(90vh, 900px);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: main-pop-in var(--dur) var(--ease);
+}
+
+@keyframes main-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes main-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+.main-modal--wide {
+  width: min(960px, 100%);
+}
+
+/* 매입 등록 등: 높이 고정 — 행 추가 시 창 크기 변동 없음 */
+.main-modal--fill {
+  width: min(960px, 100%);
+  min-height: min(90vh, 900px);
+  height: min(90vh, 900px);
+  max-height: min(90vh, 900px);
+}
+
+.main-modal--purchase.main-modal--fill,
+.main-modal--refund.main-modal--fill,
+.main-modal--disposal.main-modal--fill {
+  width: min(1280px, 100%);
+}
+
+.main-modal--collect.main-modal--fill {
+  width: min(1360px, 100%);
+}
+
+.main-modal-header {
+  flex-shrink: 0;
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.main-modal-header h2 {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+}
+
+.main-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-5);
+}
+
+.main-modal-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--c-surface-2);
+  border-top: 1px solid var(--c-border);
+}
+
+.main-modal-btn {
+  min-width: 80px;
+}
+
+.main-modal--fill .main-modal-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main-modal--fill .main-modal-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main-modal--fill .main-modal-toolbar,
+.main-modal--fill .main-modal-form > .main-modal-fields {
+  flex-shrink: 0;
+}
+
+.main-modal--fill .main-modal-table-wrap,
+.main-modal--fill .main-modal-form > .main-table-wrap.main-modal-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.main-modal-form .main-modal-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+  align-items: end;
+}
+
+.main-modal-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+/* 거래처·판매처 등 긴 옵션명 select */
+.main-modal-form .main-modal-fields label.main-modal-field-select-wide {
+  grid-column: span 2;
+  min-width: 0;
+  max-width: min(32rem, 100%);
+}
+.main-modal-form .main-modal-fields label.main-modal-field-select-wide select {
+  width: 100%;
+  min-width: min(18rem, 100%);
+  max-width: 100%;
+}
+
+.main-modal-hint {
+  grid-column: 1 / -1;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-base);
+  color: var(--c-text-3);
+}
+
+.main-modal-hint strong {
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.main-modal-table-wrap {
+  margin-top: var(--sp-3);
+  max-height: 45vh;
+  overflow: auto;
+  box-shadow: none;
+}
+
+.main-modal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* 모달 안 표: 긴 텍스트/선택 열을 본문보다 넓게 */
 .main-modal .main-table th.main-col-source,
 .main-modal .main-table td.main-col-source {
   min-width: min(12rem, 30vw);
@@ -175,354 +1153,74 @@ td.main-td-scroll.main-col-source {
   max-width: min(24rem, 58vw);
 }
 
-/* 체크박스 열 — 본문은 좁게, 헤더에 "선택" 등 글자가 있으면 넓게 */
-.main-table td.main-col-check {
-  width: 2.25rem;
-  max-width: 2.75rem;
-  min-width: 2rem;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-  text-align: center;
-  vertical-align: middle;
-  box-sizing: border-box;
+.main-modal-table-wrap td select,
+.main-modal-table-wrap td input[type='number'],
+.main-modal-table-wrap td input[type='date'],
+.main-modal-table-wrap td input[type='datetime-local'],
+.main-modal-table-wrap td .main-input-unit-price {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
-.main-table th.main-col-check {
-  min-width: 3.25rem;
-  width: 3.5rem;
-  max-width: 4.5rem;
-  padding-left: 0.65rem;
-  padding-right: 0.65rem;
-  text-align: center;
-  vertical-align: middle;
-  box-sizing: border-box;
+
+/* 거래처·상품 열 select: 옵션 표시 영역 확보 */
+.main-modal .main-modal-table-wrap td.main-col-partner select,
+.main-modal .main-modal-table-wrap td.main-col-product select {
+  min-width: min(18rem, 100%);
+  width: 100%;
+  max-width: none;
 }
-/* 첫 열이 선택이어도 기본 th 넓은 패딩과 겹치지 않게 */
-.main-table th.main-col-check:first-child {
-  padding-left: 0.65rem;
-}
-.main-table td.main-col-check:first-child {
-  padding-left: 0.5rem;
-}
-.main-table th.main-col-check input[type='checkbox'],
-.main-table td.main-col-check input[type='checkbox'] {
-  width: 0.9rem;
-  height: 0.9rem;
+
+.product-master-form--modal {
   margin: 0;
-  vertical-align: middle;
-  cursor: pointer;
-}
-.main-table th.main-col-row-actions,
-.main-table td.main-col-row-actions {
-  width: 2rem;
-  max-width: 2.25rem;
-  min-width: 2rem;
-  padding-left: 0.25rem;
-  padding-right: 0.25rem;
-  text-align: center;
-}
-.main-modal-title-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: inherit;
-  font-weight: inherit;
-  margin: 0;
-}
-.main-modal-title-inline .main-cell-text-scroll {
-  max-width: min(28rem, 70vw);
-}
-
-.main-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
-}
-
-.main-filters label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
-  color: #475569;
-}
-
-/* 입력 필드 공통 — 부드러운 스타일 */
-.main-filters input[type="date"],
-.main-filters input[type="text"],
-.main-filters select,
-.main-content input[type="text"],
-.main-content input[type="date"],
-.main-content select,
-.product-master-form input {
-  padding: 0.55rem 0.85rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  font-size: 0.9rem;
-  background: #fafbfc;
-  color: #334155;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-}
-
-.main-filters input:hover,
-.main-filters select:hover,
-.main-content input:hover,
-.main-content select:hover,
-.product-master-form input:hover {
-  background: #fff;
-  border-color: #cbd5e1;
-}
-
-.main-filters input:focus,
-.main-filters select:focus,
-.main-content input:focus,
-.main-content select:focus,
-.product-master-form input:focus {
-  outline: none;
-  border-color: #a5b4fc;
-  box-shadow: 0 0 0 3px rgba(199, 210, 254, 0.4);
-  background: #fff;
-}
-
-.main-filters button {
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: #fff;
-  background: #4f46e5;
+  padding: 0;
   border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.05s;
+  box-shadow: none;
 }
 
-.main-filters button:hover {
-  background: #4338ca;
+/* =========================================================
+ * 8. 모달별 규칙
+ * ========================================================= */
+
+/* --- 수금 등록 --- */
+.main-modal-fields--collect {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) minmax(14rem, 1fr) auto;
+  align-items: end;
+  gap: var(--sp-3) var(--sp-4);
 }
 
-.main-filters button:active {
-  transform: scale(0.98);
+.main-modal-fields--collect .main-modal-field-select-wide,
+.main-modal-fields--collect .main-modal-field-collect-datetime {
+  margin: 0;
 }
 
-/* ---- 테이블 ---- */
-.main-table-wrap {
-  overflow-x: auto;
-  overflow-y: visible;
-  -webkit-overflow-scrolling: touch;
-  max-width: 100%;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.04);
-  border: 1px solid #e2e8f0;
-}
-
-.main-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-
-.main-table th {
-  padding: 0.9rem 1.25rem;
-  text-align: left;
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #64748b;
-  background: #f8fafc;
-  border-bottom: 2px solid #e2e8f0;
+.main-modal-fields--collect .main-modal-hint {
+  margin: 0;
   white-space: nowrap;
 }
 
-.main-table th:first-child {
-  padding-left: 1.5rem;
-}
-
-.main-table th:last-child {
-  padding-right: 1.5rem;
-}
-
-.main-table td {
-  padding: 0.9rem 1.25rem;
-  text-align: left;
-  border-bottom: 1px solid #f1f5f9;
-  color: #334155;
-  vertical-align: middle;
-}
-
-.main-table td:first-child {
-  padding-left: 1.5rem;
-}
-
-.main-table td:last-child {
-  padding-right: 1.5rem;
-}
-
-.main-table tbody tr {
-  transition: background 0.12s ease;
-}
-
-.main-table tbody tr:nth-child(even) {
-  background: #fafbfc;
-}
-
-.main-table tbody tr:hover {
-  background: #f1f5f9;
-}
-
-.main-table tbody tr:nth-child(even):hover {
-  background: #e2e8f0;
-}
-
-.main-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.main-table td.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: #475569;
-  font-weight: 500;
-}
-
-/* 수량: 정수 1~3자리 + 소수·천단위 콤마 표시 고려 */
-.main-col-qty,
-.main-table th.main-col-qty,
-.main-table td.main-col-qty {
-  min-width: 3ch;
-  max-width: 9ch;
-  width: 6ch;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-.main-input-qty {
-  width: 100%;
-  min-width: 3ch;
-  max-width: 9ch;
-  box-sizing: border-box;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 폐기정보 등: 수량+단위 한 줄(좁은 화면에서 줄바꿈 방지) */
-.main-col-qty--singleline,
-.main-table th.main-col-qty--singleline,
-.main-table td.main-col-qty--singleline {
-  white-space: nowrap;
-  max-width: none;
-  min-width: 4.5rem;
-}
-.main-qty-unit-inline {
-  white-space: nowrap;
-  display: inline-block;
-}
-
-/* 단가: 숫자 5~9자리 + 천단위 콤마 입력·표시 폭 */
-.main-col-unit-price,
-.main-table th.main-col-unit-price,
-.main-table td.main-col-unit-price {
-  min-width: 5ch;
-  max-width: 12ch;
-  width: 9ch;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-.main-input-unit-price {
-  width: 100%;
-  min-width: 5ch;
-  max-width: 12ch;
-  box-sizing: border-box;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 금액(총액·미수·수금액 등) */
-.main-col-amount,
-.main-table th.main-col-amount,
-.main-table td.main-col-amount {
-  min-width: 5ch;
-  max-width: 14ch;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-
-/* 날짜만 YYYY-MM-DD */
-.main-col-date,
-.main-table th.main-col-date,
-.main-table td.main-col-date {
-  min-width: 10ch;
-  max-width: 12ch;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-.main-input-date {
-  min-width: 9.5rem;
-  max-width: 100%;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-
-/* YYYY-MM-DD HH:mm */
-.main-col-datetime,
-.main-table th.main-col-datetime,
-.main-table td.main-col-datetime {
-  min-width: 16ch;
-  max-width: 19ch;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-.main-input-datetime-local {
-  min-width: 18ch;
-  max-width: 100%;
-  font-variant-numeric: tabular-nums;
-  box-sizing: border-box;
-}
-
-/* 매출일: 일시·매출 수량 한 덩어리로 전부 표시(셀 내부 가로 스크롤 제거) */
-.main-col-datetime-full,
-.main-table th.main-col-datetime-full,
-.main-table td.main-col-datetime-full {
-  min-width: 18ch;
-  max-width: none;
-  width: auto;
-  white-space: nowrap;
-  vertical-align: top;
-}
-.main-sale-datetime-block {
+.main-modal-field-collect-datetime {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  align-items: flex-start;
-  white-space: nowrap;
-}
-.main-sale-datetime-line {
-  font-variant-numeric: tabular-nums;
-}
-.main-sale-qty-line {
-  font-size: 0.8rem;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
+  gap: 6px;
 }
 
-/* 수금 등록 모달 — 매출일: 가로 스크롤 없이 전체 표시 */
+.main-modal-field-collect-datetime > span {
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+.main-input-datetime-local.main-input-datetime-local--collect {
+  min-width: 14rem;
+}
+
 .main-modal .main-table td.main-col-datetime.main-collect-datetime-cell {
-  white-space: nowrap;
+  min-width: 12rem;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: none;
-  min-width: 12rem;
-  vertical-align: middle;
-  line-height: 1.25;
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 수금액 입력: 숫자만, 최대 9자리 */
@@ -530,300 +1228,127 @@ td.main-td-scroll.main-col-source {
   width: 100%;
   min-width: 5rem;
   max-width: 9.5rem;
-  box-sizing: border-box;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  padding: 0.45rem 0.5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-}
-
-/* 폐기 등록 모달 — 검색 + 사유 픽리스트 */
-.main-modal-form .main-modal-fields.main-modal-fields--disposal-search {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem 1.25rem;
-}
-.main-modal-field-disposal-search,
-.main-modal-field-disposal-date {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: #475569;
-}
-.main-modal-field-disposal-search {
-  flex: 1 1 min(16rem, 100%);
-  min-width: 10rem;
-}
-.main-modal-field-disposal-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 0.45rem 0.55rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  box-sizing: border-box;
-}
-.main-modal-field-disposal-date {
-  flex: 0 0 auto;
-}
-.main-modal-hint--disposal {
-  flex: 1 1 100%;
-  margin: 0;
-  line-height: 1.45;
-  font-size: 0.82rem;
-}
-.main-modal-disposal-wrap {
-  overflow-x: auto;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-.main-disposal-reason-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  min-width: 7rem;
-}
-.main-disposal-reason-cell select,
-.main-disposal-reason-cell input[type='text'] {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 0.4rem 0.45rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-}
-.main-modal .main-table--disposal-modal td.main-td-disposal-reason {
-  min-width: 9rem;
-  max-width: min(14rem, 40vw);
-  vertical-align: top;
-}
-
-/* 폐기 등록 모달 — 상품 열 축소(약 절반), 폐기 수량·폐기일 넉넉 */
-.main-modal .main-table--disposal-modal th.main-col-product.main-col-product--disposal,
-.main-modal .main-table--disposal-modal td.main-col-product.main-col-product--disposal {
-  min-width: min(9.5rem, 24vw);
-  width: 16%;
-  max-width: min(13rem, 32vw);
-}
-.main-modal .main-table--disposal-modal td.main-td-scroll.main-col-product.main-col-product--disposal {
-  max-width: min(13rem, 32vw);
-}
-
-.main-modal .main-table--disposal-modal th.main-col-source,
-.main-modal .main-table--disposal-modal td.main-col-source {
-  min-width: min(9rem, 22vw);
-  width: 14%;
-  max-width: min(12rem, 30vw);
-}
-.main-modal .main-table--disposal-modal td.main-td-scroll.main-col-source {
-  max-width: min(12rem, 30vw);
-}
-.main-modal .main-table--disposal-modal th.main-col-partner,
-.main-modal .main-table--disposal-modal td.main-col-partner {
-  min-width: min(10rem, 26vw);
-  width: 16%;
-}
-
-.main-modal .main-table--disposal-modal th.main-col-disposal-qty-input,
-.main-modal .main-table--disposal-modal td.main-col-disposal-qty-input {
-  min-width: 5.75rem;
-  width: 6.5rem;
-  max-width: 8.5rem;
-  text-align: right;
-}
-.main-modal .main-table--disposal-modal td.main-col-disposal-qty-input .main-input-qty--disposal {
-  width: 100%;
-  min-width: 5rem;
-  max-width: none;
-  padding: 0.45rem 0.5rem;
-  box-sizing: border-box;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-.main-modal .main-table--disposal-modal th.main-col-disposal-date-col,
-.main-modal .main-table--disposal-modal td.main-col-disposal-date-col {
-  min-width: 12rem;
-  width: 12rem;
-  max-width: 13rem;
-  white-space: nowrap;
-}
-.main-modal .main-table--disposal-modal .main-input-date--disposal {
-  min-width: 11.25rem;
-  width: 100%;
-  max-width: 100%;
-  padding: 0.45rem 0.5rem;
-  box-sizing: border-box;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 매출 전환 모달 — 매입 ID 최소 폭, 상품·수량·단가 입력 넉넉 */
+/* --- 매출 전환 --- */
 .main-modal .main-table--convert-modal {
   table-layout: fixed;
   width: 100%;
   min-width: 0;
 }
-
 .main-modal .main-table--convert-modal .main-col-purchase-id {
-  width: 4rem;
-  min-width: 3.25rem;
+  width: 4.5rem;
+  min-width: 3.5rem;
   max-width: 5rem;
-  padding-left: 0.4rem;
-  padding-right: 0.4rem;
-  font-size: 0.8rem;
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-2);
+  font-size: var(--fs-13);
+  color: var(--c-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .main-modal .main-table--convert-modal th.main-col-product--convert,
 .main-modal .main-table--convert-modal td.main-col-product--convert {
   min-width: 0;
   width: 38%;
 }
-
 .main-modal .main-table--convert-modal td.main-td-scroll.main-col-product--convert {
   max-width: none;
 }
-
-.main-modal .main-table--convert-modal .main-col-qty--convert {
-  min-width: 6.5rem !important;
+.main-modal .main-table--convert-modal th.main-col-qty--convert,
+.main-modal .main-table--convert-modal td.main-col-qty--convert {
+  min-width: 6.5rem;
   width: 8.5rem;
   max-width: 11rem;
 }
-
-.main-modal .main-table--convert-modal .main-col-unit-price--convert {
+.main-modal .main-table--convert-modal th.main-col-unit-price--convert,
+.main-modal .main-table--convert-modal td.main-col-unit-price--convert {
   min-width: 8rem;
   width: 13rem;
   max-width: 18rem;
 }
-
-.main-modal .main-table--convert-modal .main-input-qty--convert {
-  min-width: 5.5rem;
+.main-modal .main-table--convert-modal td .main-input-qty--convert {
   width: 100%;
+  min-width: 5.5rem;
   max-width: none;
-  padding: 0.45rem 0.5rem;
-  box-sizing: border-box;
 }
-
-.main-modal .main-table--convert-modal .main-input-unit-price.main-input-unit-price--convert {
+.main-modal .main-table--convert-modal td .main-input-unit-price.main-input-unit-price--convert {
   width: 100%;
   min-width: 6.5rem;
   max-width: none;
-  padding: 0.45rem 0.55rem;
-  box-sizing: border-box;
 }
 
-/* 매입 등록 모달 — 수량/단가/매입일 입력칸 가시성 강화 */
-.main-modal .main-table--purchase-modal .main-col-qty--purchase-input {
-  min-width: 7.25rem !important;
+/* --- 매입 등록 — 수량·단가·매입일 입력칸 넉넉 --- */
+.main-modal .main-table--purchase-modal th.main-col-qty--purchase-input,
+.main-modal .main-table--purchase-modal td.main-col-qty--purchase-input {
+  min-width: 7.25rem;
   width: 8.25rem;
   max-width: 10rem;
 }
-
-.main-modal .main-table--purchase-modal .main-col-unit-price--purchase-input {
+.main-modal .main-table--purchase-modal th.main-col-unit-price--purchase-input,
+.main-modal .main-table--purchase-modal td.main-col-unit-price--purchase-input {
   min-width: 9.5rem;
   width: 12rem;
   max-width: 16rem;
 }
-
-.main-modal .main-table--purchase-modal .main-col-date--purchase-input {
+.main-modal .main-table--purchase-modal th.main-col-date--purchase-input,
+.main-modal .main-table--purchase-modal td.main-col-date--purchase-input {
   min-width: 11.5rem;
   width: 12rem;
   max-width: 13rem;
   white-space: nowrap;
 }
-
-.main-modal .main-table--purchase-modal .main-input-qty--purchase {
+.main-modal .main-table--purchase-modal td .main-input-qty--purchase {
   width: 100%;
   min-width: 6.25rem;
   max-width: none;
-  padding: 0.45rem 0.5rem;
-  box-sizing: border-box;
 }
-
-.main-modal .main-table--purchase-modal .main-input-unit-price.main-input-unit-price--purchase {
+.main-modal .main-table--purchase-modal td .main-input-unit-price.main-input-unit-price--purchase {
   width: 100%;
   min-width: 8rem;
   max-width: none;
-  padding: 0.45rem 0.55rem;
-  box-sizing: border-box;
 }
-
-.main-modal .main-table--purchase-modal .main-input-date--purchase {
+.main-modal .main-table--purchase-modal td .main-input-date--purchase {
   width: 100%;
   min-width: 11rem;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
-/* 환불 모달 사유 픽리스트 + 직접 기입 */
-.main-refund-reason-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  min-width: 7.5rem;
-}
-.main-refund-reason-cell select,
-.main-refund-reason-cell input[type='text'] {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 0.4rem 0.45rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-}
-.main-modal-table-wrap td .main-refund-reason-cell select,
-.main-modal-table-wrap td .main-refund-reason-cell input[type='text'] {
-  width: 100%;
-  max-width: 100%;
-}
-
-/* 환불 처리 모달: 상단 검색·사유 통일 툴바 */
-.main-modal-form .main-modal-fields.main-modal-fields--refund-toolbar {
+/* --- 환불 처리 --- */
+.main-modal-form .main-modal-fields.main-modal-fields--refund-toolbar,
+.main-modal-form .main-modal-fields.main-modal-fields--disposal-search {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 0.75rem 1.25rem;
+  gap: var(--sp-3) var(--sp-5);
 }
 .main-modal-field-refund-search {
   flex: 1 1 min(20rem, 100%);
   min-width: 12rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: #475569;
 }
 .main-modal-field-refund-search input {
   width: 100%;
   min-width: 0;
-  box-sizing: border-box;
-  padding: 0.45rem 0.55rem;
-  font-size: 0.9rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
 }
-.main-modal-refund-unify {
+.main-modal-form label.main-modal-refund-unify {
+  flex-direction: row;
+  align-items: center;
   flex-shrink: 0;
+  gap: var(--sp-2);
+  min-height: var(--control-h);
   white-space: nowrap;
+  color: var(--c-text);
 }
-.main-modal-hint--refund {
+.main-modal-hint--refund,
+.main-modal-hint--disposal {
   flex: 1 1 100%;
   margin: 0;
-  line-height: 1.45;
-  font-size: 0.82rem;
 }
-
-/* 환불 테이블: 가로 스크롤 + 열 최소폭(한글 헤더·숫자 겹침 방지) */
-.main-modal-refund-wrap {
-  overflow-x: auto;
-  overflow-y: auto;
+.main-modal-refund-wrap,
+.main-modal-disposal-wrap {
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
 }
 .main-modal .main-table.main-table--refund-modal {
@@ -831,15 +1356,9 @@ td.main-td-scroll.main-col-source {
   width: max-content;
   min-width: 100%;
 }
-.main-modal .main-table--refund-modal thead th {
-  white-space: nowrap;
-  vertical-align: bottom;
-  line-height: 1.25;
-  padding: 0.55rem 0.65rem;
-}
 .main-modal .main-table--refund-modal th.main-col-qty,
 .main-modal .main-table--refund-modal td.main-col-qty {
-  min-width: 4.25rem;
+  min-width: 4.75rem;
   max-width: none;
   width: auto;
 }
@@ -852,20 +1371,8 @@ td.main-td-scroll.main-col-source {
 .main-modal .main-table--refund-modal td.main-td-refund-reason {
   min-width: 9.5rem;
   max-width: min(16rem, 40vw);
-  position: relative;
-  z-index: 0;
 }
-.main-modal .main-table--refund-modal .main-refund-reason-cell {
-  min-width: 8.5rem;
-  position: relative;
-  z-index: 1;
-}
-.main-modal .main-table--refund-modal .main-refund-reason-cell select {
-  position: relative;
-  z-index: 2;
-  cursor: pointer;
-}
-.main-modal .main-table--refund-modal .main-input-qty-refund {
+.main-modal .main-table--refund-modal td .main-input-qty-refund {
   min-width: 4.5rem;
   max-width: 7.5rem;
   width: 100%;
@@ -887,568 +1394,135 @@ td.main-td-scroll.main-col-source {
   width: auto;
 }
 
-.main-col-amount-readonly {
-  color: #475569;
-  background: #f8fafc;
+/* 환불·폐기 사유: 픽리스트 + 직접 기입 */
+.main-refund-reason-cell,
+.main-disposal-reason-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 8.5rem;
+  padding: 2px 0;
 }
 
-.main-loading,
-.main-empty {
-  margin: 1.5rem 0;
-  font-size: 0.95rem;
-  color: #64748b;
-}
-
-.main-error {
-  margin: 1.5rem 0;
-  font-size: 0.95rem;
-  color: #b91c1c;
-}
-
-/* 탭 상단 알림 (매입정보·매출 전환 등) */
-.main-alert-banner {
-  margin: 0 0 1rem;
-  padding: 0.65rem 1rem;
-  border-radius: 8px;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
-  font-size: 0.95rem;
-  font-weight: 600;
-}
-
-/* 상품 마스터 등 탭 내부 버튼(primary) */
-.main-content button[type="submit"],
-.main-content .main-filters + div button[type="button"]:first-of-type {
-  padding: 0.5rem 1rem;
-  font-weight: 500;
-  color: #fff;
-  background: #4f46e5;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.main-content button[type="submit"]:hover:not(:disabled),
-.main-content .main-filters + div button[type="button"]:first-of-type:hover {
-  background: #4338ca;
-}
-
-.main-content button[type="submit"]:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-/* 보조 버튼(행 추가 등) */
-.main-content button[type="button"] {
-  padding: 0.45rem 0.9rem;
-  font-size: 0.9rem;
-  color: #475569;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.main-content button[type="button"]:hover {
-  background: #e2e8f0;
-}
-
-.main-content button[type="button"] + button[type="submit"] {
-  margin-left: 0.5rem;
-}
-
-/* 상품 마스터 단건/다건 테이블 — 간격 축소, border 유지 */
-.product-master-single-table,
-.product-master-bulk-table {
-  margin-bottom: 0.75rem;
-}
-.product-master-single-table .main-table th,
-.product-master-single-table .main-table td,
-.product-master-bulk-table .main-table th,
-.product-master-bulk-table .main-table td {
-  padding: 0.5rem 0.65rem;
-}
-.product-master-single-table .main-table th:first-child,
-.product-master-single-table .main-table td:first-child,
-.product-master-bulk-table .main-table th:first-child,
-.product-master-bulk-table .main-table td:first-child {
-  padding-left: 0.75rem;
-}
-.product-master-single-table .main-table td input,
-.product-master-bulk-table .main-table td input {
+.main-refund-reason-cell select,
+.main-refund-reason-cell input[type='text'],
+.main-disposal-reason-cell select,
+.main-disposal-reason-cell input[type='text'] {
   width: 100%;
   min-width: 0;
-  padding: 0.4rem 0.5rem;
-  box-sizing: border-box;
+  max-width: 100%;
 }
-/* 테이블 내 입력칸 공통 */
-.main-table td input {
+
+/* --- 폐기 등록 --- */
+.main-modal-field-disposal-search,
+.main-modal-field-disposal-date {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.main-modal-field-disposal-search {
+  flex: 1 1 min(16rem, 100%);
+  min-width: 10rem;
+}
+.main-modal-field-disposal-search input {
   width: 100%;
-  min-width: 60px;
-  box-sizing: border-box;
+  min-width: 0;
 }
-
-/* 상품 마스터: 새로만들기 영역 */
-.main-btn {
-  padding: 0.5rem 1rem;
-  font-weight: 500;
-  color: #fff;
-  background: #4f46e5;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
+.main-modal-field-disposal-date {
+  flex: 0 0 auto;
 }
-.main-btn:hover {
-  background: #4338ca;
+.main-modal .main-table--disposal-modal td.main-td-disposal-reason {
+  min-width: 9rem;
+  max-width: min(14rem, 40vw);
+  vertical-align: top;
 }
-
-.product-master-form {
-  border: 1px solid #e2e8f0;
-  padding: 1rem;
-  margin-bottom: 1rem;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+.main-modal .main-table--disposal-modal th.main-col-product.main-col-product--disposal,
+.main-modal .main-table--disposal-modal td.main-col-product.main-col-product--disposal {
+  min-width: min(9.5rem, 24vw);
+  width: 16%;
+  max-width: min(13rem, 32vw);
 }
-
-.product-master-form-tabs {
-  margin-bottom: 0.75rem;
-  display: flex;
-  gap: 0.25rem;
+.main-modal .main-table--disposal-modal th.main-col-source,
+.main-modal .main-table--disposal-modal td.main-col-source {
+  min-width: min(9rem, 22vw);
+  width: 14%;
+  max-width: min(12rem, 30vw);
 }
-.main-tab-toggle {
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: #64748b;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+.main-modal .main-table--disposal-modal th.main-col-partner,
+.main-modal .main-table--disposal-modal td.main-col-partner {
+  min-width: min(10rem, 26vw);
+  width: 16%;
 }
-.main-tab-toggle:hover {
-  background: #e2e8f0;
-  color: #475569;
+.main-modal .main-table--disposal-modal th.main-col-disposal-qty-input,
+.main-modal .main-table--disposal-modal td.main-col-disposal-qty-input {
+  min-width: 5.75rem;
+  width: 6.5rem;
+  max-width: 8.5rem;
+  text-align: right;
 }
-.main-tab-toggle.active {
-  background: #4f46e5;
-  color: #fff;
-  border-color: #4f46e5;
-}
-
-/* ---- 모달 (공통 크기, 푸터 취소·저장) ---- */
-.main-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(15, 23, 42, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  box-sizing: border-box;
-  overscroll-behavior: contain;
-}
-
-.main-modal {
-  width: min(720px, 100%);
-  max-height: min(90vh, 900px);
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.2);
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
-}
-
-.main-modal--wide {
-  width: min(960px, 100%);
-}
-
-/* 매입 등록 등: 항상 최대에 가깝게 고정, 행 추가 시 창 크기 변동 없음 */
-.main-modal--fill {
-  width: min(960px, 100%);
-  min-height: min(90vh, 900px);
-  height: min(90vh, 900px);
-  max-height: min(90vh, 900px);
-}
-
-/* 매입 등록 모달은 입력 행이 많아 가로 폭을 더 넓게 사용 */
-.main-modal--purchase.main-modal--fill {
-  width: min(1280px, 100%);
-}
-
-/* 수금 등록 모달도 매입 등록과 동일하게 가로 폭 확장 */
-.main-modal--collect.main-modal--fill {
-  width: min(1360px, 100%);
-}
-
-/* 환불/폐기 모달도 동일 확장 */
-.main-modal--refund.main-modal--fill,
-.main-modal--disposal.main-modal--fill {
-  width: min(1280px, 100%);
-}
-
-.main-modal--fill .main-modal-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.main-modal--fill .main-modal-form {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.main-modal--fill .main-modal-toolbar {
-  flex-shrink: 0;
-}
-
-.main-modal--fill .main-modal-form > .main-modal-fields {
-  flex-shrink: 0;
-}
-
-.main-modal-field-collect-datetime {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.main-modal-fields--collect {
-  display: grid;
-  grid-template-columns: minmax(16rem, 1fr) minmax(14rem, 1fr) auto;
-  align-items: end;
-  gap: 0.75rem 1rem;
-}
-
-.main-modal-fields--collect .main-modal-field-select-wide,
-.main-modal-fields--collect .main-modal-field-collect-datetime {
-  margin: 0;
-}
-
-.main-modal-fields--collect .main-modal-hint {
-  margin: 0;
-  white-space: nowrap;
-}
-
-.main-modal-field-collect-datetime > span {
-  font-weight: 500;
-  color: #334155;
-}
-
-.main-input-datetime-local.main-input-datetime-local--collect {
-  min-width: 14rem;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid #c7d2fe;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
-  color: #0f172a;
-  font-size: 0.92rem;
+.main-modal .main-table--disposal-modal td .main-input-qty--disposal {
+  width: 100%;
+  min-width: 5rem;
+  max-width: none;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
-
-.main-modal--fill .main-modal-table-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow: auto;
+.main-modal .main-table--disposal-modal th.main-col-disposal-date-col,
+.main-modal .main-table--disposal-modal td.main-col-disposal-date-col {
+  min-width: 12rem;
+  width: 12rem;
+  max-width: 13rem;
+  white-space: nowrap;
 }
-
-/* 필드 + 테이블 혼합 폼(매출 전환 등): 아래 테이블 영역만 스크롤 */
-.main-modal--fill .main-modal-form > .main-table-wrap.main-modal-table-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow: auto;
-  margin-top: 0.75rem;
-}
-
-/* 노트북(중간 뷰포트)에서는 모든 모달을 화면에 맞춰 반응형으로 축소 */
-@media (max-width: 1440px) {
-  .main-modal-backdrop {
-    padding: 0.75rem;
-  }
-
-  .main-modal,
-  .main-modal--wide,
-  .main-modal--fill,
-  .main-modal--purchase.main-modal--fill,
-  .main-modal--collect.main-modal--fill,
-  .main-modal--refund.main-modal--fill,
-  .main-modal--disposal.main-modal--fill {
-    width: min(100%, calc(100vw - 1.5rem));
-    max-height: calc(100vh - 1.5rem);
-  }
-
-  .main-modal--fill {
-    min-height: calc(100vh - 1.5rem);
-    height: calc(100vh - 1.5rem);
-  }
-
-  .main-modal-fields--collect {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-
-  .main-modal-fields--collect .main-modal-hint {
-    white-space: normal;
-  }
-}
-
-.main-modal-header {
-  flex-shrink: 0;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
-}
-
-.main-modal-header h2 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #334155;
-}
-
-.main-modal-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.25rem;
-  min-height: 0;
-}
-
-.main-modal-footer {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.875rem 1.25rem;
-  border-top: 1px solid #e2e8f0;
-  background: #fafbfc;
-}
-
-.main-modal-btn {
-  padding: 0.5rem 1.15rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  border-radius: 8px;
-  cursor: pointer;
-  border: none;
-  transition: background 0.15s, opacity 0.15s;
-}
-
-.main-modal-btn.secondary {
-  color: #475569;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-}
-
-.main-modal-btn.secondary:hover {
-  background: #e2e8f0;
-}
-
-.main-modal-btn.primary {
-  color: #fff;
-  background: #4f46e5;
-}
-
-.main-modal-btn.primary:hover:not(:disabled) {
-  background: #4338ca;
-}
-
-.main-modal-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.main-modal-form .main-modal-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 0.75rem 1rem;
-  align-items: end;
-}
-
-.main-modal-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: #475569;
-}
-
-.main-modal-field-full {
-  grid-column: 1 / -1;
-}
-
-/* 모달 상단: 거래처·판매처 등 긴 옵션명 select */
-.main-modal-form .main-modal-fields label.main-modal-field-select-wide {
-  grid-column: span 2;
-  min-width: 0;
-  max-width: min(32rem, 100%);
-}
-.main-modal-form .main-modal-fields label.main-modal-field-select-wide select {
+.main-modal .main-table--disposal-modal td .main-input-date--disposal {
   width: 100%;
-  min-width: min(18rem, 100%);
+  min-width: 11.25rem;
   max-width: 100%;
-  box-sizing: border-box;
 }
 
-.main-modal-hint {
-  grid-column: 1 / -1;
-  font-size: 0.9rem;
-  color: #64748b;
-}
-
-.main-modal-table-wrap {
-  margin-top: 0.75rem;
-  max-height: 45vh;
-  overflow: auto;
-}
-
-.product-master-form--modal {
-  border: none;
-  padding: 0;
-  margin: 0;
-  box-shadow: none;
-}
-
-.main-modal-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.main-modal-toolbar-btn {
-  padding: 0.45rem 0.85rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #334155;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.main-modal-toolbar-btn:hover {
-  background: #e2e8f0;
-}
-
-.main-modal-table-wrap td select,
-.main-modal-table-wrap td input[type='number'],
-.main-modal-table-wrap td input[type='date'],
-.main-modal-table-wrap td input[type='datetime-local'],
-.main-modal-table-wrap td .main-input-unit-price {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: 0.45rem 0.5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-}
-
-.main-modal-form .main-modal-fields .main-input-unit-price,
-.main-modal-form .main-modal-fields .main-input-qty,
-.main-modal-form .main-modal-fields .main-input-date {
-  padding: 0.45rem 0.5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  box-sizing: border-box;
-}
-
-/* 거래처·상품 열 select: 열 min-width에 맞춰 옵션 표시 영역 확보 (일반 열은 위 min-width:0 유지) */
-.main-modal .main-modal-table-wrap td.main-col-partner select,
-.main-modal .main-modal-table-wrap td.main-col-product select {
-  min-width: min(18rem, 100%);
-  width: 100%;
-  max-width: none;
-}
-
-.main-modal-row-del {
-  color: #b91c1c;
-  background: transparent !important;
-  border: none !important;
-  font-size: 1.25rem;
-  line-height: 1;
-  padding: 0.15rem 0.35rem;
-  cursor: pointer;
-}
-
-.main-modal-row-del:hover:not(:disabled) {
-  color: #991b1b;
-}
-
-.main-modal-row-del:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-/* 일별 매입·매출 탭 */
+/* =========================================================
+ * 9. 일별 매입·매출
+ * ========================================================= */
 .main-filters--daily-trade .main-daily-trade-hint {
   flex: 1 1 100%;
-  font-size: 0.8125rem;
-  color: #64748b;
-  line-height: 1.45;
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: var(--lh-base);
+  color: var(--c-text-3);
 }
+
+.main-daily-section {
+  margin-bottom: var(--sp-8);
+}
+
+.main-daily-section-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+}
+
+.main-daily-breakdown-sub {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-base);
+  color: var(--c-text-3);
+}
+
 .main-table--daily-trade th.main-col-date--daily-narrow,
 .main-table--daily-trade td.main-col-date--daily-narrow {
-  width: 10ch;
-  min-width: 10ch;
-  max-width: 10.5ch;
+  width: 12ch;
+  min-width: 11ch;
   white-space: nowrap;
-  box-sizing: border-box;
 }
 .main-table--daily-trade .main-col-amount {
   min-width: 7.5rem;
 }
-.main-table-foot-daily th,
-.main-table-foot-daily td {
-  background: #f1f5f9;
-  font-weight: 600;
-  border-top: 2px solid #e2e8f0;
+.main-table--daily-trade .main-col-qty {
+  min-width: 5.5rem;
 }
 
-/* 일별 매입·매출 — 상품·거래처별 */
-.main-daily-section {
-  margin-bottom: 1.75rem;
-}
-.main-daily-section--breakdown {
-  margin-top: 2rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid #e2e8f0;
-}
-.main-daily-section-title {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
-  font-weight: 650;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-.main-daily-breakdown-sub {
-  margin: 0 0 0.75rem;
-  font-size: 0.8125rem;
-  color: #64748b;
-  line-height: 1.45;
-}
-.main-table-wrap--daily-breakdown {
-  overflow-x: auto;
-  max-width: 100%;
-}
 .main-table--daily-breakdown th.main-col-product--daily,
 .main-table--daily-breakdown td.main-col-product--daily {
   min-width: 10rem;
@@ -1462,13 +1536,15 @@ td.main-td-scroll.main-col-source {
 .main-table--daily-breakdown th.main-col-kind,
 .main-table--daily-breakdown td.main-col-kind {
   width: 4.5rem;
-  min-width: 4.25rem;
+  min-width: 4.5rem;
   text-align: center;
   white-space: nowrap;
 }
 .main-table--daily-breakdown th.main-col-qty--daily,
 .main-table--daily-breakdown td.main-col-qty--daily {
-  min-width: 5rem;
+  min-width: 6rem;
+  max-width: none;
+  white-space: nowrap;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -1476,35 +1552,348 @@ td.main-td-scroll.main-col-source {
   min-width: 6.5rem;
   text-align: right;
 }
-.main-kind-badge {
-  display: inline-block;
-  padding: 0.2rem 0.5rem;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-.main-kind-badge--purchase {
-  background: #e0e7ff;
-  color: #3730a3;
-}
-.main-kind-badge--sale {
-  background: #dcfce7;
-  color: #166534;
-}
-.main-receivable-positive {
-  color: #b45309;
-  font-weight: 600;
-}
 .main-empty-cell {
+  padding: var(--sp-8) var(--sp-3);
   text-align: center;
-  color: #64748b;
-  padding: 1.25rem 0.75rem;
+  color: var(--c-text-3);
 }
 .main-table-foot-breakdown th {
   text-align: left;
-  vertical-align: middle;
 }
-.main-table-foot-breakdown .main-col-receivable {
-  font-weight: 700;
+.main-table-foot-breakdown td {
+  white-space: nowrap;
+}
+
+/* =========================================================
+ * 10. 반응형 — 1280 이상은 위 사이드바, 아래는 노트북·태블릿·휴대폰
+ * ========================================================= */
+
+/* 노트북(≤1440): 모달을 화면에 맞춰 축소 */
+@media (max-width: 1440px) {
+  .main-modal-backdrop {
+    padding: var(--sp-3);
+  }
+
+  .main-modal,
+  .main-modal--wide,
+  .main-modal--fill,
+  .main-modal--purchase.main-modal--fill,
+  .main-modal--collect.main-modal--fill,
+  .main-modal--refund.main-modal--fill,
+  .main-modal--disposal.main-modal--fill {
+    width: min(100%, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+  }
+
+  .main-modal--fill {
+    min-height: calc(100dvh - 24px);
+    height: calc(100dvh - 24px);
+  }
+
+  .main-modal-fields--collect {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .main-modal-fields--collect .main-modal-hint {
+    white-space: normal;
+  }
+}
+
+/* 휴대폰(＜768): 여백 축소, 컨트롤 40px(터치), 툴바 세로 쌓기, 모달 전체 화면 */
+@media (max-width: 767px) {
+  :root {
+    --control-h: 40px;
+    --control-h-sm: 36px;
+  }
+
+  .main-header {
+    gap: var(--sp-3);
+    padding: 0 var(--sp-4);
+  }
+
+  /* 상단바(T-110): 이름은 화면에서 숨기고(읽기 프로그램에는 남김) 아바타 이니셜만,
+     로그아웃은 글자 유지 + 40px 터치 영역 — 320px 폭까지 한 줄에 들어간다 */
+  .main-user {
+    flex: none;
+  }
+
+  .main-user-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: var(--fs-13);
+  }
+
+  .main-user-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .main-logout {
+    flex: none;
+    height: 40px;
+    padding: 0 var(--sp-3);
+  }
+
+  .main-tabs {
+    padding: 0 var(--sp-2);
+  }
+
+  .main-content {
+    padding: var(--sp-4);
+  }
+
+  .main-page-title {
+    font-size: var(--fs-16);
+    margin-bottom: var(--sp-3);
+  }
+
+  .main-filters {
+    gap: var(--sp-2);
+  }
+
+  .main-filters > label,
+  .main-filters > .main-date-filter {
+    flex: 1 1 100%;
+  }
+
+  .main-filters > label > select,
+  .main-filters > label > input:not([type='checkbox']) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .main-date-filter .main-date-input-ymd {
+    flex: 1 1 8.5rem;
+    min-width: 0;
+  }
+
+  .main-filters > .main-btn {
+    flex: 1 1 auto;
+  }
+
+  .main-filter-checkbox {
+    flex: 1 1 100%;
+  }
+
+  .main-input-search {
+    width: auto;
+  }
+
+  .main-content > .main-table-wrap,
+  .main-daily-section > .main-table-wrap {
+    max-height: max(360px, calc(100dvh - 200px));
+  }
+
+  /* 모달 — 전체 화면 시트 */
+  .main-modal-backdrop {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .main-modal,
+  .main-modal--wide,
+  .main-modal--fill,
+  .main-modal--purchase.main-modal--fill,
+  .main-modal--collect.main-modal--fill,
+  .main-modal--refund.main-modal--fill,
+  .main-modal--disposal.main-modal--fill {
+    width: 100%;
+    height: 100dvh;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border: none;
+    border-radius: 0;
+  }
+
+  .main-modal-header {
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  .main-modal-body {
+    padding: var(--sp-4);
+  }
+
+  .main-modal-footer {
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  .main-modal-btn {
+    flex: 1;
+    height: 44px;
+  }
+
+  .main-modal-form .main-modal-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .main-modal-form .main-modal-fields label.main-modal-field-select-wide {
+    grid-column: auto;
+    max-width: none;
+  }
+
+  .main-modal-fields--collect .main-modal-hint {
+    white-space: normal;
+  }
+}
+
+/* =========================================================
+ * T-209 재고 경과일 — 배지·행 강조 (tokens.css 상태 색 사용)
+ * ========================================================= */
+.main-aging-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+
+.main-table th.main-col-aging,
+.main-table td.main-col-aging {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.main-aging-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+  border-radius: var(--radius-full);
+}
+
+.main-aging-badge--warn::before,
+.main-aging-badge--danger::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.main-aging-badge--warn {
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+}
+
+.main-aging-badge--danger {
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+}
+
+.main-table tbody tr.main-row-aging-danger > td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-danger);
+}
+
+.main-table tbody tr.main-row-aging-warn > td:first-child {
+  box-shadow: inset 3px 0 0 var(--c-warning);
+}
+
+/* =========================================================
+ * T-202 일별 원가·이익 표시
+ * ========================================================= */
+.main-col-profit {
+  color: var(--c-success-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-col-profit.main-profit-negative {
+  color: var(--c-danger-text);
+}
+
+.main-profit-pct {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  opacity: 0.85;
+}
+
+.main-cost-missing {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-warning-text);
+  white-space: nowrap;
+}
+
+/* T-210 매입 등록 — 최근 매입 단가 제안값(회색)과 안내 */
+.main-modal .main-table--purchase-modal .main-input-unit-price.main-input-unit-price--suggested {
+  color: var(--c-text-3);
+}
+.main-modal .main-table--purchase-modal .main-price-hint {
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- T-401 정산 할인·상계 ---------- */
+.main-status--entry-discount {
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+}
+.main-status--entry-offset {
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+}
+.main-collect-kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+.main-collect-kind-label {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+.main-collect-kind-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-14);
+  cursor: pointer;
+}
+.main-collect-kind-opt.is-on {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+  font-weight: var(--fw-semibold);
+}
+.main-collect-kind-opt input {
+  margin: 0;
+  width: auto;
+  min-height: 0;
+  display: inline-block;
+}
+
+.main-modal-form .main-collect-kind .main-collect-kind-opt {
+  flex-direction: row;
+  align-items: center;
 }

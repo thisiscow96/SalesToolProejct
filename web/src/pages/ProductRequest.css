@@ -1,0 +1,75 @@
+/* 개인 품목·공용 등록 요청 (T-216) — 토큰은 전역 디자인 토큰(H T-206)과 같은 이름 */
+.product-request-help {
+  margin: 0 0 var(--sp-3, 12px);
+  font-size: var(--fs-13, 13px);
+  color: var(--c-text-3, #6b7280);
+}
+.main-modal-form .main-modal-fields.partner-form-grid label.product-request-check {
+  flex-direction: row;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2, 8px);
+  font-size: var(--fs-13, 13px);
+}
+.main-modal-form .main-modal-fields.partner-form-grid label.product-request-check input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin-top: 2px;
+  padding: 0;
+}
+.product-request-panel {
+  margin-top: var(--sp-3, 12px);
+  margin-bottom: var(--sp-3, 12px);
+  padding: var(--sp-3, 12px);
+  border: 1px solid var(--c-border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  background: var(--c-surface, #fff);
+}
+.product-request-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2, 8px);
+  margin-bottom: var(--sp-2, 8px);
+}
+.product-request-head h3 {
+  margin: 0;
+  font-size: var(--fs-15, 15px);
+  font-weight: var(--fw-semibold, 600);
+}
+.product-request-notice {
+  margin-bottom: var(--sp-2, 8px);
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  border-radius: var(--radius-md, 8px);
+  background: var(--c-success-soft, #ecfdf5);
+  color: var(--c-success-text, #047857);
+  font-size: var(--fs-13, 13px);
+}
+.product-request-empty {
+  margin: 0;
+  font-size: var(--fs-13, 13px);
+  color: var(--c-text-3, #6b7280);
+}
+.product-request-dup {
+  font-size: var(--fs-12, 12px);
+  color: var(--c-danger, #dc2626);
+}
+.product-request-reject {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.product-request-reject input {
+  min-width: 10rem;
+}
+@media (max-width: 640px) {
+  .product-request-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .product-request-reject {
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,66 @@
+/* T-211 목록 검색칸·페이지 이동 막대 — 토큰(styles/tokens.css)만 사용 */
+.list-search-filter input[type='search'] {
+  width: 12rem;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-14);
+}
+
+.list-search-filter input[type='search']:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+.list-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+  margin: var(--sp-3) 0;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+
+.list-pager-info strong {
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+}
+
+.list-pager-page {
+  color: var(--c-text-3);
+}
+
+.list-pager-btns {
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+
+/* 휴대폰(mobile.css 와 같은 기준 767px): 검색칸은 한 줄 전체, 페이지 버튼은 반반·44px */
+@media (max-width: 767px) {
+  .list-search-filter input[type='search'] {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 44px;
+    font-size: var(--fs-16); /* iOS 확대 방지 */
+  }
+
+  .list-pager {
+    padding: 0 var(--sp-3);
+  }
+
+  .list-pager-btns {
+    width: 100%;
+  }
+
+  .list-pager-btns .main-btn {
+    flex: 1 1 0;
+    height: 44px;
+  }
+}

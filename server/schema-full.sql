@@ -66,7 +66,7 @@ CREATE TABLE "user" (
   id                SERIAL PRIMARY KEY,
   user_key          VARCHAR(10) NOT NULL UNIQUE DEFAULT ('GK' || LPAD(nextval('user_user_key_seq')::text, 6, '0')),
   name              VARCHAR(100) NOT NULL,
-  phone             VARCHAR(20) NOT NULL UNIQUE,
+  phone             VARCHAR(20) UNIQUE,              -- 선택(2026-11-20 migrations/008)
   email             VARCHAR(255) NOT NULL UNIQUE,
   agent_no          VARCHAR(50) NOT NULL UNIQUE,
   password_hash     VARCHAR(255) NOT NULL,

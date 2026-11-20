@@ -1,0 +1,623 @@
+/* 거래처 원장 · 미수 연령 (T-104) — Main.css 토큰·클래스(main-modal, main-table)를 그대로 쓰고 이 화면에만 필요한 것만 둔다 */
+
+.main-table th.num {
+  text-align: right;
+}
+
+/* ---------- 원장 모달 ---------- */
+.ledger-modal {
+  width: min(1040px, 100%);
+}
+
+.ledger-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-3);
+}
+
+.ledger-sub {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.ledger-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.ledger-periods {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.ledger-chip {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.ledger-chip:hover {
+  background: var(--c-surface-3);
+}
+
+.ledger-chip.is-active {
+  color: var(--c-accent-text);
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent);
+  font-weight: var(--fw-semibold);
+}
+
+.ledger-chip:focus-visible,
+.aging-toggle:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+.ledger-dates {
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+
+.ledger-dates label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+
+.ledger-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+  cursor: pointer;
+}
+
+.ledger-warn {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+  border-radius: var(--radius-md);
+}
+
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+}
+
+.ledger-summary > div {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+
+.ledger-summary dt {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.ledger-summary dd {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+
+.ledger-summary dd.is-plus {
+  color: var(--c-text);
+}
+
+.ledger-summary dd.is-minus {
+  color: var(--c-success-text);
+}
+
+.ledger-summary .ledger-summary-closing {
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent);
+}
+
+.ledger-summary .ledger-summary-closing dd {
+  font-weight: var(--fw-bold);
+  color: var(--c-accent-text);
+}
+
+.ledger-table-wrap {
+  max-height: none;
+}
+
+.ledger-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-date {
+  white-space: nowrap;
+}
+
+.ledger-desc {
+  min-width: 16rem;
+  color: var(--c-text-2);
+}
+
+.ledger-memo {
+  color: var(--c-text-3);
+}
+
+.ledger-table .ledger-bal {
+  font-weight: var(--fw-semibold);
+}
+
+.ledger-row--opening td {
+  background: var(--c-surface-2);
+  font-weight: var(--fw-medium);
+}
+
+.ledger-row--cancelled td {
+  color: var(--c-text-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--c-border-strong);
+}
+
+.ledger-row--cancelled td.ledger-bal,
+.ledger-row--cancelled td.ledger-kind {
+  text-decoration: none;
+}
+
+.ledger-table td.ledger-cancelled-amt {
+  color: var(--c-text-3);
+  font-weight: var(--fw-regular);
+}
+
+.ledger-none {
+  text-align: center;
+  color: var(--c-text-3);
+}
+
+.ledger-badge {
+  display: inline-block;
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  color: var(--c-text-2);
+  background: var(--c-neutral-soft);
+}
+
+.ledger-badge--sale {
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+}
+
+.ledger-badge--return {
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+}
+
+.ledger-badge--receipt {
+  color: var(--c-success-text);
+  background: var(--c-success-soft);
+}
+
+.ledger-badge--refund,
+.ledger-badge--cancelled {
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+}
+
+.ledger-footer {
+  flex-wrap: wrap;
+}
+
+/* ---------- 미수 연령 ---------- */
+.aging-basis {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.aging-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.aging-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.aging-caret {
+  width: 1em;
+  color: var(--c-text-3);
+}
+
+.main-table.aging-table td.aging-total {
+  font-weight: var(--fw-semibold);
+}
+
+.main-table.aging-table td.aging-over,
+.aging-sales td.aging-over {
+  color: var(--c-danger-text);
+  font-weight: var(--fw-bold);
+}
+
+.main-table.aging-table td.aging-zero {
+  color: var(--c-text-3);
+  font-weight: var(--fw-regular);
+}
+
+.aging-date {
+  white-space: nowrap;
+}
+
+.aging-days {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.aging-row.is-open td {
+  background: var(--c-surface-2);
+}
+
+.aging-detail-row td {
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  background: var(--c-surface-2);
+}
+
+.aging-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.aging-sales {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+
+.aging-sales th,
+.aging-sales td {
+  padding: var(--sp-1) var(--sp-3);
+  text-align: left;
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+
+.aging-sales th {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+
+.aging-sales .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.aging-totals td {
+  font-weight: var(--fw-bold);
+  background: var(--c-surface-2);
+  border-top: 2px solid var(--c-border-strong);
+}
+
+/* ---------- 거래처 목록의 미수 칸 ---------- */
+.main-table td.partner-due {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.partner-due-amt {
+  font-weight: var(--fw-semibold);
+}
+
+.partner-due-over {
+  display: block;
+  font-size: var(--fs-12);
+  color: var(--c-danger-text);
+}
+
+.partner-due-none {
+  color: var(--c-text-3);
+}
+
+.partner-view-switch {
+  display: inline-flex;
+  margin-bottom: var(--sp-3);
+  padding: 2px;
+  background: var(--c-surface-3);
+  border-radius: var(--radius-md);
+}
+
+.partner-view-switch button {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-4);
+  font: inherit;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.partner-view-switch button[aria-selected='true'] {
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.partner-actions {
+  display: inline-flex;
+  gap: var(--sp-1);
+}
+
+.partner-sort-btn {
+  width: 100%;
+  text-align: right;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* ---------- 휴대폰 폭: 원장 모달 전체 화면, 표는 카드 목록 ---------- */
+@media (max-width: 480px) {
+  .ledger-backdrop {
+    padding: 0;
+  }
+
+  .ledger-modal {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  /* T-220: 요약 6칸은 3열 2줄로(2열 3줄이던 것) — 거래 줄이 첫 화면에 더 보이게 */
+  .ledger-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-3);
+  }
+
+  .ledger-summary > div {
+    padding: var(--sp-2);
+  }
+
+  .ledger-summary dt {
+    font-size: var(--fs-12);
+  }
+
+  .ledger-summary dd {
+    margin-top: 2px;
+    font-size: var(--fs-14);
+    overflow-wrap: anywhere;
+  }
+
+  .ledger-table thead {
+    display: none;
+  }
+
+  .ledger-table,
+  .ledger-table tbody {
+    display: block;
+  }
+
+  /* 거래 한 줄 = 카드: 날짜·구분 / 내용 / 금액(+ 또는 −)·잔액.
+     늘어남·줄어듦은 같은 자리(amt)에 — 매출·반품·수금 금액이 모두 왼쪽 같은 위치에 선다 */
+  .ledger-table tr.ledger-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'date kind'
+      'desc desc'
+      'amt bal';
+    align-items: center;
+    gap: 2px var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .ledger-table tr.ledger-row td {
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  /* 빈 칸(기초 잔액의 날짜·구분·금액, 매출의 줄어듦 등)은 카드에서 자리를 차지하지 않게 */
+  .ledger-table tr.ledger-row td:empty {
+    display: none;
+  }
+
+  .ledger-table tr.ledger-row--opening {
+    grid-template-areas: 'desc bal';
+    background: var(--c-surface-2);
+  }
+
+  .ledger-table tr.ledger-row--opening .ledger-desc {
+    font-size: var(--fs-13);
+    color: var(--c-text-2);
+  }
+
+  .ledger-table .ledger-date {
+    grid-area: date;
+  }
+
+  .ledger-table .ledger-kind {
+    grid-area: kind;
+  }
+
+  .ledger-table .ledger-desc {
+    grid-area: desc;
+    min-width: 0;
+    font-size: var(--fs-13);
+  }
+
+  .main-table.ledger-table td.ledger-inc,
+  .main-table.ledger-table td.ledger-dec {
+    grid-area: amt;
+    text-align: left;
+    font-weight: var(--fw-semibold);
+  }
+
+  .main-table.ledger-table td.ledger-dec {
+    color: var(--c-success-text);
+  }
+
+  .ledger-table .ledger-inc:not(:empty)::before {
+    content: '+';
+  }
+
+  .ledger-table .ledger-dec:not(:empty)::before {
+    content: '−';
+  }
+
+  .ledger-table .ledger-cancelled-amt::before {
+    content: none !important;
+  }
+
+  .main-table.ledger-table td.ledger-bal {
+    grid-area: bal;
+    text-align: right;
+  }
+
+  .ledger-table .ledger-bal::before {
+    content: '잔액 ';
+    font-size: var(--fs-12);
+    font-weight: var(--fw-regular);
+    color: var(--c-text-3);
+  }
+}
+
+/* 외상 한도·사용률 (T-207) */
+.ledger-credit {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+}
+.ledger-credit-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-13);
+}
+.ledger-credit-title {
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+.ledger-credit-nums {
+  font-variant-numeric: tabular-nums;
+}
+.ledger-credit-bar {
+  height: 8px;
+  margin: var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--radius-full);
+  background: var(--c-surface-3);
+  overflow: hidden;
+}
+.ledger-credit-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-accent);
+}
+.ledger-credit--near .ledger-credit-bar > span {
+  background: var(--c-warning);
+}
+.ledger-credit--over {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+}
+.ledger-credit--over .ledger-credit-bar > span {
+  background: var(--c-danger);
+}
+.ledger-credit-foot {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-2);
+}
+.ledger-credit--over .ledger-credit-foot {
+  color: var(--c-danger-text);
+}
+
+/* ---------- T-401 할인·상계 ---------- */
+.ledger-badge--discount {
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+}
+.ledger-badge--offset {
+  color: var(--c-success-text);
+  background: var(--c-neutral-soft);
+}
+.ledger-inline-btn {
+  margin-left: var(--sp-2);
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-full);
+  background: var(--c-surface);
+  color: var(--c-danger-text);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.ledger-sub-backdrop {
+  z-index: 1100; /* 원장 모달 위에 */
+}
+.ledger-offset-modal {
+  width: min(440px, 100%);
+}
+.ledger-offset-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.ledger-offset-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.ledger-offset-field input {
+  min-height: 44px;
+  font-size: var(--fs-16);
+}

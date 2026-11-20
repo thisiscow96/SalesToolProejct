@@ -9,28 +9,16 @@ const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { Client } = require('pg');
 
+// 접속 설정은 서버와 같은 lib/db-config.js (Neon·Supabase SSL 포함)
+const { getPgConfig } = require('../lib/db-config');
+// MIGRATE_DATABASE_URL(Neon 이면 "-pooler" 없는 직접 연결 주소)이 있으면 그것을 먼저 쓴다 (T-219 R-04). 없으면 DATABASE_URL.
+// 주소 값은 로그에 남기지 않는다 — 어느 변수를 썼는지, 풀러 주소인지만
 function getConfig() {
-  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
-  if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
-    const u = new URL(raw);
-    const database = (u.pathname || '/').slice(1).replace(/\?.*$/, '');
-    const needSsl = process.env.NODE_ENV === 'production' || u.hostname.includes('render.com') || (u.searchParams && u.searchParams.get('sslmode'));
-    return {
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 5432,
-      user: u.username || undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-      database: database || undefined,
-      ssl: needSsl ? { rejectUnauthorized: false } : undefined,
-    };
-  }
-  return {
-    host: process.env.PG_HOST || 'localhost',
-    port: Number(process.env.PG_PORT) || 5432,
-    user: process.env.PG_USER || 'postgres',
-    password: process.env.PG_PASSWORD != null ? String(process.env.PG_PASSWORD) : undefined,
-    database: process.env.PG_DATABASE || 'sales_tool',
-  };
+  const direct = process.env.MIGRATE_DATABASE_URL && process.env.MIGRATE_DATABASE_URL.trim();
+  const cfg = getPgConfig(direct ? { url: direct } : {});
+  const pooled = /pooler\./i.test(cfg.host || '');
+  console.log(`[migrate] 접속: ${direct ? 'MIGRATE_DATABASE_URL' : 'DATABASE_URL'}${pooled ? ' (풀러 주소)' : ''}`);
+  return cfg;
 }
 
 async function run() {
@@ -56,6 +44,8 @@ async function run() {
   }
 
   const client = new Client(config);
+  // 마이그레이션이 RAISE NOTICE 로 남기는 안내(예: 009 기존 데이터가 제약을 어겨 VALIDATE 건너뜀)를 배포 로그에 보이게
+  client.on('notice', (n) => console.log('[migrate] NOTICE', n.message));
   try {
     await client.connect();
   } catch (err) {
@@ -64,6 +54,8 @@ async function run() {
   }
 
   try {
+    // 잠금은 파일마다 트랜잭션 잠금(pg_advisory_xact_lock)으로 잡는다. 세션 잠금은 Neon 풀러(PgBouncer)에서
+    // 연결이 반납돼도 풀리지 않아 다음 배포의 migrate가 끝없이 기다렸다(2026-11-20 운영 재현, I 검토 R-03·R-04).
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         name VARCHAR(255) PRIMARY KEY,
@@ -91,8 +83,28 @@ async function run() {
       }
 
       console.log('[migrate] 적용 중:', name);
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
+      // 파일 하나 = 트랜잭션 하나: 중간에 실패하면 그 파일 변경이 모두 취소되고 이력도 남지 않아 고친 뒤 다시 실행할 수 있다 (O-01)
+      await client.query('BEGIN');
+      try {
+        // 다른 배포가 잡고 있으면 오래 기다리지 않고 실패한다(무한 대기 → 서버 미기동 방지)
+        await client.query("SET LOCAL lock_timeout = '30s'");
+        await client.query("SET LOCAL statement_timeout = '5min'");
+        await client.query('SELECT pg_advisory_xact_lock(728470901)');
+        // 잠금을 잡는 사이 다른 배포가 먼저 적용했으면 건너뛴다
+        const again = await client.query('SELECT 1 FROM schema_migrations WHERE name = $1', [name]);
+        if (again.rowCount) {
+          await client.query('COMMIT');
+          console.log('[migrate] 다른 배포가 먼저 적용함:', name);
+          appliedSet.add(name);
+          continue;
+        }
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw new Error(`${name}: ${e.message}`);
+      }
       appliedSet.add(name);
       console.log('[migrate] 완료:', name);
     }

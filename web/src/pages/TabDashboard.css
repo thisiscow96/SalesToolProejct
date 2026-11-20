@@ -1,0 +1,482 @@
+/* 첫 화면 "오늘" (T-208) — 토큰(styles/tokens.css)만 쓴다. 클래스는 dash- 로 시작해 다른 화면과 겹치지 않게 한다 */
+
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  word-break: keep-all; /* 한글 낱말 중간에서 줄바꿈하지 않게 */
+}
+
+.dash-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.dash-date {
+  margin: 0;
+  font-size: var(--fs-14);
+  color: var(--c-text-2);
+}
+
+.dash-date strong {
+  color: var(--c-text);
+  font-weight: var(--fw-semibold);
+}
+
+.dash-hint {
+  color: var(--c-text-3);
+}
+
+.dash-error-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+/* ---------- 카드 ---------- */
+.dash-card {
+  min-width: 0;
+  padding: var(--sp-5);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.dash-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.dash-card-title {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+}
+
+.dash-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 0 var(--sp-2);
+  margin-right: calc(-1 * var(--sp-2));
+  font: inherit;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-accent-text);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dash-link:hover {
+  background: var(--c-accent-soft);
+}
+
+.dash-link:focus-visible,
+.dash-row-btn:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- 오늘 매입·매출·수금 ---------- */
+.dash-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+.dash-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+}
+
+.dash-kpi-label {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+.dash-kpi-amount,
+.dash-recv-total {
+  margin: 0;
+  font-size: var(--fs-24);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.dash-kpi-unit {
+  margin-left: 2px;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+.dash-kpi-count {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-kpi .dash-link {
+  margin-top: auto;
+  margin-left: calc(-1 * var(--sp-2));
+}
+
+/* ---------- 총미수 · 연령 ---------- */
+.dash-recv-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--sp-2);
+  font-size: var(--fs-30);
+  margin-bottom: var(--sp-4);
+}
+
+.dash-recv-meta {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  color: var(--c-text-3);
+}
+
+.dash-aging-bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  overflow: hidden;
+  background: var(--c-surface-3);
+  border-radius: var(--radius-full);
+}
+
+.dash-aging-seg {
+  flex-basis: 0;
+  min-width: 4px;
+}
+
+.dash-aging-legend {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin: var(--sp-4) 0 0;
+}
+
+.dash-aging-item dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-12);
+  color: var(--c-text-2);
+}
+
+.dash-aging-item dd {
+  margin: 2px 0 0;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+}
+
+.dash-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-full);
+}
+
+.dash-tone--ok { background: var(--c-success); }
+.dash-tone--info { background: var(--c-info); }
+.dash-tone--warn { background: var(--c-warning); }
+.dash-tone--danger { background: var(--c-danger); }
+
+.dash-num {
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+
+.dash-num--danger,
+.dash-aging-item dd.dash-num--danger {
+  color: var(--c-danger-text);
+}
+
+.dash-foot {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.dash-empty {
+  margin: 0;
+  padding: var(--sp-4) 0;
+  font-size: var(--fs-14);
+  color: var(--c-text-3);
+}
+
+/* ---------- 상위 5 목록 ---------- */
+.dash-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+.dash-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+}
+
+.dash-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--c-border);
+}
+
+.dash-row:first-child {
+  border-top: 0;
+}
+
+.dash-row-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: calc(100% + var(--sp-4));
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-2);
+  margin: 0 calc(-1 * var(--sp-2));
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.dash-row-btn:hover {
+  background: var(--c-surface-3);
+}
+
+.dash-row-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dash-row-name {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-row-sub {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-row-amount {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.dash-row-go {
+  font-size: var(--fs-12);
+  color: var(--c-accent-text);
+  white-space: nowrap;
+}
+
+.dash-days {
+  flex: none;
+  min-width: 44px;
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  border-radius: var(--radius-full);
+}
+
+.dash-days--warn {
+  color: var(--c-warning-text);
+  background: var(--c-warning-soft);
+}
+
+.dash-days--danger {
+  color: var(--c-danger-text);
+  background: var(--c-danger-soft);
+}
+
+/* ---------- 좁은 화면 ---------- */
+@media (max-width: 1023px) {
+  .dash-lists {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* T-220 휴대폰(768 미만) — T-206 규칙(카드형·터치 40px 이상·숫자 오른쪽 정렬)을 첫 화면에도 */
+@media (max-width: 767px) {
+  .dash {
+    gap: var(--sp-3);
+  }
+
+  .dash-card {
+    padding: var(--sp-4);
+  }
+
+  .dash-link {
+    min-height: 40px;
+  }
+
+  /* 매입·매출·수금 카드 3장을 한 장의 목록으로 묶는다(카드 3장이 첫 화면의 절반을 차지하던 것을 세 줄로).
+     줄마다 왼쪽 이름·건수, 오른쪽 금액·이동 링크 */
+  .dash-kpis {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
+  .dash-kpi {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label amount'
+      'count link';
+    align-items: center;
+    gap: 0 var(--sp-3);
+    padding: var(--sp-3) var(--sp-4) var(--sp-1);
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .dash-kpi + .dash-kpi {
+    border-top: 1px solid var(--c-border);
+  }
+
+  .dash-kpi-label { grid-area: label; font-size: var(--fs-14); color: var(--c-text); }
+  .dash-kpi-amount { grid-area: amount; font-size: var(--fs-20); text-align: right; }
+  .dash-kpi-count { grid-area: count; margin: 0; }
+  .dash-kpi .dash-link { grid-area: link; margin: 0 calc(-1 * var(--sp-2)) 0 0; justify-self: end; }
+
+  .dash-recv-total {
+    font-size: var(--fs-24);
+    margin-bottom: var(--sp-3);
+  }
+
+  /* 연령 4구간: 2×2 격자 대신 표처럼 한 줄에 한 구간(이름 왼쪽 · 금액 오른쪽) — 세로로 훑어 비교 */
+  .dash-aging-legend {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-top: var(--sp-3);
+  }
+
+  .dash-aging-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    min-height: 40px;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .dash-aging-item:first-child {
+    border-top: 0;
+  }
+
+  .dash-aging-item dt {
+    font-size: var(--fs-14);
+  }
+
+  .dash-aging-item dd {
+    margin: 0;
+    text-align: right;
+  }
+
+  /* 미수 많은 거래처: 줄을 누르면 원장 — 금액 아래 '원장 ›'로 눌러지는 줄임을 보인다 */
+  .dash-row-btn {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'main amount'
+      'main go';
+    align-items: center;
+    gap: 0 var(--sp-3);
+    min-height: 56px;
+  }
+
+  .dash-row-btn .dash-row-main { grid-area: main; }
+  .dash-row-btn .dash-row-amount { grid-area: amount; align-self: end; text-align: right; }
+
+  .dash-row-go {
+    grid-area: go;
+    align-self: start;
+    justify-self: end;
+  }
+
+  /* 긴 거래처·품목 이름은 말줄임 대신 두 줄까지 보인다(같은 이름 2호점 등 구분) */
+  .dash-row-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* 외상 한도 넘은 거래처 (T-207) — 있을 때만 보이는 카드, 왼쪽 빨간 띠 */
+.dash-over {
+  border-left: 4px solid var(--c-danger);
+}
+.dash-over-count {
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* T-401 할인·상계 한 줄 (현금 아님) */
+.dash-kpi-note {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
