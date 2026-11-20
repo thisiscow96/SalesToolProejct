@@ -675,6 +675,8 @@ function TabPurchases() {
         onClose={() => {
           setShowForm(false);
           setActionErr('');
+          // 취소·바깥 클릭으로 닫으면 입력표를 비운다(다른 모달과 같게, T-109). 저장 실패 시에는 모달이 닫히지 않으므로 입력이 남는다.
+          setPurchaseRows([newPurchaseRow()]);
         }}
         formId="form-purchase-modal"
         submitting={submitting}
