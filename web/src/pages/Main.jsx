@@ -23,6 +23,7 @@ import { toYmd as toYmdKst, kstParts, joinDateAndKstTime, kstNowLocalInput } fro
 import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
+import TabDashboard from './TabDashboard';
 import {
   RowActionMenu,
   CancelTradeModal,
@@ -2915,6 +2916,7 @@ function TabDailyTrade() {
 }
 
 const BASE_TABS = [
+  { id: 'today', label: '오늘', Component: TabDashboard }, // T-208 첫 화면
   { id: 'inventory', label: '재고현황', Component: TabReorder },
   { id: 'daily-trade', label: '일별 매입·매출', Component: TabDailyTrade },
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
@@ -2928,7 +2930,7 @@ const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabPro
 export default function Main() {
   const user = getUser();
   const tabs = user?.is_admin ? [...BASE_TABS, ADMIN_TAB] : BASE_TABS;
-  const [activeTab, setActiveTab] = useState('inventory');
+  const [activeTab, setActiveTab] = useState('today');
   // 다른 탭에서 넘겨준 검색 조건(T-103: 매입 취소가 막혔을 때 연결 매출 보기)
   const [navFilter, setNavFilter] = useState(null);
   const navigateTab = (tabId, filter) => {

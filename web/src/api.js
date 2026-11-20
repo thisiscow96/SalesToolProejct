@@ -268,4 +268,12 @@ export async function fetchReceivablesAging(params = {}) {
   return data.data;
 }
 
+/** 첫 화면 "오늘" (T-208) — 오늘 매입·매출·수금, 총미수·연령, 오래된 재고·미수 거래처 상위 5 */
+export async function fetchDashboard() {
+  const res = await apiFetch(`${API_BASE}/dashboard`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '오늘 현황을 불러오지 못했습니다.');
+  return data.data;
+}
+
 export { getUser, getToken, API_BASE };
