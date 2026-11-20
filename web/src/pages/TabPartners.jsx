@@ -58,8 +58,9 @@ async function sendPartner(method, url, body) {
 export const createPartner = (body) => sendPartner('POST', `${API_BASE}/partners`, body);
 export const updatePartner = (id, body) => sendPartner('PUT', `${API_BASE}/partners/${encodeURIComponent(id)}`, body);
 
-const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', location: '', address: '', memo: '', credit_limit: '' };
-const FIELDS = ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo', 'credit_limit'];
+const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', email: '', location: '', address: '', memo: '', credit_limit: '' };
+const FIELDS = ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo', 'credit_limit'];
+const EMAIL_RE = /^[^s@]+@[^s@]+.[^s@]+$/; // T-214 입금 안내 받는 주소
 
 /* ── 외상 한도 (T-207) — 서버는 NUMERIC 문자열("10000.00")로 준다. 입력은 콤마 허용, 비우면 한도 없음 ── */
 /** 서버 값 → 입력칸 문자열("10000.00" → "10,000", null → "") */
@@ -123,6 +124,10 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
     setErr('');
     if (!form.name.trim()) {
       setErr('거래처 이름을 입력하세요.');
+      return;
+    }
+    if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) {
+      setErr('이메일 형식이 올바르지 않습니다.');
       return;
     }
     const limitText = String(form.credit_limit ?? '').replace(/,/g, '').trim();
@@ -212,6 +217,24 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
                 연락처
                 <input type="text" inputMode="tel" maxLength={50} autoComplete="off" placeholder="010-0000-0000" value={form.phone} onChange={set('phone')} />
               </label>
+              {RECEIVABLE_TYPES.has(form.type) && (
+                <label className="partner-field-wide">
+                  <span className="partner-label">이메일(입금 안내 받는 곳)</span>
+                  <input
+                    type="email"
+                    inputMode="email"
+                    maxLength={255}
+                    autoComplete="off"
+                    placeholder="예: account@example.com"
+                    aria-describedby={`${formId}-email-hint`}
+                    value={form.email}
+                    onChange={set('email')}
+                  />
+                  <span id={`${formId}-email-hint`} className="partner-hint">
+                    원장의 [입금 안내 보내기]가 이 주소로 미수 금액을 보냅니다. 비워도 됩니다.
+                  </span>
+                </label>
+              )}
               <label>
                 위치
                 <input type="text" maxLength={200} autoComplete="off" placeholder="예: 가락시장 청과동" value={form.location} onChange={set('location')} />

@@ -6,7 +6,11 @@ import { Fragment, useEffect, useId, useState } from 'react';
 import { fetchPartnerLedger, fetchReceivablesAging } from '../api';
 import { fetchPayableLedger, fetchPayablesAging } from '../lib/payablesApi';
 import { kstTodayYmd } from '../lib/dates';
+import PaymentReminderModal from '../components/PaymentReminderModal'; // T-214 입금 안내
 import './PartnerLedger.css';
+
+/** 받을 돈 장부가 있는 거래처 유형(server ledger-routes RECEIVABLE_PARTNER_TYPES 와 같음) — 입금 안내 버튼(T-214) */
+const RECEIVABLE_LEDGER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
 export const won = (n) => (n == null ? '-' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 }));
 /**
@@ -104,6 +108,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [reminderOpen, setReminderOpen] = useState(false); // T-214
   useModalBehavior(!!partner, onClose);
 
   useEffect(() => {
@@ -141,6 +146,8 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   };
   const t = data?.totals;
   const diff = data?.check?.diff || 0;
+  // T-214 입금 안내 — 받을 돈 장부가 있는 거래처만(매입처 제외). 미수 0 이어도 열 수는 있다(모달이 안내)
+  const canRemind = !payable && !!data && RECEIVABLE_LEDGER_TYPES.has(data.partner?.type);
 
   return (
     <div className="main-modal-backdrop ledger-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -322,11 +329,17 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
             거래명세서
           </button>
           )}
+          {canRemind && (
+          <button type="button" className="main-modal-btn secondary ledger-remind-btn" onClick={() => setReminderOpen(true)}>
+            입금 안내 보내기
+          </button>
+          )}
           <button type="button" className="main-modal-btn primary" onClick={onClose}>
             닫기
           </button>
         </div>
       </div>
+      {reminderOpen && <PaymentReminderModal partner={partner} onClose={() => setReminderOpen(false)} />}
     </div>
   );
 }

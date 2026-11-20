@@ -7,6 +7,9 @@
  *  - smtp   : Gmail 등 SMTP. Gmail 일반 계정 일 500통 (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM)
  *             Render·Railway 같은 PaaS는 SMTP 포트를 막으므로 로컬·VPS(Oracle 등)에서만 쓴다.
  * 세 수단을 모두 설정하면 하루 약 900통까지 무료로 보낸다. (한도는 각 서비스 정책에 따라 바뀔 수 있음)
+ *
+ * 테스트용 가짜 발송(T-214): MAIL_DRY_RUN=1 이면 실제 수단을 쓰지 않고 성공으로 기록만 한다(provider 'dry_run').
+ *   MAIL_DRY_RUN=fail 이면 실패로 돌려준다(실패 경로 검사). 운영에서는 설정하지 않는다.
  */
 const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
@@ -47,6 +50,14 @@ const providers = {
   },
 };
 
+/** 'ok' | 'fail' | null */
+function dryRunMode() {
+  const v = env('MAIL_DRY_RUN').toLowerCase();
+  if (v === '1' || v === 'true') return 'ok';
+  if (v === 'fail') return 'fail';
+  return null;
+}
+
 function order() {
   const list = (env('EMAIL_PROVIDERS') || 'resend,brevo,smtp').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   return list.filter((p) => providers[p]);
@@ -54,6 +65,12 @@ function order() {
 
 /** @returns {{sent:boolean, provider?:string, errors?:string[]}} */
 async function sendMail({ to, subject, text }) {
+  const dry = dryRunMode();
+  if (dry === 'ok') {
+    console.log('[메일] 가짜 발송(MAIL_DRY_RUN) →', to, '·', String(subject || '').slice(0, 60));
+    return { sent: true, provider: 'dry_run' };
+  }
+  if (dry === 'fail') return { sent: false, errors: ['dry_run: 가짜 실패(MAIL_DRY_RUN=fail)'] };
   const errors = [];
   for (const name of order()) {
     const p = providers[name];
@@ -73,6 +90,7 @@ async function sendMail({ to, subject, text }) {
 }
 
 function configuredProviders() {
+  if (dryRunMode()) return ['dry_run'];
   return order().filter((n) => providers[n].ready());
 }
 
