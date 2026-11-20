@@ -11,7 +11,12 @@
  * 범위(그룹):
  *   H 헤더(X-Agent-No)만 바꾼 호출   T 토큰 위조·변조·alg·만료·형식   I 다른 사용자 리소스 접근(IDOR)
  *   L 서버 로그에 비밀번호·토큰이 남는지   S 운영 모드 AUTH_SECRET 시작 거부   E 로그인 실패 응답의 계정 존재 노출
+ *   N 보안 보강(T-114, B): 로그인 5회 실패 지연·번호 확인 제한·비밀번호 길이·업로드 비활성/인증 선행/한도
+ *   A seed-admin 운영 모드 거부·기존 비밀번호 유지 (T-114, R-01)
  *   (INFO 표시 항목은 관찰만 하고 통과/실패 집계에서 뺀다)
+ *
+ * T-114(B) 갱신: 메인 서버는 LOGIN_MAX_FAILS=1000 으로 띄운다 — E 그룹이 같은 번호로 여러 번 실패해도
+ *   잠기지 않게(응답 시간 비교가 429 로 흐려지지 않게). 시도 제한 자체는 N 그룹이 별도 서버(짧은 잠금 시간)로 검사한다.
  *
  * 운영 DB 보호: DATABASE_URL 호스트가 127.0.0.1/localhost 가 아니면 실행하지 않는다.
  * 기존 코드·데이터는 바꾸지 않는다. 실행마다 접미사가 다른 테스트 사용자·거래처를 새로 만든다.
@@ -177,7 +182,7 @@ async function victimSnapshot(uid) {
 const idsIn = (resp) => (Array.isArray(resp?.json?.data) ? resp.json.data.map((r) => r.id) : null);
 
 async function main() {
-  console.log(`=== T-112 로그인 토큰 회귀·공격 테스트 (실행 ${RUN}) ===`);
+  console.log(`=== T-112/T-114 로그인·보안 회귀·공격 테스트 (실행 ${RUN}) ===`);
 
   // ---------- S: 운영 모드 시작 거부 (메인 서버를 띄우기 전, 같은 포트 사용) ----------
   {
@@ -220,7 +225,7 @@ async function main() {
   };
   const prodId = (await pool.query(`INSERT INTO product (name, unit) VALUES ($1, 'kg') RETURNING id`, [`T112 상품 ${RUN}`])).rows[0].id;
 
-  const srv = startServer({ NODE_ENV: 'development', DATABASE_URL: DB_URL, AUTH_SECRET: SECRET, DB_SSL: 'false' });
+  const srv = startServer({ NODE_ENV: 'development', DATABASE_URL: DB_URL, AUTH_SECRET: SECRET, DB_SSL: 'false', LOGIN_MAX_FAILS: '1000' });
   if (!(await waitUp(srv))) {
     console.error('서버가 뜨지 않았습니다:\n' + srv.out.text.slice(-2000));
     process.exitCode = 2;
@@ -421,16 +426,18 @@ async function main() {
     }
     const writeCases = [
       ['I-09', '피해자 공급처로 매입 등록', 'POST', '/api/purchases', { partner_id: acc.vSup, product_id: prodId, quantity: 1, unit_price: 1, purchase_date: today }],
-      ['I-10', '피해자 매입을 매출로 전환', 'POST', '/api/purchases/convert-to-sales', { items: [{ purchase_id: vPurchase, partner_id: acc.aCus, quantity: 1, unit_price: 1, sale_date: today }] }],
-      ['I-11', '자기 매입을 피해자 판매처로 전환', 'POST', '/api/purchases/convert-to-sales', { items: [{ purchase_id: aPurchase, partner_id: acc.vCus, quantity: 1, unit_price: 1, sale_date: today }] }],
+      // I-10·I-11: DEF-T112-03 — 예전 500, T-114 뒤 404(남의 ID 는 '없음'과 같게)
+      ['I-10', '피해자 매입을 매출로 전환', 'POST', '/api/purchases/convert-to-sales', { items: [{ purchase_id: vPurchase, partner_id: acc.aCus, quantity: 1, unit_price: 1, sale_date: today }] }, 404],
+      ['I-11', '자기 매입을 피해자 판매처로 전환', 'POST', '/api/purchases/convert-to-sales', { items: [{ purchase_id: aPurchase, partner_id: acc.vCus, quantity: 1, unit_price: 1, sale_date: today }] }, 404],
       ['I-12', '피해자 판매처로 수금 등록(refund 종류)', 'POST', '/api/payments', { partner_id: acc.vCus, amount: 1, paid_at: today, entry_kind: 'refund' }],
       ['I-13', '자기 거래처 수금에 피해자 매출 배분', 'POST', '/api/payments', { partner_id: acc.aCus, amount: 1, paid_at: today, allocations: [{ sale_id: vSale, amount: 1 }] }],
       ['I-14', '피해자 매출 환불', 'POST', `/api/sales/${vSale}/refund`, { quantity: 1, refunded_at: today, reason: 'T112-attack' }],
       ['I-15', '피해자만 재고 있는 수량 폐기(공격자 재고 초과)', 'POST', '/api/disposals', { product_id: prodId, quantity: 7, disposal_date: today }],
     ];
-    for (const [id, name, m, u, b] of writeCases) {
+    for (const [id, name, m, u, b, expect] of writeCases) {
       const r = await call(m, u, { token: tok.attacker, body: b });
-      record(id, 'I', `${name} → 거절(4xx)`, r.status >= 400 && r.status < 500, `status=${r.status} ${r.json?.message || ''}`);
+      const ok = expect ? r.status === expect : r.status >= 400 && r.status < 500;
+      record(id, 'I', `${name} → 거절(${expect || '4xx'})`, ok, `status=${r.status} ${r.json?.message || ''}`);
     }
     const after = await victimSnapshot(uid.victim);
     record('I-16', 'I', '공격 시도 전후 피해자 데이터(매입·매출·수금·환불·폐기·재고·거래처·배분) 동일', before === after, before === after ? '동일' : '변경됨');
@@ -463,11 +470,10 @@ async function main() {
       const cg = await call('POST', '/api/auth/check-agent-no', { body: { agent_no: AGENT.ghost } });
       record('E-05', 'E', '가입용 중복 확인 API는 로그인 없이 번호 존재 여부를 알려 줌(가입 기능상 의도, 관찰)', true,
         `있는 번호 ${ca.status} ${JSON.stringify(ca.json)} / 없는 번호 ${cg.status} ${JSON.stringify(cg.json)}`, { info: true });
-      let lastStatus = 0;
-      for (let i = 0; i < 15; i++) lastStatus = (await login(AGENT.victim, `${PW.wrong}${i}`)).status;
-      const ok = await login(AGENT.victim, PW.victim);
-      record('E-06', 'E', '틀린 비밀번호 15회 연속 후에도 잠금·지연 없음(무차별 대입 제한 없음, 관찰)', true,
-        `15회째 ${lastStatus}, 이후 정상 로그인 ${ok.status}`, { info: true });
+      // 예전 E-06(관찰: 15회 실패에도 잠금 없음)은 T-114 에서 N-01~N-05 판정 케이스로 바뀌었다
+      const okInact = await login(AGENT.inactive, PW.inactive);
+      record('E-06', 'E', '비활성 계정 + 맞는 비밀번호 → 403(비밀번호를 아는 본인에게만 상태 안내)', okInact.status === 403,
+        `${okInact.status} "${okInact.json?.message}"`);
     }
 
     // ---------- L: 서버 로그 ----------
@@ -487,6 +493,115 @@ async function main() {
     }
   } finally {
     await stopServer(srv);
+  }
+
+  // ---------- N: 보안 보강(T-114) — 짧은 잠금 시간·작은 한도로 별도 서버 ----------
+  {
+    const nsrv = startServer({
+      NODE_ENV: 'development', DATABASE_URL: DB_URL, AUTH_SECRET: SECRET, DB_SSL: 'false',
+      LOGIN_MAX_FAILS: '5', LOGIN_LOCK_MINUTES: String(3 / 60), // 5회 실패 → 3초 잠금(운영 기본 15분)
+      CHECK_AGENT_MAX: '3', CHECK_AGENT_WINDOW_MINUTES: '1',
+    });
+    if (!(await waitUp(nsrv))) {
+      record('N-00', 'N', 'N 그룹 서버 시작', false, nsrv.out.text.slice(-300));
+    } else {
+      try {
+        const login = (agent_no, password) => call('POST', '/api/auth/login', { body: { agent_no, password } });
+        // N-01: 있는 번호 5회 실패 → 6번째는 맞는 비밀번호여도 429 + Retry-After
+        const st = [];
+        for (let i = 0; i < 5; i++) st.push((await login(AGENT.attacker, `${PW.wrong}${i}`)).status);
+        const r6raw = await fetch(BASE + '/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent_no: AGENT.attacker, password: PW.attacker }),
+        });
+        const r6 = { status: r6raw.status, retry: r6raw.headers.get('retry-after'), json: await r6raw.json().catch(() => null) };
+        record('N-01', 'N', '있는 번호 5회 연속 실패 → 맞는 비밀번호도 429 + Retry-After', st.every((x) => x === 401) && r6.status === 429 && !!r6.retry,
+          `실패 ${st.join(',')} → ${r6.status} Retry-After=${r6.retry} "${r6.json?.message}"`);
+        // N-02: 없는 번호도 똑같이 막힘(막힘 여부로 계정 존재를 알 수 없음)
+        const sg = [];
+        for (let i = 0; i < 6; i++) sg.push((await login(AGENT.ghost, PW.wrong)).status);
+        record('N-02', 'N', '없는 번호도 5회 실패 뒤 같은 429(계정 존재 노출 없음)', sg.slice(0, 5).every((x) => x === 401) && sg[5] === 429, sg.join(','));
+        // N-03: 대소문자만 바꿔도 같은 키
+        const lower = await login(AGENT.attacker.toLowerCase(), PW.attacker);
+        record('N-03', 'N', '번호 대소문자를 바꿔도 같은 잠금', lower.status === 429, `status=${lower.status}`);
+        // N-04: 잠금 시간이 지나면 맞는 비밀번호로 로그인되고, 다음 실패는 다시 401부터
+        await sleep(3300);
+        const back = await login(AGENT.attacker, PW.attacker);
+        const after1 = await login(AGENT.attacker, PW.wrong);
+        record('N-04', 'N', '잠금 시간 뒤 정상 로그인 200, 다음 실패는 다시 401', back.status === 200 && after1.status === 401, `${back.status} / ${after1.status}`);
+        // N-05: 다른 계정은 영향 없음
+        const other = await login(AGENT.victim, PW.victim);
+        record('N-05', 'N', '다른 계정 로그인은 영향 없음', other.status === 200, `status=${other.status}`);
+        // N-06: check-agent-no 접속 주소당 제한(테스트 한도 3회, 운영 기본 20회/10분)
+        const ca = [];
+        for (let i = 0; i < 4; i++) ca.push((await call('POST', '/api/auth/check-agent-no', { body: { agent_no: `N${RUN}${i}` } })).status);
+        record('N-06', 'N', '번호 중복 확인 한도 초과 → 429', ca.slice(0, 3).every((x) => x === 200) && ca[3] === 429, ca.join(','));
+        // N-07~09: 가입 비밀번호 길이 — 서버는 이메일 인증 확인보다 비밀번호 검사를 먼저 한다
+        const reg = (agent, password) => call('POST', '/api/auth/register', {
+          body: { name: 'T114', email: `${agent.toLowerCase()}@t114.local`, agent_no: agent, password, terms_agreed: true },
+        });
+        const short = await reg(`T114S${RUN}`, 'Ab1234!');
+        record('N-07', 'N', '가입 비밀번호 7자 → 400 "8자 이상"', short.status === 400 && /8자/.test(short.json?.message || ''), `${short.status} "${short.json?.message}"`);
+        const long = await reg(`T114L${RUN}`, '가'.repeat(25)); // 75바이트
+        record('N-08', 'N', '가입 비밀번호 72바이트 초과(한글 25자) → 400', long.status === 400 && /깁니다/.test(long.json?.message || ''), `${long.status} "${long.json?.message}"`);
+        const ok8 = await reg(`T114K${RUN}`, `Ok8-${crypto.randomBytes(2).toString('hex')}`);
+        record('N-09', 'N', '가입 비밀번호 8자 → 비밀번호 검사 통과(다음 단계 "이메일 인증" 안내)', ok8.status === 400 && /이메일 인증/.test(ok8.json?.message || ''),
+          `${ok8.status} "${ok8.json?.message}"`);
+        // N-10: 업로드 경로 기본 꺼짐 → 인증 없이도 본문을 읽지 않고 404
+        const up0 = await call('POST', '/api/file-transfer/salesforce/content-version', {});
+        record('N-10', 'N', '업로드 경로 기본 꺼짐(ENABLE_SF_UPLOAD 없음) → 404', up0.status === 404, `status=${up0.status}`);
+      } finally {
+        await stopServer(nsrv);
+      }
+    }
+    // N-11·12: 업로드 켬 + 한도 1MB 서버
+    const usrv = startServer({ NODE_ENV: 'development', DATABASE_URL: DB_URL, AUTH_SECRET: SECRET, DB_SSL: 'false', ENABLE_SF_UPLOAD: 'true', SF_UPLOAD_MAX_MB: '1' });
+    if (await waitUp(usrv)) {
+      try {
+        const big = new Blob([Buffer.alloc(2 * 1024 * 1024, 0x61)]);
+        const fd1 = new FormData();
+        fd1.append('file', big, 'big.txt');
+        const noAuth = await fetch(BASE + '/api/file-transfer/salesforce/content-version', { method: 'POST', body: fd1 });
+        record('N-11', 'N', '업로드 켬 + 로그인 없음 → 파일 받기 전 401', noAuth.status === 401, `status=${noAuth.status}`);
+        const la = await call('POST', '/api/auth/login', { body: { agent_no: AGENT.attacker, password: PW.attacker } });
+        const fd2 = new FormData();
+        fd2.append('file', big, 'big.txt');
+        const over = await fetch(BASE + '/api/file-transfer/salesforce/content-version', {
+          method: 'POST', body: fd2, headers: { Authorization: `Bearer ${la.json?.token}` },
+        });
+        record('N-12', 'N', '업로드 켬 + 로그인 + 한도(1MB) 초과 2MB → 413', over.status === 413, `status=${over.status}`);
+      } finally {
+        await stopServer(usrv);
+      }
+    } else {
+      record('N-11', 'N', '업로드 서버 시작', false, usrv.out.text.slice(-300));
+    }
+  }
+
+  // ---------- A: seed-admin 운영 안전장치 (T-114, R-01) ----------
+  {
+    const runSeed = (env) => new Promise((resolve) => {
+      const c = spawn(process.execPath, [path.join('scripts', 'seed-admin.js')], {
+        cwd: SERVER_DIR, env: { ...process.env, DATABASE_URL: DB_URL, DB_SSL: 'false', ...env }, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let text = '';
+      c.stdout.on('data', (d) => (text += d.toString()));
+      c.stderr.on('data', (d) => (text += d.toString()));
+      c.on('exit', (code) => resolve({ code, text }));
+    });
+    const p1 = await runSeed({ NODE_ENV: 'production', SEED_ADMIN_PASSWORD: '' });
+    record('A-01', 'A', 'seed-admin: NODE_ENV=production + SEED_ADMIN_PASSWORD 없음 → 거부(exit 2)', p1.code === 2 && /거부/.test(p1.text),
+      `exit=${p1.code} ${p1.text.trim().split('\n')[0]}`);
+    const p2 = await runSeed({ NODE_ENV: 'production', SEED_ADMIN_PASSWORD: 'x'.repeat(11) });
+    record('A-02', 'A', 'seed-admin: 운영 + 11자 비밀번호 → 거부(exit 2)', p2.code === 2, `exit=${p2.code}`);
+    const hashOf = async () => (await pool.query(`SELECT password_hash FROM "user" WHERE agent_no = 'admin001'`)).rows[0]?.password_hash || null;
+    const d1 = await runSeed({ NODE_ENV: 'development', SEED_ADMIN_PASSWORD: `Seed1-${crypto.randomBytes(8).toString('hex')}` });
+    const h1 = await hashOf();
+    const d2 = await runSeed({ NODE_ENV: 'development', SEED_ADMIN_PASSWORD: `Seed2-${crypto.randomBytes(8).toString('hex')}` });
+    const h2 = await hashOf();
+    record('A-03', 'A', 'seed-admin 재실행: 기존 계정 비밀번호를 덮어쓰지 않음', d1.code === 0 && d2.code === 0 && !!h1 && h1 === h2 && /바꾸지 않았습니다/.test(d2.text),
+      `exit=${d1.code}/${d2.code}, 해시 동일=${h1 === h2}`);
+    const leaked = /Seed[12]-/.test(d1.text + d2.text + p1.text + p2.text);
+    record('A-04', 'A', 'seed-admin 출력에 넣은 비밀번호 없음', !leaked, leaked ? '노출' : '0건');
   }
 
   // ---------- R: 같은 AUTH_SECRET 으로 재시작 → 기존 토큰 유지, 다른 비밀로 재시작 → 무효 ----------
