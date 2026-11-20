@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Main from './pages/Main';
 import Statement from './pages/Statement';
+import { MonthlyReportPrint } from './pages/MonthlyReport';
 
 // 저장된 로그인 정보 — 토큰(T-101)이 없는 예전 형식은 로그아웃 상태로 본다
 function readStoredUser() {
@@ -49,6 +50,7 @@ export default function App() {
         }
       />
       <Route path="/statement" element={<RequireAuth><Statement /></RequireAuth>} />
+      <Route path="/monthly-report" element={<RequireAuth><MonthlyReportPrint /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

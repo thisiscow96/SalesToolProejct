@@ -25,6 +25,7 @@ import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import TabDashboard from './TabDashboard';
 import TabHistory from './AuditHistory'; // T-212 변경 이력
+import TabMonthly from './MonthlyReport'; // T-215 월 정산
 import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
 import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
@@ -3107,6 +3108,7 @@ const BASE_TABS = [
   { id: 'today', label: '오늘', Component: TabDashboard }, // T-208 첫 화면
   { id: 'inventory', label: '재고현황', Component: TabReorder },
   { id: 'daily-trade', label: '일별 매입·매출', Component: TabDailyTrade },
+  { id: 'monthly', label: '월 정산', Component: TabMonthly }, // T-215
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
