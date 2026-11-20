@@ -54,7 +54,8 @@ async function apiFetch(url, options) {
 
 export async function fetchProducts(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await apiFetch(`${API_BASE}/products${q ? '?' + q : ''}`);
+  // 로그인 토큰을 붙여야 내 개인 품목(T-216)도 함께 온다 — 토큰이 없으면 공용 품목만
+  const res = await apiFetch(`${API_BASE}/products${q ? '?' + q : ''}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -80,6 +81,50 @@ export async function createProductsBulk(products) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '다건 등록 실패');
   return data;
+}
+
+/** 서버 오류 응답을 code·product 와 함께 던진다 (중복 품목 안내에 쓰임) */
+async function jsonOrThrow(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(data.message || fallback);
+    e.code = data.code;
+    e.product = data.product;
+    throw e;
+  }
+  return data;
+}
+
+// ---------- 개인 품목·공용 등록 요청 (T-216) ----------
+/** 목록에 없는 품목을 내 개인 품목으로 추가. request_public=true 면 관리자에게 공용 등록 요청도 함께 */
+export async function createPersonalProduct(body) {
+  const res = await apiFetch(`${API_BASE}/products/personal`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  return (await jsonOrThrow(res, '개인 품목 등록 실패')).data;
+}
+
+export async function requestProductPublic(productId, note) {
+  const res = await apiFetch(`${API_BASE}/products/requests`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ product_id: productId, note }),
+  });
+  return (await jsonOrThrow(res, '공용 등록 요청 실패')).data;
+}
+
+export async function fetchProductRequests(status) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : '';
+  const res = await apiFetch(`${API_BASE}/products/requests${q}`, { headers: authHeaders() });
+  return (await jsonOrThrow(res, '요청 목록 조회 실패')).data;
+}
+
+export async function approveProductRequest(id, body = {}) {
+  const res = await apiFetch(`${API_BASE}/products/requests/${id}/approve`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  return (await jsonOrThrow(res, '승인 실패')).data;
+}
+
+export async function rejectProductRequest(id, reason) {
+  const res = await apiFetch(`${API_BASE}/products/requests/${id}/reject`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ reason }) });
+  return (await jsonOrThrow(res, '반려 실패')).data;
 }
 
 export async function fetchPartners() {

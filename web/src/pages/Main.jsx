@@ -24,6 +24,7 @@ import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, de
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import TabDashboard from './TabDashboard';
+import { PersonalProductModal, ProductRequestAdminPanel, productOptionLabel } from './ProductRequest';
 import {
   RowActionMenu,
   CancelTradeModal,
@@ -490,6 +491,8 @@ function TabPurchases({ onNavigate } = {}) {
   const [submitting, setSubmitting] = useState(false);
   // 매입 등록·매출 전환 모달 위에서 바로 거래처 추가 (T-102): null | 'purchase' | 'sale'
   const [partnerAddFor, setPartnerAddFor] = useState(null);
+  // T-216: 매입 모달에서 목록에 없는 품목을 개인 품목으로 바로 추가 — 추가 후 이 행에 선택해 둔다 (행 key | 'first-empty' | null)
+  const [productAddFor, setProductAddFor] = useState(null);
   // T-210: 최근 매입 거래처 순서 [{ partner_id, last_date, cnt }] — 매입 거래처 목록을 최근 거래 순으로 정렬
   const [recentPartners, setRecentPartners] = useState([]);
   // T-210: 행별 최근 단가 조회 순번 — 상품·거래처를 빠르게 바꿀 때 늦게 온 이전 응답을 버린다
@@ -543,6 +546,19 @@ function TabPurchases({ onNavigate } = {}) {
     } else if (ctx === 'sale' && SALE_ACCOUNT_TYPES.has(saved.type)) {
       setConvertCustomer(String(saved.id));
     }
+  };
+
+  /** T-216: 새 개인 품목(또는 중복 안내에서 고른 공용 품목)을 목록에 넣고 대상 행에 선택 */
+  const onProductPicked = (p) => {
+    const target = productAddFor;
+    setProductAddFor(null);
+    setProducts((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'))));
+    setPurchaseRows((rows) => {
+      const key = target && target !== 'first-empty' ? target : rows.find((r) => !r.product_id)?.key;
+      return rows.map((r) => (r.key === key ? { ...r, product_id: String(p.id) } : r));
+    });
+    const row = purchaseRows.find((r) => (target && target !== 'first-empty' ? r.key === target : !r.product_id));
+    if (row) suggestUnitPrice(row.key, String(p.id), row.partner_id);
   };
 
   const load = () => {
@@ -818,6 +834,9 @@ function TabPurchases({ onNavigate } = {}) {
             <button type="button" className="main-modal-toolbar-btn" onClick={() => setPartnerAddFor('purchase')}>
               ＋ 새 거래처
             </button>
+            <button type="button" className="main-modal-toolbar-btn" onClick={() => setProductAddFor('first-empty')}>
+              ＋ 목록에 없는 품목
+            </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
             <table className="main-table main-table--purchase-modal">
@@ -901,6 +920,10 @@ function TabPurchases({ onNavigate } = {}) {
                         value={row.product_id}
                         title={row.product_id ? products.find((x) => String(x.id) === String(row.product_id))?.name || '' : ''}
                         onChange={(e) => {
+                          if (e.target.value === '__new__') {
+                            setProductAddFor(row.key);
+                            return;
+                          }
                           updatePurchaseRow(row.key, { product_id: e.target.value });
                           suggestUnitPrice(row.key, e.target.value, row.partner_id);
                         }}
@@ -908,9 +931,10 @@ function TabPurchases({ onNavigate } = {}) {
                         <option value="">선택</option>
                         {products.map((p) => (
                           <option key={p.id} value={p.id}>
-                            {p.name}
+                            {productOptionLabel(p)}
                           </option>
                         ))}
+                        <option value="__new__">＋ 목록에 없는 품목 추가…</option>
                       </select>
                     </td>
                     <td className="main-col-qty main-col-qty--purchase-input">
@@ -1137,6 +1161,12 @@ function TabPurchases({ onNavigate } = {}) {
         allowedTypes={partnerAddFor === 'sale' ? SALE_ACCOUNT_TYPES : PURCHASE_ACCOUNT_TYPES}
         onClose={() => setPartnerAddFor(null)}
         onSaved={onPartnerAdded}
+      />
+      <PersonalProductModal
+        open={productAddFor !== null}
+        onClose={() => setProductAddFor(null)}
+        onSaved={onProductPicked}
+        onUsePublic={onProductPicked}
       />
     </>
   );
@@ -1981,7 +2011,8 @@ function TabProductMaster() {
   const load = () => {
     setLoading(true);
     setErr('');
-    const params = {};
+    // T-216: 상품 마스터는 공용 품목만 (관리자 본인의 개인 품목은 섞지 않는다)
+    const params = { scope: 'public' };
     if (categoryLarge) params.category_large = categoryLarge;
     if (categoryMid) params.category_mid = categoryMid;
     if (categorySmall) params.category_small = categorySmall;
@@ -2086,6 +2117,9 @@ function TabProductMaster() {
           상품 등록
         </button>
       </div>
+
+      {/* T-216: 중매인이 올린 개인 품목의 공용 등록 요청 — 승인하면 위 공용 목록에 들어온다 */}
+      <ProductRequestAdminPanel onChanged={load} />
 
       <Modal
         open={showForm}

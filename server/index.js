@@ -546,19 +546,33 @@ app.get('/api/capabilities', (req, res) => {
 // ---------- 메인 화면용 API (Authorization: Bearer <로그인 토큰> 필수, 토큰의 사용자 데이터만 조회) ----------
 
 // 상품 목록 (대분류/중분류/소분류/이름 검색 가능)
+// T-216: 공용 품목(owner_user_id NULL) + 로그인한 본인의 개인 품목만. 토큰이 없으면 공용만(기존 S-005 동작 유지).
+//        scope=public 이면 공용만(관리자 상품 마스터), scope=personal 이면 내 개인 품목만.
 app.get('/api/products', async (req, res) => {
   try {
+    const auth = req.headers.authorization ? await getUserIdAndAdmin(req) : null;
+    const me = auth ? auth.userId : null;
+    const scope = String(req.query.scope || '');
     const categoryLarge = req.query.category_large?.trim();
     const categoryMid = req.query.category_mid?.trim();
     const categorySmall = req.query.category_small?.trim();
     const nameSearch = req.query.name?.trim();
-    let q = `SELECT id, name, unit, category, category_large, category_mid, category_small, product_key, memo, created_at, updated_at FROM product WHERE 1=1`;
-    const params = [];
-    if (categoryLarge) { params.push(categoryLarge); q += ` AND category_large = $${params.length}`; }
-    if (categoryMid) { params.push(categoryMid); q += ` AND category_mid = $${params.length}`; }
-    if (categorySmall) { params.push(categorySmall); q += ` AND category_small = $${params.length}`; }
-    if (nameSearch) { params.push('%' + nameSearch + '%'); q += ` AND name ILIKE $${params.length}`; }
-    q += ' ORDER BY category_large, category_mid, category_small, name';
+    const params = [me];
+    let q = `SELECT p.id, p.name, p.unit, p.category, p.category_large, p.category_mid, p.category_small, p.product_key, p.memo, p.created_at, p.updated_at,
+                    (p.owner_user_id IS NOT NULL) AS is_personal, rq.status AS request_status, rq.reject_reason AS request_reject_reason
+               FROM product p
+               LEFT JOIN LATERAL (
+                 SELECT r.status, r.reject_reason FROM product_request r
+                  WHERE r.product_id = p.id AND p.owner_user_id IS NOT NULL ORDER BY r.created_at DESC, r.id DESC LIMIT 1
+               ) rq ON true
+              WHERE (p.owner_user_id IS NULL OR p.owner_user_id = $1::int)`;
+    if (scope === 'public') q += ' AND p.owner_user_id IS NULL';
+    else if (scope === 'personal') q += ' AND p.owner_user_id = $1::int';
+    if (categoryLarge) { params.push(categoryLarge); q += ` AND p.category_large = $${params.length}`; }
+    if (categoryMid) { params.push(categoryMid); q += ` AND p.category_mid = $${params.length}`; }
+    if (categorySmall) { params.push(categorySmall); q += ` AND p.category_small = $${params.length}`; }
+    if (nameSearch) { params.push('%' + nameSearch + '%'); q += ` AND p.name ILIKE $${params.length}`; }
+    q += ' ORDER BY p.category_large, p.category_mid, p.category_small, p.name';
     const r = await pool.query(q, params);
     res.json({ ok: true, data: r.rows });
   } catch (err) {
@@ -805,6 +819,8 @@ app.put('/api/partners/:id', async (req, res) => {
 require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstToday });
 // 첫 화면 대시보드 "오늘" (T-208) — lib/dashboard-routes.js
 require('./lib/dashboard-routes').registerDashboardRoutes(app, { pool, getUserId, kstToday });
+// 중매인 개인 품목·공용 등록 요청 (T-216) — lib/product-request-routes.js
+require('./lib/product-request-routes').registerProductRequestRoutes(app, { pool, getUserIdAndAdmin, connectOr503, generateProductKey });
 
 // 재고현황 (중매인 번호 기준)
 // T-209 재고 경과일: 남은 재고 중 "가장 오래된 매입일" 기준 (KST 오늘 − 그 매입일).
@@ -1438,7 +1454,8 @@ app.post('/api/purchases', async (req, res) => {
       await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '매입 가능한 거래처(공급/도매 등)를 선택하세요.' });
     }
-    const pr = await client.query(`SELECT id FROM product WHERE id = $1`, [prid]);
+    // 공용 품목 또는 내 개인 품목만 (T-216) — 남의 개인 품목은 "없음"과 같게
+    const pr = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)`, [prid, userId]);
     if (!pr.rows[0]) {
       await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
@@ -2197,7 +2214,7 @@ app.patch('/api/purchases/:id', async (req, res) => {
       partnerRow = acc.rows[0];
     }
     if (changed.includes('product_id')) {
-      const prd = await client.query(`SELECT id FROM product WHERE id = $1`, [next.product_id]);
+      const prd = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)`, [next.product_id, userId]);
       if (!prd.rows[0]) throw corrError(400, 'VALIDATION', '상품을 찾을 수 없습니다.', { field: 'product_id' });
     }
 
