@@ -799,6 +799,9 @@ app.put('/api/partners/:id', async (req, res) => {
   }
 });
 
+// 거래처 원장·미수 연령 (T-104) — 라우트는 lib/ledger-routes.js (kstToday 는 아래 함수 선언, 호이스팅됨)
+require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstToday });
+
 // 재고현황 (중매인 번호 기준)
 // T-209 재고 경과일: 남은 재고 중 "가장 오래된 매입일" 기준 (KST 오늘 − 그 매입일).
 //   남은 재고 = 매출로 배분되지 않은 매입 묶음(purchase.quantity − purchase_allocation 합).
