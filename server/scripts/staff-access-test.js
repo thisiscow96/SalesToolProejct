@@ -216,20 +216,20 @@ async function main() {
 
     // ---- AC-01 임시 비밀번호로 직원 만들기 ----
     const tempPw = `Tmp-${crypto.randomBytes(6).toString('hex')}`;
-    const c1 = await a('POST', '/api/staff', { login_id: 'AI', name: '홍길동', role: 'input', temp_password: tempPw });
+    const c1 = await a('POST', '/api/staff', { login_id: 'Ai1', name: '홍길동', role: 'input', temp_password: tempPw });
     const aiId = c1.json && c1.json.data && c1.json.data.id;
     const aiRow = (await pool.query('SELECT * FROM staff_account WHERE id = $1', [aiId])).rows[0];
-    check('AC-01 POST /api/staff(임시 비밀번호) 201, active·must_change_password=true, 직원 ID 소문자 저장', c1.status === 201 && aiRow && aiRow.status === 'active' && aiRow.must_change_password === true && aiRow.login_id === 'ai', c1);
+    check('AC-01 POST /api/staff(임시 비밀번호) 201, active·must_change_password=true, 직원 ID 소문자 저장', c1.status === 201 && aiRow && aiRow.status === 'active' && aiRow.must_change_password === true && aiRow.login_id === 'ai1', c1);
     check('AC-01 응답에 해시·임시 비밀번호 없음', c1.json && !JSON.stringify(c1.json).includes(tempPw) && !('password_hash' in (c1.json.data || {})), c1.json);
     const auditCreate = (await pool.query(`SELECT * FROM audit_log WHERE user_id = $1 AND entity_type = 'staff' AND action = 'create' AND entity_id = $2`, [A, aiId])).rows;
     check('AC-01 audit_log staff/create 1행, 비밀번호 없음', auditCreate.length === 1 && !JSON.stringify(auditCreate[0]).includes(tempPw), auditCreate);
     const viewPw = `View-${crypto.randomBytes(6).toString('hex')}`;
-    const c2 = await a('POST', '/api/staff', { login_id: 'av', name: '김조회', role: 'view', temp_password: viewPw });
+    const c2 = await a('POST', '/api/staff', { login_id: 'av1', name: '김조회', role: 'view', temp_password: viewPw });
     const avId = c2.json.data.id;
     check('AC-01 조회 직원 av 201', c2.status === 201 && c2.json.data.role === 'view', c2);
 
     // ---- AC-02 첫 로그인 → 비밀번호 변경 강제 ----
-    const l1 = await login(aNo, tempPw, 'ai');
+    const l1 = await login(aNo, tempPw, 'ai1');
     const payload1 = l1.json && l1.json.token ? JSON.parse(Buffer.from(l1.json.token.split('.')[1], 'base64').toString()) : {};
     check('AC-02 직원 로그인 200, 토큰 sub=주인·act=직원, 응답 user.staff', l1.status === 200 && payload1.sub === String(A) && payload1.act === String(aiId) && l1.json.user.staff.role === 'input', { s: l1.status, payload1 });
     const tOld = l1.json.token;
@@ -252,7 +252,7 @@ async function main() {
     const wrongCur = await request('POST', '/api/me/password', { current_password: 'nope-nope-1', new_password: 'whatever-123' }, tAi);
     check('AC-03 현재 비밀번호 틀리면 400 WRONG_PASSWORD', wrongCur.status === 400 && wrongCur.json.code === 'WRONG_PASSWORD', wrongCur);
     // av 도 비밀번호를 바꿔 둔다
-    const lv = await login(aNo, viewPw, 'av');
+    const lv = await login(aNo, viewPw, 'av1');
     const avPw = `Av-${crypto.randomBytes(8).toString('hex')}`;
     const tAv = (await request('POST', '/api/me/password', { current_password: viewPw, new_password: avPw }, lv.json.token)).json.token;
     const ai = as(tAi);
@@ -368,7 +368,7 @@ async function main() {
       `/api/purchases?from_date=${TODAY}&to_date=${TODAY}`, `/api/purchases/last-price?product_id=${prod}`, '/api/purchases/recent-partners',
       `/api/sales?from_date=${TODAY}&to_date=${TODAY}`, `/api/sales/statement?partner_id=${K}&date=${TODAY}`,
       `/api/reports/daily-purchase-sales?from_date=${TODAY}&to_date=${TODAY}`, `/api/reports/daily-purchase-sales-breakdown?from_date=${TODAY}&to_date=${TODAY}`,
-      `/api/payments?from_date=${TODAY}&to_date=${TODAY}`, `/api/inventory/${prod}/fifo-preview?quantity=1`, '/api/corrections', '/api/disposals',
+      `/api/payments?from_date=${TODAY}&to_date=${TODAY}`, `/api/inventory/${prod}/fifo-preview?quantity=1`, `/api/corrections?target_type=purchase&target_id=${P}`, '/api/disposals',
       `/api/reports/monthly?month=${ym}`, '/api/me',
     ];
     const strip = (j) => JSON.stringify(j, (k, v) => (['generated_at', 'now', 'server_time', 'owner', 'staff', 'role', 'role_label', 'allow', 'is_admin'].includes(k) ? undefined : v));
@@ -447,15 +447,15 @@ async function main() {
     // ---- AC-17·18 정지·되살리기 ----
     const s17 = await a('POST', `/api/staff/${aiId}/suspend`);
     const u17 = await ai('GET', `/api/purchases?from_date=${TODAY}&to_date=${TODAY}`);
-    const l17ok = await login(aNo, aiPw, 'ai');
-    const l17bad = await login(aNo, 'wrong-password-1', 'ai');
+    const l17ok = await login(aNo, aiPw, 'ai1');
+    const l17bad = await login(aNo, 'wrong-password-1', 'ai1');
     check('AC-17 정지 200 → 받은 토큰 401', s17.status === 200 && s17.json.data.status === 'suspended' && u17.status === 401, [s17.status, u17.status]);
     check('AC-17 정지 직원 맞는 비밀번호 → 403 "정지된 직원 계정입니다."', l17ok.status === 403 && l17ok.json.message === '정지된 직원 계정입니다.', l17ok);
     check('AC-17 정지 직원 틀린 비밀번호 → 일반 401', l17bad.status === 401 && /직원 ID 또는 비밀번호/.test(l17bad.json.message), l17bad);
     const s17b = await a('POST', `/api/staff/${aiId}/suspend`);
     check('AC-17 이미 정지 → 409 INVALID_STATE', s17b.status === 409, s17b.status);
     const r18 = await a('POST', `/api/staff/${aiId}/resume`);
-    const l18 = await login(aNo, aiPw, 'ai');
+    const l18 = await login(aNo, aiPw, 'ai1');
     check('AC-18 되살리기 200 → 로그인 200', r18.status === 200 && l18.status === 200, [r18.status, l18.status]);
     const tAi2 = l18.json.token;
 
@@ -463,7 +463,7 @@ async function main() {
     const newTemp = `Rst-${crypto.randomBytes(6).toString('hex')}`;
     const rs = await a('POST', `/api/staff/${aiId}/reset-password`, { temp_password: newTemp });
     const rsOld = await request('GET', '/api/me', null, tAi2);
-    const rsLogin = await login(aNo, newTemp, 'ai');
+    const rsLogin = await login(aNo, newTemp, 'ai1');
     check('RULE-16 재설정 200 → 기존 토큰 401 → 새 임시 비밀번호 로그인 + 변경 강제', rs.status === 200 && rsOld.status === 401 && rsLogin.status === 200 && rsLogin.json.user.staff.must_change_password === true, [rs.status, rsOld.status, rsLogin.status]);
     const aiPw2 = `Ai2-${crypto.randomBytes(8).toString('hex')}`;
     const tAi3 = (await request('POST', '/api/me/password', { current_password: newTemp, new_password: aiPw2 }, rsLogin.json.token)).json.token;
@@ -471,7 +471,7 @@ async function main() {
     // ---- AC-20 주인 정지 ----
     await pool.query(`UPDATE "user" SET status = 'suspended' WHERE id = $1`, [A]);
     const r20a = await request('GET', '/api/me', null, tAi3);
-    const r20b = await login(aNo, aiPw2, 'ai');
+    const r20b = await login(aNo, aiPw2, 'ai1');
     await pool.query(`UPDATE "user" SET status = 'active' WHERE id = $1`, [A]);
     check('AC-20 주인 정지 → 직원 토큰 401', r20a.status === 401, r20a.status);
     check('AC-20 주인 정지 → 직원 로그인(맞는 비밀번호) 403 "중매인 계정이 사용 중지되었습니다."', r20b.status === 403 && /중매인 계정이 사용 중지/.test(r20b.json.message), r20b);
@@ -481,8 +481,8 @@ async function main() {
     const cases = [
       ['없는 직원 ID', { agent_no: aNo, login_id: 'nobody', password: 'xxxxxxxx1' }],
       ['초대 중 직원', { agent_no: aNo, login_id: 'inv', password: 'xxxxxxxx1' }],
-      ['없는 중매인 번호', { agent_no: `zz_${tag}`, login_id: 'ai', password: 'xxxxxxxx1' }],
-      ['틀린 비밀번호', { agent_no: aNo, login_id: 'ai', password: 'xxxxxxxx1' }],
+      ['없는 중매인 번호', { agent_no: `zz_${tag}`, login_id: 'ai1', password: 'xxxxxxxx1' }],
+      ['틀린 비밀번호', { agent_no: aNo, login_id: 'ai1', password: 'xxxxxxxx1' }],
     ];
     const msgs = new Set();
     const med = {};
@@ -532,7 +532,7 @@ async function main() {
     check('AC-26 resend-invite 뒤 새 코드로 성공', rsnd.status === 200 && ok26.status === 200, [rsnd.status, ok26.status]);
 
     // ---- AC-28 상한·중복·형식 ----
-    const dup = await a('POST', '/api/staff', { login_id: 'Ai', name: '중복', role: 'view', temp_password: 'abcdefgh1' });
+    const dup = await a('POST', '/api/staff', { login_id: 'AI1', name: '중복', role: 'view', temp_password: 'abcdefgh1' });
     const badId = await a('POST', '/api/staff', { login_id: 'A!', name: '형식', role: 'view', temp_password: 'abcdefgh1' });
     const badRole = await a('POST', '/api/staff', { login_id: 'okid', name: '역할', role: 'admin', temp_password: 'abcdefgh1' });
     const noWay = await a('POST', '/api/staff', { login_id: 'okid', name: '방식없음', role: 'view' });
@@ -552,8 +552,8 @@ async function main() {
     // ---- AC-19 삭제 ----
     const del = await a('DELETE', `/api/staff/${aiId}`);
     const delRow = (await pool.query(`SELECT status, email, password_hash, deleted_at FROM staff_account WHERE id = $1`, [aiId])).rows[0];
-    const delLogin = await login(aNo, aiPw2, 'ai');
-    const reuse = await a('POST', '/api/staff', { login_id: 'ai', name: '새홍길동', role: 'input', temp_password: 'abcdefgh1' });
+    const delLogin = await login(aNo, aiPw2, 'ai1');
+    const reuse = await a('POST', '/api/staff', { login_id: 'ai1', name: '새홍길동', role: 'input', temp_password: 'abcdefgh1' });
     const afterDelList = await a('GET', `/api/purchases?from_date=${TODAY}&to_date=${TODAY}`);
     const pAfter = (afterDelList.json.data || []).find((r) => r.id === P);
     check('AC-19 삭제 200, 행 유지·status=deleted·email/password_hash NULL', del.status === 200 && delRow.status === 'deleted' && delRow.email === null && delRow.password_hash === null && delRow.deleted_at, delRow);
@@ -619,7 +619,7 @@ async function main() {
     // ---- 역할×라우트 전수 표 (직원 입력/조회 × 모든 로그인 필요 규칙) ----
     const rules = access.buildRules().filter((r) => Array.isArray(r[3]) && r[0] !== 'R-43');
     let matrixFail = [];
-    const tInput = (await login(aNo, 'abcdefgh1', 'ai')).json.token; // 새 ai(임시 비밀번호) → 변경
+    const tInput = (await login(aNo, 'abcdefgh1', 'ai1')).json.token; // 새 ai(임시 비밀번호) → 변경
     const tIn = (await request('POST', '/api/me/password', { current_password: 'abcdefgh1', new_password: 'abcdefgh2' }, tInput)).json.token;
     for (const [rid, method, p, allow] of rules) {
       const url = p.replace(':productId', String(prod)).replace(':saleId', '999999999').replace(':id', '999999999');
@@ -651,7 +651,7 @@ async function main() {
     await stopServer();
 
     // ================= 서버 2: 운영 모드, 메일 없음 (AC-27) =================
-    await startServer({ NODE_ENV: 'production' });
+    await startServer({ NODE_ENV: 'production', DB_SSL: 'false' }); // 로컬 DB 는 SSL 없음
     const tokA2 = (await login(aNo, aPw)).json.token;
     const r27 = await request('POST', '/api/staff', { login_id: 'mailinv', name: '메일초대', role: 'view', email: `m_${tag}@test.local` }, tokA2);
     const row27 = (await pool.query(`SELECT 1 FROM staff_account WHERE owner_user_id = $1 AND login_id = 'mailinv'`, [A])).rowCount;

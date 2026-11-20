@@ -88,3 +88,11 @@
   color: var(--c-danger-text);
   font-weight: 600;
 }
+
+/* T-213 입력 직원: "한도 넘어도 저장" 대신 안내 */
+.credit-warn-owner-only {
+  align-self: center;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-warning-text);
+}

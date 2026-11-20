@@ -4,6 +4,7 @@ import { fetchPartners, fetchReceivablesAging, getToken, getUser, API_BASE } fro
 import { PartnerLedgerModal, ReceivablesAgingView, won } from './PartnerLedger';
 import CardMoreToggle from '../components/CardMoreToggle';
 import '../components/CreditLimitWarning.css';
+import { can } from '../lib/staffAccess';
 import './TabPartners.css';
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
@@ -437,6 +438,7 @@ export default function TabPartners() {
         >
           새로고침
         </button>
+        {can('partner.create') && (
         <button
           type="button"
           className="main-btn"
@@ -448,6 +450,7 @@ export default function TabPartners() {
         >
           거래처 등록
         </button>
+        )}
       </div>
       {loading ? (
         <p className="main-loading">불러오는 중…</p>
@@ -542,6 +545,7 @@ export default function TabPartners() {
                         지급 원장
                       </button>
                     )}
+                    {can('partner.update') && (
                     <button
                       type="button"
                       className="main-btn main-btn--secondary partner-edit-btn"
@@ -554,6 +558,7 @@ export default function TabPartners() {
                     >
                       수정
                     </button>
+                    )}
                     </span>
                   </td>
                   <td className="main-card-more" data-card="more"><CardMoreToggle /></td>

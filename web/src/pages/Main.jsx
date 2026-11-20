@@ -41,6 +41,8 @@ import {
   saleMenuState,
 } from './TradeCorrection';
 import { FifoSaleModal, FifoSellButton, SellableCell } from './FifoSale';
+import TabStaff from './TabStaff'; // T-213 직원 관리
+import { can, isStaff, ROLE_LABEL } from '../lib/staffAccess'; // T-213 역할별 버튼
 import './Main.css';
 import '../styles/mobile.css';
 
@@ -875,6 +877,7 @@ function TabPurchases({ onNavigate } = {}) {
         <label>거래처 <select value={partnerFilter} onChange={(e) => setPartnerFilter(e.target.value)}><option value="">전체</option>{purchasePartners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         <SearchTextField id="pur-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·출처" />
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        {can('purchase.create') && (
         <button
           type="button"
           className="main-btn"
@@ -885,10 +888,12 @@ function TabPurchases({ onNavigate } = {}) {
         >
           매입 등록
         </button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>
+        )}
+        {can('sale.convert') && <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>}
         <label className="ledger-check" title="기간과 상관없이 아직 다 주지 않은 매입만">
           <input type="checkbox" checked={unpaidOnly} onChange={(e) => setUnpaidOnly(e.target.checked)} /> 미지급만
         </label>
+        {can('supplier_payment.create') && (
         <button
           type="button"
           className="main-btn main-btn--secondary"
@@ -904,6 +909,7 @@ function TabPurchases({ onNavigate } = {}) {
         >
           지급 등록
         </button>
+        )}
         <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('purchases', fetchPurchases)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
@@ -935,12 +941,16 @@ function TabPurchases({ onNavigate } = {}) {
             <button type="button" className="main-modal-toolbar-btn" onClick={cloneSelectedPurchaseRows}>
               복제
             </button>
+            {can('partner.create') && (
             <button type="button" className="main-modal-toolbar-btn" onClick={() => setPartnerAddFor('purchase')}>
               ＋ 새 거래처
             </button>
+            )}
+            {can('product.personal') && (
             <button type="button" className="main-modal-toolbar-btn" onClick={() => setProductAddFor('first-empty')}>
               ＋ 목록에 없는 품목
             </button>
+            )}
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
             <table className="main-table main-table--purchase-modal main-table--form">
@@ -1038,7 +1048,7 @@ function TabPurchases({ onNavigate } = {}) {
                             {productOptionLabel(p)}
                           </option>
                         ))}
-                        <option value="__new__">＋ 목록에 없는 품목 추가…</option>
+                        {can('product.personal') && <option value="__new__">＋ 목록에 없는 품목 추가…</option>}
                       </select>
                     </td>
                     <td data-card="field" data-label="수량" className="main-col-qty main-col-qty--purchase-input">
@@ -1142,9 +1152,11 @@ function TabPurchases({ onNavigate } = {}) {
                 ))}
               </select>
             </label>
+            {can('partner.create') && (
             <button type="button" className="main-modal-toolbar-btn partner-inline-add" onClick={() => setPartnerAddFor('sale')}>
               ＋ 새 거래처
             </button>
+            )}
             <label>
               판매일 <input required className="main-input-date" type="date" value={convertDate} onChange={(e) => setConvertDate(e.target.value)} />
             </label>
@@ -1237,7 +1249,7 @@ function TabPurchases({ onNavigate } = {}) {
                   </td>
                   <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
                   <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
                   <td data-card="extra" data-label="매출 반영" className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
                   <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
@@ -1592,10 +1604,12 @@ function TabSales({ navFilter } = {}) {
         </label>
         <SearchTextField id="sale-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·거래처" />
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
-        <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>
+        {can('payment.create') && <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>}
+        {can('sale.refund') && (
         <button type="button" className="main-btn main-btn--secondary" onClick={openRefundModal}>
           환불 처리
         </button>
+        )}
         <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
           거래명세서
         </button>
@@ -2029,6 +2043,7 @@ function TabSales({ navFilter } = {}) {
                     <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                     <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
                       <CellText>{row.product_name}</CellText>
+                      <StaffEntryBadge row={row} />
                       {row.entry_mode === 'fifo' && (
                         <span className="fifo-badge" title={`재고에서 오래된 매입부터 나간 판매${row.allocation_count > 1 ? ` (매입 ${row.allocation_count}건에서)` : ''}`}>재고 판매</span>
                       )}
@@ -2131,7 +2146,7 @@ function TabPayments() {
                 <tr key={row.id}>
                   <td data-card="sub" data-label="수금일" className="main-col-datetime">{formatPaymentDateTime(row)}</td>
                   <td data-card="key" data-label="구분"><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
-                  <td data-card="title" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                  <td data-card="title" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText><StaffEntryBadge row={row} /></td>
                   <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(row.amount)}</td>
                   <td data-card="key" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
                 </tr>
@@ -2559,9 +2574,11 @@ function TabDisposals() {
         </label>
         <SearchTextField id="disp-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·사유·메모" />
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        {can('disposal.create') && (
         <button type="button" className="main-btn" onClick={openDisposalModal}>
           폐기 등록
         </button>
+        )}
         <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('disposals', fetchDisposals)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
@@ -2769,7 +2786,7 @@ function TabDisposals() {
               {list.map((row) => (
                 <tr key={row.id}>
                   <td data-card="sub" data-label="폐기일" className="main-col-datetime">{formatDisposalDateTime(row)}</td>
-                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty main-col-qty--singleline">
                     <span className="main-qty-unit-inline">
                       {formatKoNumber(row.quantity)}
@@ -3118,10 +3135,28 @@ const BASE_TABS = [
   { id: 'history', label: '변경 이력', Component: TabHistory }, // T-212
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
+const STAFF_TAB = { id: 'staff', label: '직원 관리', Component: TabStaff }; // T-213 주인만
+
+/** 직원이 넣은 행이면 입력자 배지 (주인이 넣은 행은 아무것도 안 보임) — T-213 */
+function StaffEntryBadge({ row }) {
+  if (!row?.created_by_name) return null;
+  return <span className="staff-entry-badge" title={`직원 ${row.created_by_name}이 입력`}>입력 {row.created_by_name}</span>;
+}
+
+/** 역할별 탭 — 직원: 변경 이력·상품 마스터·직원 관리 숨김 / 주인: 변경 이력 옆에 직원 관리 (설계 9장) */
+function tabsFor(user) {
+  if (user?.staff) return BASE_TABS.filter((t) => t.id !== 'history');
+  const out = [];
+  for (const t of BASE_TABS) {
+    out.push(t);
+    if (t.id === 'history') out.push(STAFF_TAB);
+  }
+  return user?.is_admin ? [...out, ADMIN_TAB] : out;
+}
 
 export default function Main() {
   const user = getUser();
-  const tabs = user?.is_admin ? [...BASE_TABS, ADMIN_TAB] : BASE_TABS;
+  const tabs = tabsFor(user);
   const [activeTab, setActiveTab] = useState('today');
   // 다른 탭에서 넘겨준 검색 조건(T-103: 매입 취소가 막혔을 때 연결 매출 보기)
   const [navFilter, setNavFilter] = useState(null);
@@ -3139,10 +3174,19 @@ export default function Main() {
           <span className="main-logo-mark" aria-hidden="true" />
           판매툴
         </h1>
+        {isStaff() ? (
+          <span className="main-user" title={`${user.staff.name} (${ROLE_LABEL[user.staff.role] || ''} 직원) · ${user.name}`}>
+            <span className="main-user-avatar" aria-hidden="true">{(user.staff.name || '?').trim().charAt(0)}</span>
+            <span className="main-user-name">{user.staff.name}</span>
+            <span className="main-user-role">{ROLE_LABEL[user.staff.role] || '직원'}</span>
+            <span className="main-user-owner"> · {user.name}</span>
+          </span>
+        ) : (
         <span className="main-user" title={user?.name ? `${user.name}님` : undefined}>
           <span className="main-user-avatar" aria-hidden="true">{(user?.name || '?').trim().charAt(0)}</span>
           <span className="main-user-name">{user?.name}님</span>
         </span>
+        )}
         <button
           type="button"
           className="main-logout"

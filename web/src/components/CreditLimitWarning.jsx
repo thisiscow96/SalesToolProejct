@@ -1,6 +1,7 @@
 // 외상 한도 경고 (T-207) — 판매(매출 전환·재고 판매)·매출 수정 저장 때 서버가 409 CREDIT_LIMIT 를 주면 모달 안에 띄운다.
 // 막지 않는다: 「한도 넘어도 저장」을 누르면 같은 내용을 credit_confirmed=true 로 다시 보낸다.
 import './CreditLimitWarning.css';
+import { can } from '../lib/staffAccess';
 
 const won = (n) => `${Number(n || 0).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`;
 
@@ -38,9 +39,14 @@ export default function CreditLimitWarning({ warnings, busy, onConfirm, onCancel
         <button type="button" className="main-modal-btn secondary" onClick={onCancel} disabled={busy}>
           다시 고치기
         </button>
+        {can('credit.confirm_blocked') && !can('partner.update') ? (
+          // T-213 RULE-08(U-3): 입력 직원은 한도 넘김을 스스로 확인해 저장할 수 없다
+          <span className="credit-warn-owner-only" role="note">외상 한도를 넘는 판매는 중매인(주인) 확인이 필요합니다.</span>
+        ) : (
         <button type="button" className="main-modal-btn primary credit-warn-confirm" onClick={onConfirm} disabled={busy}>
           {busy ? '저장 중…' : '한도 넘어도 저장'}
         </button>
+        )}
       </div>
     </div>
   );

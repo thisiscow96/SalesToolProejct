@@ -7,6 +7,7 @@ import { fetchPartnerLedger, fetchReceivablesAging } from '../api';
 import { fetchPayableLedger, fetchPayablesAging } from '../lib/payablesApi';
 import { kstTodayYmd } from '../lib/dates';
 import PaymentReminderModal from '../components/PaymentReminderModal'; // T-214 입금 안내
+import { can } from '../lib/staffAccess';
 import './PartnerLedger.css';
 
 /** 받을 돈 장부가 있는 거래처 유형(server ledger-routes RECEIVABLE_PARTNER_TYPES 와 같음) — 입금 안내 버튼(T-214) */
@@ -147,7 +148,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   const t = data?.totals;
   const diff = data?.check?.diff || 0;
   // T-214 입금 안내 — 받을 돈 장부가 있는 거래처만(매입처 제외). 미수 0 이어도 열 수는 있다(모달이 안내)
-  const canRemind = !payable && !!data && RECEIVABLE_LEDGER_TYPES.has(data.partner?.type);
+  const canRemind = !payable && !!data && RECEIVABLE_LEDGER_TYPES.has(data.partner?.type) && can('partner.reminder'); // T-213 주인만
 
   return (
     <div className="main-modal-backdrop ledger-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

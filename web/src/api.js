@@ -46,9 +46,25 @@ function handleUnauthorized(status) {
   window.location.href = '/login';
 }
 
+// T-213: 직원이 403(권한 없음)을 받으면 역할이 바뀌었을 수 있으니 GET /api/me 로 저장값(역할·allow)을 다시 읽는다
+function refreshStaffRole(status) {
+  const u = getUser();
+  if (status !== 403 || !u?.staff) return;
+  fetch(`${API_BASE}/me`, { headers: authHeaders() })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((me) => {
+      if (!me?.ok) return;
+      const cur = getUser();
+      if (!cur) return;
+      window.sessionStorage.setItem('user', JSON.stringify({ ...cur, allow: me.allow, staff: me.staff ? { ...cur.staff, ...me.staff } : cur.staff }));
+    })
+    .catch(() => {});
+}
+
 async function apiFetch(url, options) {
   const res = await fetch(url, options);
   handleUnauthorized(res.status);
+  refreshStaffRole(res.status);
   return res;
 }
 
