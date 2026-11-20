@@ -24,6 +24,7 @@ import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, de
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import TabDashboard from './TabDashboard';
+import TabHistory from './AuditHistory'; // T-212 변경 이력
 import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
 import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
@@ -3087,6 +3088,7 @@ const BASE_TABS = [
   { id: 'supplier-payments', label: '지급정보', Component: TabSupplierPayments }, // T-201
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
   { id: 'partners', label: '거래처', Component: TabPartners },
+  { id: 'history', label: '변경 이력', Component: TabHistory }, // T-212
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
 
