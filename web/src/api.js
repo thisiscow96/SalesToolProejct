@@ -250,4 +250,22 @@ export async function uploadSalesforceContentVersion({ file, title, first_publis
   });
 }
 
+/** 거래처 원장 (T-104) — params: from, to(YYYY-MM-DD, 선택), include_cancelled(1) */
+export async function fetchPartnerLedger(partnerId, params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+  const res = await apiFetch(`${API_BASE}/partners/${encodeURIComponent(partnerId)}/ledger${q ? '?' + q : ''}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '원장을 불러오지 못했습니다.');
+  return data.data;
+}
+
+/** 미수 연령 (T-104) — params: partner_id(주면 매출별 상세 sales 포함), min_days */
+export async function fetchReceivablesAging(params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+  const res = await apiFetch(`${API_BASE}/receivables/aging${q ? '?' + q : ''}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '미수 연령을 불러오지 못했습니다.');
+  return data.data;
+}
+
 export { getUser, getToken, API_BASE };

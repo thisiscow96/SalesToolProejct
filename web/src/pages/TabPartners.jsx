@@ -1,6 +1,7 @@
 // 거래처 탭 (T-102) — 목록·검색·등록·수정, 매입·매출 모달에서 쓰는 빠른 등록 모달
-import { useEffect, useId, useMemo, useState } from 'react';
-import { fetchPartners, getToken, getUser, API_BASE } from '../api';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { fetchPartners, fetchReceivablesAging, getToken, getUser, API_BASE } from '../api';
+import { PartnerLedgerModal, ReceivablesAgingView, won } from './PartnerLedger';
 import './TabPartners.css';
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
@@ -11,6 +12,16 @@ export const PARTNER_TYPE_OPTIONS = [
   { value: 'wholesaler', label: '도매상', hint: '매입·매출 모두' },
   { value: 'market_wholesaler', label: '시장도매인', hint: '매입·매출 모두' },
 ];
+/** 받을 돈(미수) 장부가 있는 유형 — 서버 SALE_PARTNER_TYPES 와 같음. 매입처는 원장 버튼을 숨긴다(T-104 RULE-10) */
+const RECEIVABLE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
+const VIEW_KEY = 'partners.view';
+function readView() {
+  try {
+    return window.localStorage.getItem(VIEW_KEY) === 'aging' ? 'aging' : 'list';
+  } catch {
+    return 'list';
+  }
+}
 const TYPE_LABEL = Object.fromEntries(PARTNER_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 export const partnerTypeLabel = (type) => TYPE_LABEL[type] || type || '-';
 
@@ -212,6 +223,30 @@ export default function TabPartners() {
   const [typeFilter, setTypeFilter] = useState('');
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  // T-104 원장·미수 연령
+  const [view, setView] = useState(readView);
+  const [dueMap, setDueMap] = useState(() => new Map());
+  const [dueErr, setDueErr] = useState('');
+  const [sortByDue, setSortByDue] = useState(false);
+  const [ledgerPartner, setLedgerPartner] = useState(null);
+  const [agingFocus, setAgingFocus] = useState(null);
+
+  const switchView = (v) => {
+    setView(v);
+    if (v !== 'aging') setAgingFocus(null);
+    try {
+      window.localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* 저장소 접근 불가 — 이번 화면에서만 유지 */
+    }
+  };
+  // 미수 칸은 거래처마다 부르지 않고 미수 연령 API 한 번으로 채운다
+  const loadDue = () => {
+    setDueErr('');
+    fetchReceivablesAging()
+      .then((d) => setDueMap(new Map(d.rows.map((r) => [r.partner_id, r]))))
+      .catch((e) => setDueErr(e.message));
+  };
 
   const load = () => {
     setLoading(true);
@@ -229,17 +264,22 @@ export default function TabPartners() {
   };
   useEffect(() => {
     load();
+    loadDue();
   }, []);
 
   const shown = useMemo(() => {
     const k = q.trim().toLowerCase();
-    return list.filter((p) => {
+    const rows = list.filter((p) => {
       if (typeFilter && p.type !== typeFilter) return false;
       if (!k) return true;
       return [p.name, p.contact, p.phone, p.location, p.address, p.memo].some((v) => v && String(v).toLowerCase().includes(k));
     });
-  }, [list, q, typeFilter]);
+    if (!sortByDue) return rows;
+    const due = (p) => dueMap.get(p.id)?.total_due || 0;
+    return [...rows].sort((a, b) => due(b) - due(a));
+  }, [list, q, typeFilter, sortByDue, dueMap]);
 
+  const closeLedger = useCallback(() => setLedgerPartner(null), []);
   const close = () => {
     setShowForm(false);
     setEditing(null);
@@ -261,6 +301,18 @@ export default function TabPartners() {
           {notice}
         </div>
       )}
+      <div className="partner-view-switch" role="tablist" aria-label="거래처 보기">
+        <button type="button" role="tab" aria-selected={view === 'list'} onClick={() => switchView('list')}>
+          거래처 목록
+        </button>
+        <button type="button" role="tab" aria-selected={view === 'aging'} onClick={() => switchView('aging')}>
+          미수 연령
+        </button>
+      </div>
+      {view === 'aging' ? (
+        <ReceivablesAgingView focusPartnerId={agingFocus} onOpenLedger={setLedgerPartner} />
+      ) : (
+      <>
       <div className="main-filters">
         <label>
           검색
@@ -284,7 +336,14 @@ export default function TabPartners() {
             ))}
           </select>
         </label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
+        <button
+          type="button"
+          className="main-btn main-btn--secondary"
+          onClick={() => {
+            load();
+            loadDue();
+          }}
+        >
           새로고침
         </button>
         <button
@@ -309,6 +368,7 @@ export default function TabPartners() {
         <p className="main-empty">조건에 맞는 거래처가 없습니다.</p>
       ) : (
         <>
+        {dueErr && <p className="main-error">미수를 불러오지 못했습니다: {dueErr}</p>}
         <p className="partner-count">{shown.length === list.length ? `${list.length}곳` : `${shown.length}곳 / 전체 ${list.length}곳`}</p>
         <div className="main-table-wrap">
           <table className="main-table partner-table">
@@ -321,6 +381,11 @@ export default function TabPartners() {
                 <th>위치</th>
                 <th>주소</th>
                 <th className="main-col-memo">메모</th>
+                <th className="num" aria-sort={sortByDue ? 'descending' : 'none'}>
+                  <button type="button" className="partner-sort-btn" onClick={() => setSortByDue((v) => !v)} title="미수 큰 순으로 정렬">
+                    미수{sortByDue ? ' ▾' : ''}
+                  </button>
+                </th>
                 <th aria-label="관리" />
               </tr>
             </thead>
@@ -336,7 +401,30 @@ export default function TabPartners() {
                   <td>{p.location || '-'}</td>
                   <td className="partner-address">{p.address || '-'}</td>
                   <td className="main-col-memo">{p.memo || '-'}</td>
+                  <td className="partner-due">
+                    {(() => {
+                      const d = dueMap.get(p.id);
+                      if (!d || !d.total_due) return <span className="partner-due-none">—</span>;
+                      return (
+                        <>
+                          <span className="partner-due-amt">{won(d.total_due)}</span>
+                          {d.d91p > 0 && <span className="partner-due-over">90일 초과 {won(d.d91p)}</span>}
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td>
+                    <span className="partner-actions">
+                    {RECEIVABLE_TYPES.has(p.type) && (
+                      <button
+                        type="button"
+                        className="main-btn main-btn--secondary partner-edit-btn"
+                        aria-label={`${p.name} 원장`}
+                        onClick={() => setLedgerPartner(p)}
+                      >
+                        원장
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="main-btn main-btn--secondary partner-edit-btn"
@@ -349,6 +437,7 @@ export default function TabPartners() {
                     >
                       수정
                     </button>
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -357,7 +446,20 @@ export default function TabPartners() {
         </div>
         </>
       )}
+      </>
+      )}
       <PartnerFormModal open={showForm} partner={editing} onClose={close} onSaved={onSaved} />
+      {ledgerPartner && (
+        <PartnerLedgerModal
+          partner={ledgerPartner}
+          onClose={closeLedger}
+          onShowAging={(p) => {
+            setLedgerPartner(null);
+            setAgingFocus(p.id);
+            switchView('aging');
+          }}
+        />
+      )}
     </>
   );
 }
