@@ -736,6 +736,76 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
+// 거래명세서 (T-105) — 한 거래처·기간의 매출을 명세서 형태로 돌려준다.
+// 쿼리: partner_id(필수), from_date·to_date(또는 from·to, 하루만이면 date). 기간이 없으면 오늘 하루.
+// 본인(토큰 사용자) 거래처만 — 남의 거래처·없는 거래처는 같은 403(존재 여부를 알려 주지 않음).
+// 환불·미수는 저장된 값(sale.paid_amount, refund 합계)을 그대로 보여 준다. 계산 규칙은 바꾸지 않는다(T-108 대기).
+app.get('/api/sales/statement', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const partnerId = parseInt(req.query.partner_id, 10);
+  if (!Number.isFinite(partnerId) || partnerId <= 0) {
+    return res.status(400).json({ ok: false, message: '거래처를 선택하세요.' });
+  }
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const day = String(req.query.date || '').trim();
+  const from = String(req.query.from_date || req.query.from || day || kstToday()).trim();
+  const to = String(req.query.to_date || req.query.to || day || from).trim();
+  if (!ymd.test(from) || !ymd.test(to)) {
+    return res.status(400).json({ ok: false, message: '기간은 YYYY-MM-DD 형식으로 입력하세요.' });
+  }
+  if (from > to) return res.status(400).json({ ok: false, message: '시작일이 종료일보다 늦습니다.' });
+  try {
+    const pr = await pool.query(
+      'SELECT id, name, type, contact, phone, location, address FROM account WHERE id = $1 AND user_id = $2',
+      [partnerId, userId]
+    );
+    const partner = pr.rows[0];
+    if (!partner) return res.status(403).json({ ok: false, message: '이 거래처의 거래명세서를 볼 수 없습니다.' });
+    const ur = await pool.query('SELECT name, agent_no, phone, email FROM "user" WHERE id = $1', [userId]);
+    const items = await pool.query(
+      // sale_date 는 문자열(YYYY-MM-DD)로 — DATE 를 JS Date 로 받으면 서버 시간대(KST)에서 JSON(UTC)으로 바뀌며 하루 앞당겨 보인다
+      `SELECT s.id, s.sale_date::text AS sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
+              s.paid_amount, s.payment_status, s.status, s.memo,
+              p.name AS product_name, p.unit,
+              COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty,
+              COALESCE((SELECT SUM(r.refund_amount) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_amount
+       FROM sale s
+       JOIN product p ON p.id = s.product_id
+       WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
+         AND s.status <> 'cancelled'
+       ORDER BY s.sale_date, s.created_at NULLS LAST, s.id`,
+      [userId, partnerId, from, to]
+    );
+    // 합계는 DB NUMERIC 으로 계산해 소수 오차 없이 돌려준다
+    const tot = await pool.query(
+      `SELECT COUNT(*)::int AS count,
+              COALESCE(SUM(s.total_amount), 0)::numeric AS total_amount,
+              COALESCE(SUM(s.paid_amount), 0)::numeric AS paid_amount,
+              COALESCE(SUM(s.total_amount - s.paid_amount), 0)::numeric AS unpaid_amount
+       FROM sale s
+       WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
+         AND s.status <> 'cancelled'`,
+      [userId, partnerId, from, to]
+    );
+    res.json({
+      ok: true,
+      data: {
+        supplier: ur.rows[0] || null,
+        partner,
+        from_date: from,
+        to_date: to,
+        issued_on: kstToday(),
+        items: items.rows,
+        totals: tot.rows[0],
+      },
+    });
+  } catch (err) {
+    console.error('Statement error:', err);
+    res.status(500).json({ ok: false, message: err.message || '거래명세서를 불러오지 못했습니다.' });
+  }
+});
+
 // 일별 매입·매출 집계 (기간 필수, 거래처 선택 시 매입=구입처·매출=판매처 기준)
 app.get('/api/reports/daily-purchase-sales', async (req, res) => {
   const userId = await getUserId(req);

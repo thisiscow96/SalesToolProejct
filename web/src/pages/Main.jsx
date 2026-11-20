@@ -1174,6 +1174,21 @@ function TabSales() {
     }
   };
 
+  // 거래명세서 (T-105) — 위 필터의 거래처·기간으로 명세서 화면을 같은 탭에서 연다(로그인 정보가 탭 단위라 새 창 대신)
+  const openStatement = () => {
+    if (!partnerId) {
+      setSaleErr('거래명세서를 볼 거래처를 먼저 선택하세요.');
+      return;
+    }
+    setSaleErr('');
+    const q = new URLSearchParams({
+      partner_id: partnerId,
+      from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
+      to_date: sanitizeYmd(toDate, today()),
+    });
+    window.location.assign(`/statement?${q.toString()}`);
+  };
+
   return (
     <>
       <div className="main-filters">
@@ -1190,6 +1205,9 @@ function TabSales() {
         <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>
         <button type="button" className="main-btn main-btn--secondary" onClick={openRefundModal}>
           환불 처리
+        </button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
+          거래명세서
         </button>
       </div>
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
