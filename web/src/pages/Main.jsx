@@ -650,13 +650,13 @@ function TabPurchases() {
           {actionErr}
         </div>
       )}
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="pur-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="pur-to" />
         </label>
         <label>제품 <select value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">전체</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" className="main-btn" onClick={load}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
         <button
           type="button"
           className="main-btn"
@@ -667,7 +667,7 @@ function TabPurchases() {
         >
           매입 등록
         </button>
-        <button type="button" className="main-btn" onClick={openConvert}>선택 매출 전환</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>
       </div>
       <Modal
         open={showForm}
@@ -1154,7 +1154,7 @@ function TabSales() {
 
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="sale-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="sale-to" />
@@ -1164,9 +1164,9 @@ function TabSales() {
           <input type="checkbox" checked={showAllSales} onChange={(e) => setShowAllSales(e.target.checked)} />
           미수·일부 포함
         </label>
-        <button type="button" onClick={load}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
         <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>
-        <button type="button" className="main-btn" onClick={openRefundModal}>
+        <button type="button" className="main-btn main-btn--secondary" onClick={openRefundModal}>
           환불 처리
         </button>
       </div>
@@ -1188,7 +1188,7 @@ function TabSales() {
       >
         <form id="form-collect-modal" className="main-modal-form" onSubmit={submitCollect}>
           {saleErr && (
-            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+            <div className="main-alert-banner" role="alert">
               {saleErr}
             </div>
           )}
@@ -1319,7 +1319,7 @@ function TabSales() {
       >
         <form id="form-refund-batch-modal" className="main-modal-form" onSubmit={submitRefundBatch}>
           {saleErr && (
-            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+            <div className="main-alert-banner" role="alert">
               {saleErr}
             </div>
           )}
@@ -1590,8 +1590,8 @@ function TabSales() {
                     <td className="num main-col-qty">{formatKoNumber(rf)}</td>
                     <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
                     <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
-                    <td>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</td>
-                    <td>{row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}</td>
+                    <td><span className={'main-status main-status--pay-' + (row.payment_status || 'unpaid')}>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</span></td>
+                    <td><span className={'main-status main-status--sale-' + (row.status || 'normal')}>{row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}</span></td>
                   </tr>
                 );
               })}
@@ -1636,7 +1636,7 @@ function TabPayments() {
           <DateSearchField value={toDate} onChange={setToDate} id="pay-to" />
         </label>
         <label>거래처 <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}><option value="">전체</option>{partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" onClick={load}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
       </div>
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
@@ -1654,7 +1654,7 @@ function TabPayments() {
               {list.map((row) => (
                 <tr key={row.id}>
                   <td className="main-col-datetime">{formatPaymentDateTime(row)}</td>
-                  <td>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</td>
+                  <td><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
                   <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                   <td className="num main-col-amount">{formatKoNumber(row.amount)}</td>
                   <td>{row.memo || '-'}</td>
@@ -1752,7 +1752,7 @@ function TabProductMaster() {
 
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+      <div className="main-filters">
         <label>대분류
           <select value={categoryLarge} onChange={(e) => setCategoryLarge(e.target.value)}>
             <option value="">전체</option>
@@ -1772,9 +1772,9 @@ function TabProductMaster() {
           </select>
         </label>
         <label>이름 검색
-          <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" style={{ width: '140px' }} />
+          <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" className="main-input-search" />
         </label>
-        <button type="button" className="main-btn" onClick={load}>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
           검색
         </button>
         <button
@@ -1803,7 +1803,7 @@ function TabProductMaster() {
         submitting={submitting}
       >
         <form id="form-product-modal" className="main-modal-form product-master-form product-master-form--modal" onSubmit={submitProducts}>
-          {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
+          {submitErr && <p className="main-error main-error--inline" role="alert">{submitErr}</p>}
           <div className="main-modal-toolbar">
             <button type="button" className="main-modal-toolbar-btn" onClick={addProductRow}>
               ＋ 행 추가
@@ -2056,12 +2056,12 @@ function TabDisposals() {
 
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="disp-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="disp-to" />
         </label>
-        <button type="button" onClick={load}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>검색</button>
         <button type="button" className="main-btn" onClick={openDisposalModal}>
           폐기 등록
         </button>
@@ -2087,7 +2087,7 @@ function TabDisposals() {
         saveDisabled={loadingInventory || inventoryForDisposal.length === 0}
       >
         <form id="form-disposal-modal" className="main-modal-form" onSubmit={submitDisposals}>
-          {actionErr && <p className="main-error" style={{ marginBottom: '8px' }}>{actionErr}</p>}
+          {actionErr && <p className="main-error main-error--inline" role="alert">{actionErr}</p>}
           <div className="main-modal-fields main-modal-fields--disposal-search">
             <label className="main-modal-field-disposal-search">
               출처·매입 거래처 검색
@@ -2364,7 +2364,7 @@ function TabDailyTrade() {
 
   return (
     <>
-      <div className="main-filters main-filters--daily-trade" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters main-filters--daily-trade">
         <label className="main-date-filter">
           일자 <DateSearchField value={reportDate} onChange={setReportDate} id="daily-date" />
         </label>
@@ -2379,7 +2379,7 @@ function TabDailyTrade() {
             ))}
           </select>
         </label>
-        <button type="button" className="main-btn" onClick={load}>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
           검색
         </button>
         <span className="main-modal-hint main-daily-trade-hint">
@@ -2536,13 +2536,20 @@ export default function Main() {
   const user = getUser();
   const tabs = user?.is_admin ? [...BASE_TABS, ADMIN_TAB] : BASE_TABS;
   const [activeTab, setActiveTab] = useState('inventory');
-  const TabContent = tabs.find((t) => t.id === activeTab)?.Component;
+  const activeTabDef = tabs.find((t) => t.id === activeTab);
+  const TabContent = activeTabDef?.Component;
 
   return (
     <div className="main-page">
       <header className="main-header">
-        <h1 className="main-logo">판매툴</h1>
-        <span className="main-user">{user?.name}님</span>
+        <h1 className="main-logo">
+          <span className="main-logo-mark" aria-hidden="true" />
+          판매툴
+        </h1>
+        <span className="main-user">
+          <span className="main-user-avatar" aria-hidden="true">{(user?.name || '?').trim().charAt(0)}</span>
+          <span className="main-user-name">{user?.name}님</span>
+        </span>
         <button
           type="button"
           className="main-logout"
@@ -2554,12 +2561,14 @@ export default function Main() {
           로그아웃
         </button>
       </header>
-      <nav className="main-tabs">
+      <div className="main-shell">
+      <nav className="main-tabs" aria-label="업무 메뉴">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             className={'main-tab ' + (activeTab === t.id ? 'active' : '')}
+            aria-current={activeTab === t.id ? 'page' : undefined}
             onClick={() => setActiveTab(t.id)}
           >
             {t.label}
@@ -2567,8 +2576,10 @@ export default function Main() {
         ))}
       </nav>
       <main className="main-content">
+        {activeTabDef && <h2 className="main-page-title">{activeTabDef.label}</h2>}
         {TabContent && <TabContent />}
       </main>
+      </div>
     </div>
   );
 }

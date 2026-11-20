@@ -201,9 +201,23 @@ export default function Signup() {
   }
 
   return (
-    <div className="signup-page">
+    <div className="signup-page auth-page">
+      <aside className="auth-brand" aria-hidden="true">
+        <div className="auth-brand-inner">
+          <span className="auth-brand-mark" />
+          <p className="auth-brand-name">판매툴</p>
+          <p className="auth-brand-copy">매입부터 재고·매출·수금까지<br />하루 장부를 한 화면에서.</p>
+          <ul className="auth-brand-points">
+            <li>일별 매입·매출 합계와 미수 확인</li>
+            <li>매입 건을 골라 바로 매출 전환</li>
+            <li>거래처별 수금·환불 배분</li>
+          </ul>
+        </div>
+      </aside>
+      <div className="auth-main">
       <div className="signup-card">
         <h1 className="signup-title">회원가입</h1>
+        <p className="signup-subtitle">이메일 인증 후 중매인 번호로 가입합니다.</p>
         <form className="signup-form" onSubmit={handleSubmit}>
           <label className="signup-label">
             상호명
@@ -310,12 +324,15 @@ export default function Signup() {
             </label>
           </div>
 
-          {error && <p className="signup-error">{error}</p>}
+          {error && <p className="signup-error" role="alert">{error}</p>}
           <button type="submit" className="signup-btn" disabled={!canSubmit || loading}>
             {loading ? '가입 중…' : '회원가입'}
           </button>
         </form>
-        <Link to="/login" className="signup-login-link">로그인</Link>
+        <p className="signup-login-row">
+          이미 계정이 있나요? <Link to="/login" className="signup-login-link">로그인</Link>
+        </p>
+      </div>
       </div>
     </div>
   );
