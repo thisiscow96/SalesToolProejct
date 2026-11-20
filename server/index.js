@@ -822,7 +822,9 @@ app.get('/api/inventory', async (req, res) => {
               NULLIF(BTRIM(lp.source_name::text), '') AS last_source_name,
               NULLIF(BTRIM(pt.name::text), '') AS last_partner_name,
               to_char(COALESCE(op.oldest_date, lp.purchase_date), 'YYYY-MM-DD') AS aging_base_date,
-              ($2::date - COALESCE(op.oldest_date, lp.purchase_date))::int AS aging_days
+              ($2::date - COALESCE(op.oldest_date, lp.purchase_date))::int AS aging_days,
+              COALESCE(fl.sellable, 0)::numeric AS sellable_qty,
+              GREATEST(0, i.quantity - COALESCE(fl.lot_total, 0))::numeric AS unlinked_qty
        FROM inventory i
        JOIN product p ON p.id = i.product_id
        LEFT JOIN LATERAL (
@@ -851,6 +853,12 @@ app.get('/api/inventory', async (req, res) => {
          ) lot
          WHERE lot.cum_newest - lot.remain < i.quantity
        ) op ON true
+       -- T-205 판매 가능(오늘 판매 기준)·매입 미연결 수량 — 015 뷰 inventory_lot_available
+       LEFT JOIN LATERAL (
+         SELECT MAX(v.lot_total) AS lot_total, SUM(v.available) FILTER (WHERE v.purchase_date <= $2::date) AS sellable
+         FROM inventory_lot_available v
+         WHERE v.user_id = i.user_id AND v.product_id = i.product_id
+       ) fl ON true
        LEFT JOIN account pt ON pt.id = lp.partner_id AND pt.user_id = i.user_id
        WHERE i.user_id = $1 AND i.quantity > 0
        ORDER BY p.name`,
@@ -1001,7 +1009,8 @@ app.get('/api/sales', async (req, res) => {
   try {
     let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.status, s.memo,
-             s.returned_amount, s.overpaid_amount, s.cancelled_at, s.cancel_reason, s.updated_at,
+             s.returned_amount, s.overpaid_amount, s.cancelled_at, s.cancel_reason, s.updated_at, s.entry_mode,
+             (SELECT COUNT(*)::int FROM purchase_allocation pa WHERE pa.sale_id = s.id) AS allocation_count,
              GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
              COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
@@ -1582,6 +1591,13 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
   }
 });
 
+// 재고 기준 판매(선입선출) (T-205) — lib/fifo-routes.js. 위 함수·상수(SALE_PARTNER_TYPES 등)가 정의된 뒤에 등록한다
+const fifo = require('./lib/fifo-routes');
+fifo.registerFifoRoutes(app, {
+  pool, getUserId, kstToday, connectOr503, upsertInventoryDelta, insertTransfer,
+  getUserWarehouseLabel, accountLocationLine, SALE_PARTNER_TYPES,
+});
+
 /** 입력 검증 실패 — 400으로 응답하기 위한 오류 */
 function badRequest(message) {
   const e = new Error(message);
@@ -1928,7 +1944,7 @@ const PURCHASE_ROW_SQL = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchas
 
 const SALE_ROW_SQL = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
        s.payment_status, s.paid_amount, s.status, s.memo, s.returned_amount, s.overpaid_amount,
-       s.cancelled_at, s.cancel_reason, s.updated_at,
+       s.cancelled_at, s.cancel_reason, s.updated_at, s.entry_mode,
        GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
        p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
        COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
@@ -2448,6 +2464,8 @@ app.patch('/api/sales/:id', async (req, res) => {
     if ('memo' in ch) want.memo = readMemo(ch.memo);
 
     await client.query('BEGIN');
+    // T-205 RULE-10·14: 수량을 바꿀 때는 늘릴 때 쓸 수 있는 로트까지 매입 행을 먼저 id 순으로 잠근다(매입 → 매출 → 재고 순서 유지)
+    if ('quantity' in want) await fifo.prelockLotsForSale(client, userId, id);
     const { sale, purchases, allocations } = await lockSaleForCorrection(client, userId, id);
     if (sale.status === 'cancelled') throw corrError(409, 'ALREADY_CANCELLED', '이미 취소된 매출입니다.');
     assertNotStale(sale, req.body?.expected_updated_at);
@@ -2504,11 +2522,14 @@ app.patch('/api/sales/:id', async (req, res) => {
       const memoT = `매출 정정: ${reason}`.slice(0, 500);
       const wh = await getUserWarehouseLabel(client, userId);
       const custLoc = accountLocationLine(partnerRow);
-      if (allocations.length > 1) {
-        // 전환은 매출 1건 = 배분 1행(F3). 여러 행이면 어느 매입에서 줄일지 정할 수 없어 수량 변경을 막는다.
-        throw corrError(409, 'QTY_OVER_PURCHASE', '여러 매입에 걸친 매출은 수량을 바꿀 수 없습니다. 매출을 취소한 뒤 다시 전환하세요.', { max_qty: Number(sale.quantity) });
-      }
-      if (Number(delta) > 0) {
+      const fifoQty = await fifo.usesFifoQtyRule(client, id, allocations);
+      if (fifoQty) {
+        // T-205 RULE-10: 재고 판매(fifo) 매출·여러 매입에 걸친 매출 — 줄이면 최근 로트부터, 늘리면 FIFO 로 추가 배분
+        await fifo.adjustFifoSaleQty(client, {
+          userId, sale, newQty: n.qty, delta,
+          h: { upsertInventoryDelta, insertTransfer, wh, custLoc, memo: memoT, partnerId: next.partner_id, saleDate: next.sale_date },
+        });
+      } else if (Number(delta) > 0) {
         if (alloc) {
           const pu = purchases.find((x) => x.id === alloc.purchase_id);
           const rr = await client.query(
@@ -2540,9 +2561,13 @@ app.patch('/api/sales/:id', async (req, res) => {
           beforeLocation: custLoc, afterLocation: wh, saleId: id, purchaseId: alloc?.purchase_id ?? null, memo: memoT,
         });
       }
-      if (alloc) {
+      if (alloc && !fifoQty) {
         await client.query(`UPDATE purchase_allocation SET quantity = $1::numeric WHERE id = $2`, [n.qty, alloc.id]);
       }
+    }
+    // T-205 RULE-11: 재고 판매 매출의 판매일은 배분된 로트의 가장 늦은 매입일보다 앞설 수 없다(전환 매출은 지금 규칙 그대로)
+    if (changed.includes('sale_date')) {
+      await fifo.assertFifoSaleDate(client, { userId, saleId: id, saleDate: next.sale_date });
     }
 
     await client.query(
