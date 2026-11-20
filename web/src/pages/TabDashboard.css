@@ -344,41 +344,117 @@
   }
 }
 
+/* T-220 휴대폰(768 미만) — T-206 규칙(카드형·터치 40px 이상·숫자 오른쪽 정렬)을 첫 화면에도 */
 @media (max-width: 767px) {
+  .dash {
+    gap: var(--sp-3);
+  }
+
   .dash-card {
     padding: var(--sp-4);
   }
 
-  .dash-kpis {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--sp-3);
+  .dash-link {
+    min-height: 40px;
   }
 
-  /* 휴대폰: 매입·매출·수금을 한 줄씩, 금액은 오른쪽 */
+  /* 매입·매출·수금 카드 3장을 한 장의 목록으로 묶는다(카드 3장이 첫 화면의 절반을 차지하던 것을 세 줄로).
+     줄마다 왼쪽 이름·건수, 오른쪽 금액·이동 링크 */
+  .dash-kpis {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
   .dash-kpi {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       'label amount'
       'count link';
     align-items: center;
-    gap: 2px var(--sp-3);
+    gap: 0 var(--sp-3);
+    padding: var(--sp-3) var(--sp-4) var(--sp-1);
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
-  .dash-kpi-label { grid-area: label; }
+  .dash-kpi + .dash-kpi {
+    border-top: 1px solid var(--c-border);
+  }
+
+  .dash-kpi-label { grid-area: label; font-size: var(--fs-14); color: var(--c-text); }
   .dash-kpi-amount { grid-area: amount; font-size: var(--fs-20); text-align: right; }
   .dash-kpi-count { grid-area: count; margin: 0; }
   .dash-kpi .dash-link { grid-area: link; margin: 0 calc(-1 * var(--sp-2)) 0 0; justify-self: end; }
 
   .dash-recv-total {
     font-size: var(--fs-24);
+    margin-bottom: var(--sp-3);
   }
 
+  /* 연령 4구간: 2×2 격자 대신 표처럼 한 줄에 한 구간(이름 왼쪽 · 금액 오른쪽) — 세로로 훑어 비교 */
   .dash-aging-legend {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-top: var(--sp-3);
   }
+
+  .dash-aging-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    min-height: 40px;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .dash-aging-item:first-child {
+    border-top: 0;
+  }
+
+  .dash-aging-item dt {
+    font-size: var(--fs-14);
+  }
+
+  .dash-aging-item dd {
+    margin: 0;
+    text-align: right;
+  }
+
+  /* 미수 많은 거래처: 줄을 누르면 원장 — 금액 아래 '원장 ›'로 눌러지는 줄임을 보인다 */
+  .dash-row-btn {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'main amount'
+      'main go';
+    align-items: center;
+    gap: 0 var(--sp-3);
+    min-height: 56px;
+  }
+
+  .dash-row-btn .dash-row-main { grid-area: main; }
+  .dash-row-btn .dash-row-amount { grid-area: amount; align-self: end; text-align: right; }
 
   .dash-row-go {
-    display: none;
+    grid-area: go;
+    align-self: start;
+    justify-self: end;
+  }
+
+  /* 긴 거래처·품목 이름은 말줄임 대신 두 줄까지 보인다(같은 이름 2호점 등 구분) */
+  .dash-row-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
