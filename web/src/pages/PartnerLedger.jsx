@@ -1,0 +1,444 @@
+// 거래처 원장 모달 · 미수 연령 보기 (T-104) — 설계 T-104_원장_설계.md 6장
+// - 원장: 매출(+)·반품(−)·수금(−)·환불 지급(+)을 날짜순으로, 행마다 잔액 누계. 기간을 고르면 기초 잔액부터 시작
+// - 미수 연령: 거래처별 미수를 매출일 기준 30일 이내 / 31–60 / 61–90 / 90일 초과로. 줄을 누르면 매출별 남은 미수
+// 금액 계산은 모두 서버(DB NUMERIC)에서 하고, 화면은 받은 숫자를 그대로 보여 준다.
+import { Fragment, useEffect, useId, useState } from 'react';
+import { fetchPartnerLedger, fetchReceivablesAging } from '../api';
+import { kstTodayYmd } from '../lib/dates';
+import './PartnerLedger.css';
+
+export const won = (n) => (n == null ? '-' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 }));
+const qtyText = (n) => (n == null ? '' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 3 }));
+
+const KIND_CLASS = { sale: 'sale', return: 'return', receipt: 'receipt', refund_cash: 'refund', sale_cancelled: 'cancelled' };
+
+/** 기간 버튼 — 기본은 최근 3개월([가정] 설계 T104-U-7). 날짜는 KST 기준 */
+const PERIODS = [
+  { key: 'month', label: '이번 달' },
+  { key: '3m', label: '최근 3개월' },
+  { key: 'year', label: '올해' },
+  { key: 'all', label: '전체' },
+  { key: 'custom', label: '직접' },
+];
+function periodRange(key, today = kstTodayYmd()) {
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));
+  if (key === 'month') return { from: `${today.slice(0, 7)}-01`, to: today };
+  if (key === '3m') {
+    const d = new Date(Date.UTC(y, m - 1 - 2, 1));
+    return { from: d.toISOString().slice(0, 10), to: today };
+  }
+  if (key === 'year') return { from: `${y}-01-01`, to: today };
+  return { from: '', to: '' };
+}
+
+/** 모달 공통: Esc 닫기 + 본문 스크롤 잠금(원래 값으로 복원) */
+function useModalBehavior(open, onClose) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+}
+
+/**
+ * 거래처 원장 모달
+ * props: partner {id,name,type}, onClose, onShowAging(partner) — 미수 연령 보기로 이동
+ */
+export function PartnerLedgerModal({ partner, onClose, onShowAging }) {
+  const titleId = useId();
+  const [period, setPeriod] = useState('3m');
+  const [range, setRange] = useState(() => periodRange('3m'));
+  const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  useModalBehavior(!!partner, onClose);
+
+  useEffect(() => {
+    if (!partner) return undefined;
+    if (range.from && range.to && range.from > range.to) {
+      setErr('시작일이 종료일보다 늦습니다.');
+      setLoading(false);
+      return undefined;
+    }
+    let alive = true;
+    setLoading(true);
+    setErr('');
+    fetchPartnerLedger(partner.id, { from: range.from, to: range.to, include_cancelled: includeCancelled ? 1 : '' })
+      .then((d) => alive && setData(d))
+      .catch((e) => alive && setErr(e.message))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [partner, range.from, range.to, includeCancelled]);
+
+  if (!partner) return null;
+  const pickPeriod = (key) => {
+    setPeriod(key);
+    if (key !== 'custom') setRange(periodRange(key));
+  };
+  const statementHref = () => {
+    const q = new URLSearchParams({ partner_id: String(partner.id) });
+    const first = data?.entries?.[0]?.date;
+    const from = range.from || first || kstTodayYmd();
+    const to = range.to || kstTodayYmd();
+    q.set('from_date', from);
+    q.set('to_date', to);
+    return `/statement?${q.toString()}`;
+  };
+  const t = data?.totals;
+  const diff = data?.check?.diff || 0;
+
+  return (
+    <div className="main-modal-backdrop ledger-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="main-modal main-modal--wide ledger-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="main-modal-header ledger-header">
+          <h2 id={titleId}>{partner.name} 원장</h2>
+          <p className="ledger-sub">받을 돈 장부 · 잔액 = 매출 − 반품 − 수금 + 환불 지급</p>
+        </div>
+        <div className="main-modal-body">
+          <div className="ledger-controls">
+            <div className="ledger-periods" role="group" aria-label="기간">
+              {PERIODS.map((p) => (
+                <button
+                  key={p.key}
+                  type="button"
+                  className={`ledger-chip${period === p.key ? ' is-active' : ''}`}
+                  aria-pressed={period === p.key}
+                  onClick={() => pickPeriod(p.key)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {period === 'custom' && (
+              <div className="ledger-dates">
+                <label>
+                  시작
+                  <input type="date" value={range.from} max={range.to || undefined} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
+                </label>
+                <label>
+                  종료
+                  <input type="date" value={range.to} min={range.from || undefined} onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))} />
+                </label>
+              </div>
+            )}
+            <label className="ledger-check">
+              <input type="checkbox" checked={includeCancelled} onChange={(e) => setIncludeCancelled(e.target.checked)} />
+              취소 매출 보기
+            </label>
+          </div>
+
+          {loading && !data ? (
+            <p className="main-loading">불러오는 중…</p>
+          ) : err ? (
+            <p className="main-error" role="alert">
+              {err}
+            </p>
+          ) : data ? (
+            <>
+              {Math.abs(diff) >= 0.005 && (
+                <div className="ledger-warn" role="alert">
+                  매출별 미수 합({won(data.check.sale_based_due)})과 원장 잔액({won(data.check.ledger_balance)})이 {won(Math.abs(diff))}원 다릅니다. 이전 기록(받지 않은 돈의 환불 기록 등) 확인이 필요합니다.
+                </div>
+              )}
+              <dl className="ledger-summary" aria-busy={loading}>
+                <div>
+                  <dt>기초 잔액</dt>
+                  <dd>{won(data.opening_balance)}</dd>
+                </div>
+                <div>
+                  <dt>매출</dt>
+                  <dd className="is-plus">+{won(t.sales)}</dd>
+                </div>
+                <div>
+                  <dt>반품</dt>
+                  <dd className="is-minus">−{won(t.returns)}</dd>
+                </div>
+                <div>
+                  <dt>수금</dt>
+                  <dd className="is-minus">−{won(t.receipts)}</dd>
+                </div>
+                <div>
+                  <dt>환불 지급</dt>
+                  <dd className="is-plus">+{won(t.refunds)}</dd>
+                </div>
+                <div className="ledger-summary-closing">
+                  <dt>기말 잔액</dt>
+                  <dd>{won(data.closing_balance)}</dd>
+                </div>
+              </dl>
+              {data.entries.length === 0 && !data.from ? (
+                <p className="main-empty">거래 기록이 없습니다.</p>
+              ) : (
+                <div className="main-table-wrap ledger-table-wrap">
+                  <table className="main-table ledger-table">
+                    <thead>
+                      <tr>
+                        <th>날짜</th>
+                        <th>구분</th>
+                        <th>내용</th>
+                        <th className="num">늘어남(+)</th>
+                        <th className="num">줄어듦(−)</th>
+                        <th className="num">잔액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.from && (
+                        <tr className="ledger-row ledger-row--opening">
+                          <td className="ledger-date" />
+                          <td className="ledger-kind" />
+                          <td className="ledger-desc">기초 잔액 ({data.from} 이전)</td>
+                          <td className="num ledger-inc" />
+                          <td className="num ledger-dec" />
+                          <td className="num ledger-bal">{won(data.opening_balance)}</td>
+                        </tr>
+                      )}
+                      {data.entries.map((e) => (
+                        <tr key={`${e.kind}-${e.ref_id}`} className={`ledger-row ledger-row--${KIND_CLASS[e.kind] || e.kind}`}>
+                          <td className="ledger-date">{e.date}</td>
+                          <td className="ledger-kind">
+                            <span className={`ledger-badge ledger-badge--${KIND_CLASS[e.kind] || e.kind}`}>{e.kind_label}</span>
+                          </td>
+                          <td className="ledger-desc">
+                            {e.description}
+                            {e.memo && e.kind !== 'refund_cash' ? <span className="ledger-memo"> · {e.memo}</span> : null}
+                          </td>
+                          {e.kind === 'sale_cancelled' ? (
+                            <>
+                              <td className="num ledger-inc ledger-cancelled-amt" colSpan={2}>
+                                취소 ({won(e.cancelled_amount)})
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="num ledger-inc">{e.increase ? won(e.increase) : ''}</td>
+                              <td className="num ledger-dec">{e.decrease ? won(e.decrease) : ''}</td>
+                            </>
+                          )}
+                          <td className="num ledger-bal">{won(e.balance)}</td>
+                        </tr>
+                      ))}
+                      {data.entries.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="ledger-none">
+                            이 기간에 거래가 없습니다.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+        <div className="main-modal-footer ledger-footer">
+          <button type="button" className="main-modal-btn secondary" onClick={() => onShowAging && onShowAging(partner)}>
+            미수 연령 보기
+          </button>
+          <button type="button" className="main-modal-btn secondary" onClick={() => window.open(statementHref(), '_blank', 'noopener')}>
+            거래명세서
+          </button>
+          <button type="button" className="main-modal-btn primary" onClick={onClose}>
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 미수 연령 보기 — 거래처 탭의 [미수 연령] 화면
+ * props: focusPartnerId(처음부터 펼칠 거래처), onOpenLedger(partner)
+ */
+export function ReceivablesAgingView({ focusPartnerId, onOpenLedger }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [over60, setOver60] = useState(false);
+  const [open, setOpen] = useState(focusPartnerId || null);
+  const [detail, setDetail] = useState({}); // partner_id → { loading, err, sales }
+
+  const load = () => {
+    setLoading(true);
+    setErr('');
+    fetchReceivablesAging(over60 ? { min_days: 61 } : {})
+      .then(setData)
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [over60]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadDetail = (pid) => {
+    setDetail((d) => ({ ...d, [pid]: { loading: true } }));
+    fetchReceivablesAging({ partner_id: pid })
+      .then((d) => setDetail((x) => ({ ...x, [pid]: { sales: d.sales || [] } })))
+      .catch((e) => setDetail((x) => ({ ...x, [pid]: { err: e.message } })));
+  };
+  useEffect(() => {
+    if (focusPartnerId) {
+      setOpen(focusPartnerId);
+      loadDetail(focusPartnerId);
+    }
+  }, [focusPartnerId]);
+
+  const toggle = (pid) => {
+    if (open === pid) {
+      setOpen(null);
+      return;
+    }
+    setOpen(pid);
+    if (!detail[pid] || detail[pid].err) loadDetail(pid);
+  };
+
+  return (
+    <section className="aging" aria-label="미수 연령">
+      <div className="main-filters aging-filters">
+        <label className="ledger-check">
+          <input type="checkbox" checked={over60} onChange={(e) => setOver60(e.target.checked)} />
+          61일 이상 미수가 있는 거래처만
+        </label>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
+          새로고침
+        </button>
+      </div>
+      {data && (
+        <p className="aging-basis">
+          기준일 {data.as_of} · 매출일부터 센 날수 · 수금은 매출별로 배분된 금액 기준
+        </p>
+      )}
+      {loading && !data ? (
+        <p className="main-loading">불러오는 중…</p>
+      ) : err ? (
+        <p className="main-error" role="alert">
+          {err}
+        </p>
+      ) : data && data.rows.length === 0 ? (
+        <p className="main-empty">{over60 ? '61일 이상 된 미수가 없습니다.' : '받을 돈(미수)이 없습니다.'}</p>
+      ) : data ? (
+        <div className="main-table-wrap">
+          <table className="main-table aging-table">
+            <thead>
+              <tr>
+                <th>거래처</th>
+                <th className="num">미수 합</th>
+                {data.buckets.map((b) => (
+                  <th key={b.key} className="num">
+                    {b.label}
+                  </th>
+                ))}
+                <th>가장 오래된 매출</th>
+                <th>마지막 수금</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => {
+                const isOpen = open === r.partner_id;
+                const d = detail[r.partner_id];
+                return (
+                  <Fragment key={r.partner_id}>
+                    <tr className={`aging-row${isOpen ? ' is-open' : ''}`}>
+                      <td className="aging-name">
+                        <button type="button" className="aging-toggle" aria-expanded={isOpen} onClick={() => toggle(r.partner_id)}>
+                          <span className="aging-caret" aria-hidden="true">
+                            {isOpen ? '▾' : '▸'}
+                          </span>
+                          {r.partner_name}
+                        </button>
+                      </td>
+                      <td className="num aging-total">{won(r.total_due)}</td>
+                      {data.buckets.map((b) => (
+                        <td key={b.key} className={`num${b.key === 'd91p' && r[b.key] > 0 ? ' aging-over' : ''}${r[b.key] === 0 ? ' aging-zero' : ''}`}>
+                          {won(r[b.key])}
+                        </td>
+                      ))}
+                      <td className="aging-date">
+                        {r.oldest_sale_date} <span className="aging-days">({r.oldest_days}일)</span>
+                      </td>
+                      <td className="aging-date">{r.last_receipt_date || '—'}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="aging-detail-row">
+                        <td colSpan={8}>
+                          {!d || d.loading ? (
+                            <p className="main-loading">불러오는 중…</p>
+                          ) : d.err ? (
+                            <p className="main-error">{d.err}</p>
+                          ) : (
+                            <div className="aging-detail">
+                              <table className="aging-sales">
+                                <thead>
+                                  <tr>
+                                    <th>매출일</th>
+                                    <th className="num">경과</th>
+                                    <th>상품</th>
+                                    <th className="num">총액</th>
+                                    <th className="num">반품</th>
+                                    <th className="num">수금</th>
+                                    <th className="num">남은 미수</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {d.sales.map((s) => (
+                                    <tr key={s.sale_id}>
+                                      <td>
+                                        {s.sale_date} <span className="aging-days">#{s.sale_id}</span>
+                                      </td>
+                                      <td className={`num${s.bucket === 'd91p' ? ' aging-over' : ''}`}>{s.days}일</td>
+                                      <td>
+                                        {s.product_name} {qtyText(s.quantity)}
+                                      </td>
+                                      <td className="num">{won(s.total_amount)}</td>
+                                      <td className="num">{s.returned_amount ? won(s.returned_amount) : '-'}</td>
+                                      <td className="num">{s.paid_amount ? won(s.paid_amount) : '-'}</td>
+                                      <td className="num aging-total">{won(s.due)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              <button
+                                type="button"
+                                className="main-btn main-btn--secondary aging-ledger-btn"
+                                onClick={() => onOpenLedger && onOpenLedger({ id: r.partner_id, name: r.partner_name, type: r.partner_type })}
+                              >
+                                {r.partner_name} 원장 열기
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="aging-totals">
+                <td>합계 ({data.totals.partner_count}곳)</td>
+                <td className="num">{won(data.totals.total_due)}</td>
+                {data.buckets.map((b) => (
+                  <td key={b.key} className={`num${b.key === 'd91p' && data.totals[b.key] > 0 ? ' aging-over' : ''}`}>
+                    {won(data.totals[b.key])}
+                  </td>
+                ))}
+                <td colSpan={2} />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
