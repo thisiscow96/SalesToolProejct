@@ -1833,3 +1833,17 @@ td.main-td-scroll.main-col-source {
   color: var(--c-warning-text);
   white-space: nowrap;
 }
+
+/* T-210 매입 등록 — 최근 매입 단가 제안값(회색)과 안내 */
+.main-modal .main-table--purchase-modal .main-input-unit-price.main-input-unit-price--suggested {
+  color: var(--c-text-3);
+}
+.main-modal .main-table--purchase-modal .main-price-hint {
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  line-height: var(--lh-tight);
+  color: var(--c-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

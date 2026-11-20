@@ -886,6 +886,82 @@ app.get('/api/purchases', async (req, res) => {
   }
 });
 
+/** 쿼리 문자열의 양의 정수 id — 숫자가 아니거나 0 이하면 null */
+function parsePositiveIdParam(raw) {
+  const s = String(raw ?? '').trim();
+  if (!/^\d{1,10}$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  return n > 0 && n <= 2147483647 ? n : null;
+}
+
+// 매입 등록 모달 — 같은 상품(+거래처)의 최근 매입 단가 1건 (T-210)
+// 로그인 회원 소유 매입만 본다. 남의 상품·거래처 id를 넣어도 user_id 조건 때문에 data: null.
+// 거래처를 주면 그 거래처 기록을 먼저 찾고, 없으면 같은 상품의 전체 거래처 기록으로 대신한다(scope로 구분).
+// 인덱스: idx_purchase_user_product_date (user_id, product_id, purchase_date DESC) — 009
+app.get('/api/purchases/last-price', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const productId = parsePositiveIdParam(req.query.product_id);
+  if (!productId) return res.status(400).json({ ok: false, message: '상품을 지정하세요.' });
+  const hasPartner = req.query.partner_id != null && String(req.query.partner_id).trim() !== '';
+  const partnerId = hasPartner ? parsePositiveIdParam(req.query.partner_id) : null;
+  if (hasPartner && !partnerId) return res.status(400).json({ ok: false, message: '거래처 값이 올바르지 않습니다.' });
+  const sql = `SELECT pu.unit_price, pu.quantity, to_char(pu.purchase_date, 'YYYY-MM-DD') AS purchase_date,
+                      pu.partner_id, pt.name AS partner_name
+                 FROM purchase pu
+                 JOIN account pt ON pt.id = pu.partner_id AND pt.user_id = pu.user_id
+                WHERE pu.user_id = $1 AND pu.product_id = $2 AND ($3::int IS NULL OR pu.partner_id = $3::int)
+                ORDER BY pu.purchase_date DESC, pu.id DESC
+                LIMIT 1`;
+  try {
+    let scope = partnerId ? 'partner' : 'product';
+    let r = await pool.query(sql, [userId, productId, partnerId]);
+    if (r.rows.length === 0 && partnerId) {
+      scope = 'product';
+      r = await pool.query(sql, [userId, productId, null]);
+    }
+    if (r.rows.length === 0) return res.json({ ok: true, data: null });
+    const row = r.rows[0];
+    res.json({
+      ok: true,
+      data: {
+        scope,
+        unit_price: Number(row.unit_price),
+        quantity: Number(row.quantity),
+        purchase_date: row.purchase_date,
+        partner_id: row.partner_id,
+        partner_name: row.partner_name,
+      },
+    });
+  } catch (err) {
+    console.error('Last purchase price error:', err);
+    res.status(500).json({ ok: false, message: '최근 단가를 불러오지 못했습니다.' });
+  }
+});
+
+// 매입 등록 모달 — 최근에 매입한 거래처 순서 (T-210, 자주 쓰는 거래처를 목록 위로)
+// 최근 180일 매입 기준, 마지막 매입일 내림차순 → 건수 내림차순. 인덱스: idx_purchase_user_date (user_id, purchase_date) — 009
+const RECENT_PARTNER_DAYS = 180;
+app.get('/api/purchases/recent-partners', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  try {
+    const r = await pool.query(
+      `SELECT pu.partner_id, to_char(MAX(pu.purchase_date), 'YYYY-MM-DD') AS last_date, COUNT(*)::int AS cnt
+         FROM purchase pu
+        WHERE pu.user_id = $1 AND pu.purchase_date >= ($2::date - $3::int)
+        GROUP BY pu.partner_id
+        ORDER BY MAX(pu.purchase_date) DESC, COUNT(*) DESC, pu.partner_id
+        LIMIT 50`,
+      [userId, kstToday(), RECENT_PARTNER_DAYS]
+    );
+    res.json({ ok: true, data: r.rows });
+  } catch (err) {
+    console.error('Recent purchase partners error:', err);
+    res.status(500).json({ ok: false, message: '최근 거래처를 불러오지 못했습니다.' });
+  }
+});
+
 function parsePaidAtInput(raw) {
   const s = String(raw ?? '').trim();
   if (!s) return null;

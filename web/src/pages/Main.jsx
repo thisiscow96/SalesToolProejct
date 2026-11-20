@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   fetchInventory,
   fetchPurchases,
@@ -6,6 +6,8 @@ import {
   fetchPayments,
   fetchProducts,
   fetchPartners,
+  fetchLastPurchasePrice,
+  fetchRecentPurchasePartners,
   getUser,
   createProductsBulk,
   createPurchase,
@@ -219,7 +221,7 @@ function CollectAmountInput({ value, onChange, disabled, placeholder, className,
 }
 
 /** 단가·금액: 입력 시 천단위 콤마, 저장값은 숫자 문자열(콤마 없음) */
-function UnitPriceInput({ value, onChange, disabled, placeholder, className }) {
+function UnitPriceInput({ value, onChange, disabled, placeholder, className, title, ariaDescribedBy }) {
   const [focused, setFocused] = useState(false);
   const raw = normalizeMoneyInputString(value);
   const display = focused ? raw : formatMoneyInputDisplay(raw);
@@ -235,6 +237,8 @@ function UnitPriceInput({ value, onChange, disabled, placeholder, className }) {
       onChange={(e) => onChange(normalizeMoneyInputString(e.target.value))}
       disabled={disabled}
       placeholder={placeholder}
+      title={title}
+      aria-describedby={ariaDescribedBy}
     />
   );
 }
@@ -381,6 +385,10 @@ function newPurchaseRow() {
     product_id: '',
     quantity: '',
     unit_price: '',
+    /** T-210: true면 unit_price는 최근 매입 단가로 자동 채운 제안값(회색). 사용자가 단가를 고치면 false */
+    unit_price_auto: false,
+    /** T-210: 최근 매입 안내 { scope, unit_price, purchase_date, partner_name } | { none: true } | null */
+    price_hint: null,
     purchase_date: today(),
     selected: false,
   };
@@ -507,6 +515,48 @@ function TabPurchases() {
   const [submitting, setSubmitting] = useState(false);
   // 매입 등록·매출 전환 모달 위에서 바로 거래처 추가 (T-102): null | 'purchase' | 'sale'
   const [partnerAddFor, setPartnerAddFor] = useState(null);
+  // T-210: 최근 매입 거래처 순서 [{ partner_id, last_date, cnt }] — 매입 거래처 목록을 최근 거래 순으로 정렬
+  const [recentPartners, setRecentPartners] = useState([]);
+  // T-210: 행별 최근 단가 조회 순번 — 상품·거래처를 빠르게 바꿀 때 늦게 온 이전 응답을 버린다
+  const priceReqSeq = useRef({});
+
+  const loadRecentPartners = () => {
+    fetchRecentPurchasePartners().then(setRecentPartners).catch(() => setRecentPartners([]));
+  };
+
+  /** T-210: 행의 상품(·거래처)으로 최근 매입 단가를 찾아 단가 칸에 제안값을 채운다. 사용자가 고친 단가는 유지 */
+  const suggestUnitPrice = (key, productId, partnerId) => {
+    const seq = (priceReqSeq.current[key] || 0) + 1;
+    priceReqSeq.current[key] = seq;
+    if (!productId) {
+      setPurchaseRows((rows) =>
+        rows.map((r) => (r.key === key ? { ...r, price_hint: null, ...(r.unit_price_auto ? { unit_price: '', unit_price_auto: false } : {}) } : r)),
+      );
+      return;
+    }
+    fetchLastPurchasePrice(productId, partnerId)
+      .then((last) => {
+        if (priceReqSeq.current[key] !== seq) return;
+        setPurchaseRows((rows) =>
+          rows.map((r) => {
+            if (r.key !== key) return r;
+            const canFill = r.unit_price_auto || r.unit_price === '';
+            if (!last) {
+              return { ...r, price_hint: { none: true }, ...(r.unit_price_auto ? { unit_price: '', unit_price_auto: false } : {}) };
+            }
+            return {
+              ...r,
+              price_hint: last,
+              ...(canFill ? { unit_price: String(last.unit_price), unit_price_auto: true } : {}),
+            };
+          }),
+        );
+      })
+      .catch(() => {
+        if (priceReqSeq.current[key] !== seq) return;
+        setPurchaseRows((rows) => rows.map((r) => (r.key === key ? { ...r, price_hint: null } : r)));
+      });
+  };
 
   const onPartnerAdded = (saved) => {
     const ctx = partnerAddFor;
@@ -536,6 +586,7 @@ function TabPurchases() {
   useEffect(() => {
     fetchProducts().then(setProducts).catch(() => {});
     fetchPartners().then(setPartners).catch(() => {});
+    loadRecentPartners();
   }, []);
   useEffect(() => {
     load();
@@ -543,6 +594,21 @@ function TabPurchases() {
   }, []);
 
   const purchasePartners = partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type));
+  // T-210: 매입 등록 모달의 거래처 목록 — 최근 180일 매입한 거래처(최근 순)를 위, 나머지는 이름순
+  const purchasePartnerGroups = (() => {
+    const byId = new Map(purchasePartners.map((p) => [String(p.id), p]));
+    const recent = [];
+    const used = new Set();
+    for (const rp of recentPartners) {
+      const p = byId.get(String(rp.partner_id));
+      if (p && !used.has(String(p.id))) {
+        recent.push({ ...p, last_date: rp.last_date });
+        used.add(String(p.id));
+      }
+    }
+    const rest = purchasePartners.filter((p) => !used.has(String(p.id)));
+    return { recent, rest };
+  })();
   const salePartners = partners.filter((p) => SALE_ACCOUNT_TYPES.has(p.type));
 
   const toggleRow = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
@@ -596,6 +662,8 @@ function TabPurchases() {
       product_id: r.product_id,
       quantity: r.quantity,
       unit_price: r.unit_price,
+      unit_price_auto: !!r.unit_price_auto,
+      price_hint: r.price_hint ?? null,
       purchase_date: r.purchase_date,
       selected: false,
     }));
@@ -658,6 +726,7 @@ function TabPurchases() {
       setShowForm(false);
       setPurchaseRows([newPurchaseRow()]);
       load();
+      loadRecentPartners();
     } catch (er) {
       const msg = er.message || '매입 등록 실패';
       if (savedKeys.size > 0) {
@@ -803,21 +872,48 @@ function TabPurchases() {
                               })()
                             : ''
                         }
-                        onChange={(e) => updatePurchaseRow(row.key, { partner_id: e.target.value })}
+                        onChange={(e) => {
+                          updatePurchaseRow(row.key, { partner_id: e.target.value });
+                          if (row.product_id) suggestUnitPrice(row.key, row.product_id, e.target.value);
+                        }}
                       >
                         <option value="">선택</option>
-                        {purchasePartners.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} ({p.type})
-                          </option>
-                        ))}
+                        {purchasePartnerGroups.recent.length > 0 ? (
+                          <>
+                            <optgroup label="최근 거래">
+                              {purchasePartnerGroups.recent.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} ({p.type})
+                                </option>
+                              ))}
+                            </optgroup>
+                            {purchasePartnerGroups.rest.length > 0 && (
+                              <optgroup label="그 외 (가나다순)">
+                                {purchasePartnerGroups.rest.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name} ({p.type})
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </>
+                        ) : (
+                          purchasePartners.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} ({p.type})
+                            </option>
+                          ))
+                        )}
                       </select>
                     </td>
                     <td className="main-col-product">
                       <select
                         value={row.product_id}
                         title={row.product_id ? products.find((x) => String(x.id) === String(row.product_id))?.name || '' : ''}
-                        onChange={(e) => updatePurchaseRow(row.key, { product_id: e.target.value })}
+                        onChange={(e) => {
+                          updatePurchaseRow(row.key, { product_id: e.target.value });
+                          suggestUnitPrice(row.key, e.target.value, row.partner_id);
+                        }}
                       >
                         <option value="">선택</option>
                         {products.map((p) => (
@@ -839,10 +935,21 @@ function TabPurchases() {
                     </td>
                     <td className="main-col-unit-price main-col-unit-price--purchase-input">
                       <UnitPriceInput
-                        className="main-input-unit-price--purchase"
+                        className={'main-input-unit-price--purchase' + (row.unit_price_auto ? ' main-input-unit-price--suggested' : '')}
                         value={row.unit_price}
-                        onChange={(v) => updatePurchaseRow(row.key, { unit_price: v })}
+                        onChange={(v) => updatePurchaseRow(row.key, { unit_price: v, unit_price_auto: false })}
+                        title={row.unit_price_auto ? '최근 매입 단가로 채운 제안값입니다. 바꾸면 입력한 값을 씁니다.' : undefined}
+                        ariaDescribedBy={row.price_hint ? `price-hint-${row.key}` : undefined}
                       />
+                      {row.price_hint && (
+                        <div id={`price-hint-${row.key}`} className="main-price-hint" aria-live="polite">
+                          {row.price_hint.none
+                            ? '최근 매입 없음'
+                            : `최근: ${row.price_hint.purchase_date} · ${formatMoneyInputDisplay(String(row.price_hint.unit_price))}원${
+                                row.price_hint.scope === 'product' && row.partner_id ? ` (다른 거래처: ${row.price_hint.partner_name})` : ''
+                              }`}
+                        </div>
+                      )}
                     </td>
                     <td className="main-col-date main-col-date--purchase-input">
                       <input
