@@ -611,6 +611,133 @@ app.get('/api/partners', async (req, res) => {
   }
 });
 
+// 거래처 등록·수정 (T-102) — 유형은 partner_type enum(001·004)과 같게 유지
+const PARTNER_TYPES = ['supplier', 'customer', 'same_market', 'wholesaler', 'market_wholesaler'];
+const PARTNER_TEXT_LIMITS = { name: 200, contact: 100, phone: 50, location: 200, address: 2000, memo: 2000 };
+
+/** 본문에서 거래처 필드를 읽어 검증한다. partial=true(수정)면 본문에 없는 필드는 건드리지 않는다. */
+function readPartnerBody(body, partial) {
+  const b = body && typeof body === 'object' ? body : {};
+  const out = {};
+  for (const key of ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo']) {
+    if (!(key in b)) continue;
+    const v = b[key] == null ? '' : String(b[key]).trim();
+    out[key] = v;
+  }
+  if (!partial || 'name' in out) {
+    if (!out.name) return { error: '거래처 이름을 입력하세요.' };
+  }
+  if (!partial || 'type' in out) {
+    if (!PARTNER_TYPES.includes(out.type)) return { error: '거래처 유형을 선택하세요.' };
+  }
+  for (const [key, max] of Object.entries(PARTNER_TEXT_LIMITS)) {
+    if (out[key] != null && out[key].length > max) return { error: `${key} 값은 ${max}자 이하로 입력하세요.` };
+  }
+  // 선택 항목은 빈 문자열 대신 NULL 로 저장
+  for (const key of ['contact', 'phone', 'location', 'address', 'memo']) {
+    if (key in out && out[key] === '') out[key] = null;
+  }
+  return { fields: out };
+}
+
+const PARTNER_RETURNING = 'id, name, type, contact, phone, location, address, memo, created_at, updated_at';
+
+/** 같은 사용자의 같은 이름(앞뒤 공백·대소문자 무시) 거래처가 있으면 그 행을 돌려준다 */
+async function findDuplicatePartner(client, userId, name, exceptId) {
+  const r = await client.query(
+    `SELECT id, name FROM account
+      WHERE user_id = $1 AND lower(btrim(name)) = lower(btrim($2)) AND ($3::int IS NULL OR id <> $3)
+      LIMIT 1`,
+    [userId, name, exceptId == null ? null : exceptId]
+  );
+  return r.rows[0] || null;
+}
+
+app.post('/api/partners', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const parsed = readPartnerBody(req.body, false);
+  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error });
+  const f = parsed.fields;
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    await client.query('BEGIN');
+    // 같은 사용자의 동시 등록이 중복 검사를 함께 통과하지 않게 사용자 단위로 줄 세운다
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`account-name:${userId}`]);
+    const dup = await findDuplicatePartner(client, userId, f.name, null);
+    if (dup) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: `이미 같은 이름의 거래처가 있습니다: ${dup.name}`, data: { duplicate_id: dup.id } });
+    }
+    const r = await client.query(
+      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING ${PARTNER_RETURNING}`,
+      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null]
+    );
+    await client.query('COMMIT');
+    res.status(201).json({ ok: true, data: r.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23505') return res.status(409).json({ ok: false, message: '이미 같은 이름의 거래처가 있습니다.' });
+    console.error('Partner create error:', err);
+    res.status(500).json({ ok: false, message: '거래처를 등록하지 못했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.put('/api/partners/:id', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0 || String(id) !== String(req.params.id).trim()) {
+    return res.status(400).json({ ok: false, message: '거래처 번호가 올바르지 않습니다.' });
+  }
+  const parsed = readPartnerBody(req.body, true);
+  if (parsed.error) return res.status(400).json({ ok: false, message: parsed.error });
+  const f = parsed.fields;
+  const keys = Object.keys(f);
+  if (keys.length === 0) return res.status(400).json({ ok: false, message: '수정할 항목이 없습니다.' });
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`account-name:${userId}`]);
+    // 다른 사용자의 거래처는 존재 여부도 드러내지 않고 404
+    const cur = await client.query('SELECT id FROM account WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+    if (cur.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: '거래처를 찾을 수 없습니다.' });
+    }
+    if ('name' in f) {
+      const dup = await findDuplicatePartner(client, userId, f.name, id);
+      if (dup) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ ok: false, message: `이미 같은 이름의 거래처가 있습니다: ${dup.name}`, data: { duplicate_id: dup.id } });
+      }
+    }
+    // 컬럼 이름은 readPartnerBody 의 고정 목록에서만 오므로 그대로 써도 안전하다
+    const sets = keys.map((k, i) => `${k} = $${i + 3}`);
+    const r = await client.query(
+      `UPDATE account SET ${sets.join(', ')}, updated_at = NOW()
+        WHERE id = $1 AND user_id = $2
+        RETURNING ${PARTNER_RETURNING}`,
+      [id, userId, ...keys.map((k) => f[k])]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, data: r.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23505') return res.status(409).json({ ok: false, message: '이미 같은 이름의 거래처가 있습니다.' });
+    console.error('Partner update error:', err);
+    res.status(500).json({ ok: false, message: '거래처를 수정하지 못했습니다.' });
+  } finally {
+    client.release();
+  }
+});
+
 // 재고현황 (중매인 번호 기준)
 app.get('/api/inventory', async (req, res) => {
   const userId = await getUserId(req);
