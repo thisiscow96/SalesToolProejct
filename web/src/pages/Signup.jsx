@@ -165,7 +165,19 @@ export default function Signup() {
     }
   }
 
-  const canSubmit = name.trim() && email.trim() && agentNo.trim() && password.length >= 1
+  // 비밀번호 규칙은 서버와 같다 (T-114, R-04): 8자 이상, 72바이트 이하(bcrypt 상한, 한글 1자 = 3바이트)
+  const pwChars = [...password].length;
+  const pwBytes = new TextEncoder().encode(password).length;
+  const passwordHint = !password
+    ? ''
+    : pwChars < 8
+      ? `8자 이상 입력하세요. (지금 ${pwChars}자)`
+      : pwBytes > 72
+        ? '너무 깁니다. 영문·숫자 72자, 한글 24자 이내로 입력하세요.'
+        : '';
+  const passwordOk = password.length > 0 && !passwordHint;
+
+  const canSubmit = name.trim() && email.trim() && agentNo.trim() && passwordOk
     && emailChecked === true && emailVerified && agentNoChecked === true
     && termsAgreed && !loading;
 
@@ -308,9 +320,15 @@ export default function Signup() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="비밀번호 입력"
+              placeholder="8자 이상"
+              autoComplete="new-password"
+              aria-describedby="signup-password-rule"
+              aria-invalid={passwordHint ? 'true' : 'false'}
               disabled={loading}
             />
+            <span id="signup-password-rule" className={passwordHint ? 'signup-dup' : 'signup-ok'} role={passwordHint ? 'alert' : undefined}>
+              {passwordHint || '8자 이상. 다른 사이트와 다른 비밀번호를 쓰세요.'}
+            </span>
           </label>
 
           <div className="signup-terms">

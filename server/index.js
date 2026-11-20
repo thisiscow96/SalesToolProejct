@@ -77,12 +77,18 @@ const EXPOSE_DEV_CODE = process.env.EXPOSE_DEV_CODE ? process.env.EXPOSE_DEV_COD
 
 app.use(express.json());
 
+// Salesforce 파일 전송 테스트 경로 (T-114, D 리뷰 R-02)
+// 예전에는 로그인 확인 전에 최대 2GB 를 서버 메모리에 받아, 누구나 큰 파일을 보내 무료 인스턴스를 멈출 수 있었다.
+// - 기본은 꺼짐: ENABLE_SF_UPLOAD=true 일 때만 경로를 연다(업무 화면에서 쓰지 않는 테스트 기능)
+// - 켜도 로그인 확인을 파일 받기(multer)보다 먼저 하고, 한도는 SF_UPLOAD_MAX_MB(기본 10MB [가정])
+const ENABLE_SF_UPLOAD = process.env.ENABLE_SF_UPLOAD === 'true';
+const SF_UPLOAD_MAX_MB = (() => {
+  const n = Number(process.env.SF_UPLOAD_MAX_MB);
+  return Number.isFinite(n) && n > 0 && n <= 100 ? n : 10;
+})();
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    // 단건 ContentVersion 업로드용; 실질 한도는 Salesforce·서버 메모리에 따름
-    fileSize: 2 * 1024 * 1024 * 1024, // 2GB
-  },
+  limits: { fileSize: Math.floor(SF_UPLOAD_MAX_MB * 1024 * 1024), files: 1 },
 });
 
 async function uploadContentVersionToSalesforce({
@@ -293,15 +299,56 @@ app.post('/api/auth/check-email', async (req, res) => {
 // 휴대폰번호 중복 확인 (양식 검사: 010 등 10~11자리)
 // 휴대폰 중복 확인(check-phone)은 2026-11-20 제거 — 가입 본인 확인은 이메일 인증만 사용
 
+// ---------- 로그인·번호 확인 시도 제한 (T-114, D 리뷰 R-03 · ADR-05) ----------
+// 수치는 [가정] — 사용자 확인 전 기본값. 환경 변수로 바꿀 수 있다(테스트도 이 값으로 짧게 돌린다).
+//  - 로그인: 같은 중매인 번호로 LOGIN_MAX_FAILS(5)회 연속 실패하면 LOGIN_LOCK_MINUTES(15)분 동안 로그인 시도를 막는다.
+//    없는 번호도 똑같이 세고 막으므로 "막혔다"는 응답으로 계정 존재를 알 수 없다. 영구 잠금이 아니라 지연이다.
+//  - 가입용 번호 중복 확인: 접속 주소당 CHECK_AGENT_MAX(20)회 / CHECK_AGENT_WINDOW_MINUTES(10)분.
+//    접속 주소는 Cloudflare 가 붙이는 CF-Connecting-IP → 없으면 연결 주소. Render 주소로 직접 부르면 헤더를 꾸밀 수 있어
+//    완전한 차단은 아니다(번호 수집 속도를 늦추는 용도). IP 기준 정식 제한은 다음 스프린트(ADR-05 ①).
+const { createFailThrottle, createRateLimiter, envNumber } = require('./lib/login-throttle');
+const LOGIN_MAX_FAILS = Math.floor(envNumber('LOGIN_MAX_FAILS', 5));
+const LOGIN_LOCK_MS = envNumber('LOGIN_LOCK_MINUTES', 15) * 60 * 1000;
+const loginThrottle = createFailThrottle({ maxFails: LOGIN_MAX_FAILS, lockMs: LOGIN_LOCK_MS });
+const checkAgentLimiter = createRateLimiter({
+  max: Math.floor(envNumber('CHECK_AGENT_MAX', 20)),
+  windowMs: envNumber('CHECK_AGENT_WINDOW_MINUTES', 10) * 60 * 1000,
+});
+function clientKey(req) {
+  const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+  return (cf || req.socket?.remoteAddress || 'unknown').slice(0, 64);
+}
+function loginLockMessage(ms) {
+  const min = Math.max(1, Math.ceil(ms / 60000));
+  return `로그인 시도가 너무 많습니다. ${min}분 뒤에 다시 시도해 주세요.`;
+}
+// 계정이 없을 때도 bcrypt 비교를 한 번 하기 위한 더미 해시 (DEF-T112-02: 응답 시간으로 계정 존재를 알 수 없게)
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
+
+// 비밀번호 규칙 (T-114, D 리뷰 R-04): 8자 이상, bcrypt 가 앞 72바이트만 쓰므로 72바이트 이하(한글은 1자 3바이트)
+const PASSWORD_MIN_CHARS = 8;
+const PASSWORD_MAX_BYTES = 72;
+function passwordProblem(password) {
+  if (typeof password !== 'string') return '비밀번호를 입력하세요.';
+  if ([...password].length < PASSWORD_MIN_CHARS) return `비밀번호는 ${PASSWORD_MIN_CHARS}자 이상이어야 합니다.`;
+  if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) return '비밀번호가 너무 깁니다. (영문·숫자 72자, 한글 24자 이내)';
+  return null;
+}
+
 app.post('/api/auth/check-agent-no', async (req, res) => {
   const agent_no = req.body?.agent_no?.trim();
   if (!agent_no) return res.status(400).json({ ok: false, available: false, message: '중매인 번호를 입력하세요.' });
+  const hit = checkAgentLimiter.hit(clientKey(req));
+  if (!hit.ok) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(hit.retryMs / 1000))));
+    return res.status(429).json({ ok: false, available: false, message: '확인 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.' });
+  }
   try {
     const r = await pool.query('SELECT 1 FROM "user" WHERE agent_no = $1', [agent_no]);
     res.json({ ok: true, available: r.rows.length === 0 });
   } catch (err) {
     console.error('check-agent-no error:', err);
-    res.status(500).json({ ok: false, available: false, message: err.message || '확인할 수 없습니다.' });
+    res.status(500).json({ ok: false, available: false, message: '확인할 수 없습니다.' });
   }
 });
 
@@ -385,6 +432,9 @@ app.post('/api/auth/register', async (req, res) => {
   }
   if (!terms_agreed) return res.status(400).json({ ok: false, message: '개인정보약관에 동의해 주세요.' });
   if (!isValidEmail(email)) return res.status(400).json({ ok: false, message: '이메일 형식이 올바르지 않습니다.' });
+  // 비밀번호 길이 (T-114, R-04) — 예전에는 1자도 받았다. 기존 회원은 강제 변경하지 않는다(사용자 결정)
+  const pwProblem = passwordProblem(password);
+  if (pwProblem) return res.status(400).json({ ok: false, message: pwProblem });
   // 휴대폰번호는 선택 항목 (보내면 형식만 확인해 저장, 없으면 NULL — migrations/008)
   if (phone?.trim() && !isValidPhone(phone)) return res.status(400).json({ ok: false, message: '휴대폰번호 형식이 올바르지 않습니다.' });
   const phoneNorm = phone?.trim() ? normalizePhone(phone) : null;
@@ -437,6 +487,18 @@ app.post('/api/auth/login', async (req, res) => {
   if (!agent_no || password === undefined) {
     return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
+  // 시도 제한 키: 중매인 번호(대소문자 구분 없이, 길이 제한) — 계정 존재와 무관하게 센다 (T-114, R-03)
+  const throttleKey = String(agent_no).trim().toLowerCase().slice(0, 64);
+  const lockedMs = loginThrottle.lockedFor(throttleKey);
+  if (lockedMs > 0) {
+    res.setHeader('Retry-After', String(Math.ceil(lockedMs / 1000)));
+    return res.status(429).json({ ok: false, message: loginLockMessage(lockedMs) });
+  }
+  const failLogin = () => {
+    const nowLocked = loginThrottle.fail(throttleKey);
+    if (nowLocked) console.warn('[login] 연속 실패로 잠시 막음 agent_no =', throttleKey.slice(0, 50));
+    return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
+  };
   try {
     // pool.query 는 조회 오류가 나도 연결을 반납한다 — 예전 코드는 오류 시 release 를 건너뛰어 5번이면 풀이 바닥났다 (D-04)
     const r = await pool.query(
@@ -444,16 +506,14 @@ app.post('/api/auth/login', async (req, res) => {
       [String(agent_no).trim()]
     );
     const row = r.rows[0];
-    if (!row) {
-      return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
-    }
+    // 계정이 없어도 더미 해시로 bcrypt 비교를 한 번 한다 — 응답 시간 차이로 계정 존재를 알 수 없게 (DEF-T112-02)
+    const match = await bcrypt.compare(String(password), row ? row.password_hash : DUMMY_PASSWORD_HASH);
+    if (!row || !match) return failLogin();
+    // 계정 상태는 비밀번호가 맞을 때만 알려 준다 — 틀린 비밀번호로 정지 여부를 알 수 없게 (DEF-T112-01, R-14)
     if (row.status !== 'active') {
       return res.status(403).json({ ok: false, message: '비활성화된 계정입니다.' });
     }
-    const match = await bcrypt.compare(String(password), row.password_hash);
-    if (!match) {
-      return res.status(401).json({ ok: false, message: '중매인 번호 또는 비밀번호가 올바르지 않습니다.' });
-    }
+    loginThrottle.reset(throttleKey);
     const token = authToken.signToken(AUTH.secret, { userId: row.id, agentNo: row.agent_no }, AUTH_TTL_SEC);
     res.json({
       ok: true,
@@ -1335,6 +1395,8 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
   const client = await connectOr503(res);
   if (!client) return;
   const created = [];
+  // 입력·소유 오류는 4xx 로 돌려준다 (T-114, DEF-T112-03 — 예전에는 남의 매입 ID·판매처도 500 이었다)
+  const reqError = (status, message) => Object.assign(new Error(message), { httpStatus: status });
   try {
     await client.query('BEGIN');
     const wh = await getUserWarehouseLabel(client, userId);
@@ -1358,25 +1420,27 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       const saleDate = it.sale_date;
       const smemo = it.memo?.trim() || null;
       if (!Number.isFinite(purchaseId) || !Number.isFinite(custId) || !(qtyIn > 0) || !(upIn >= 0) || !saleDate) {
-        throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
+        throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       }
       const n = await roundQtyPrice(client, it.quantity, it.unit_price);
       const qty = Number(n.qty);
-      if (!(qty > 0)) throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
+      if (!(qty > 0)) throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       const pu = await client.query(
         `SELECT id, partner_id, product_id, quantity FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [purchaseId, userId]
       );
       const p = pu.rows[0];
-      if (!p) throw new Error(`매입 ${purchaseId} 를 찾을 수 없습니다.`);
+      // 남의 매입 ID 도 '없음'과 같은 404 — 다른 회원 매입의 존재를 알려 주지 않는다
+      if (!p) throw reqError(404, `매입 ${purchaseId} 를 찾을 수 없습니다.`);
       const al = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM purchase_allocation WHERE purchase_id = $1`, [purchaseId]);
       const allocated = Number(al.rows[0].s);
       const remaining = Number(p.quantity) - allocated;
-      if (qty > remaining + 1e-9) throw new Error(`매입 ${purchaseId} 의 남은 수량(${remaining})보다 많게 판매할 수 없습니다.`);
+      if (qty > remaining + 1e-9) throw reqError(400, `매입 ${purchaseId} 의 남은 수량(${remaining})보다 많게 판매할 수 없습니다.`);
 
       const cust = await client.query(`SELECT id, type, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [custId, userId]);
       const c = cust.rows[0];
-      if (!c || !SALE_PARTNER_TYPES.has(c.type)) throw new Error('판매 가능한 거래처를 선택하세요.');
+      if (!c) throw reqError(404, '판매처를 찾을 수 없습니다.');
+      if (!SALE_PARTNER_TYPES.has(c.type)) throw reqError(400, '판매 가능한 거래처를 선택하세요.');
 
       await upsertInventoryDelta(client, userId, p.product_id, `-${n.qty}`);
 
@@ -1412,9 +1476,10 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
     res.status(201).json({ ok: true, data: created });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('convert-to-sales error:', err);
-    const msg = err.message || '매출 전환에 실패했습니다.';
-    const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
+    const code = err.httpStatus || (err.code === 'NEGATIVE_INVENTORY' ? 400 : 500);
+    if (code >= 500) console.error('convert-to-sales error:', err);
+    // 500 은 DB 오류 문구를 그대로 내보내지 않는다
+    const msg = code >= 500 ? '매출 전환에 실패했습니다.' : err.message || '매출 전환에 실패했습니다.';
     res.status(code).json({ ok: false, message: msg });
   } finally {
     client.release();
@@ -1645,10 +1710,29 @@ app.post('/api/disposals', async (req, res) => {
 });
 
 // 파일 전송 테스트: Salesforce ContentVersion 단건 multipart 업로드
-app.post('/api/file-transfer/salesforce/content-version', uploadMemory.single('file'), async (req, res) => {
-  const userId = await getUserId(req);
-  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
-
+// 순서: ① 기능 꺼짐이면 본문을 읽지 않고 404 ② 로그인 확인 ③ 그 뒤에만 파일을 메모리로 받음(한도 초과는 413)
+app.post(
+  '/api/file-transfer/salesforce/content-version',
+  (req, res, next) => {
+    if (!ENABLE_SF_UPLOAD) return res.status(404).json({ ok: false, message: '파일 전송 기능이 꺼져 있습니다.' });
+    next();
+  },
+  async (req, res, next) => {
+    const userId = await getUserId(req);
+    if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+    req.authUserId = userId;
+    next();
+  },
+  (req, res, next) => {
+    uploadMemory.single('file')(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ ok: false, message: `파일은 ${SF_UPLOAD_MAX_MB}MB 까지 올릴 수 있습니다.` });
+      }
+      return res.status(400).json({ ok: false, message: '업로드 형식이 올바르지 않습니다.' });
+    });
+  },
+  async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ ok: false, message: 'file 필드로 파일을 업로드하세요.' });
@@ -1674,7 +1758,8 @@ app.post('/api/file-transfer/salesforce/content-version', uploadMemory.single('f
     const status = err.statusCode || 500;
     res.status(status).json({ ok: false, message: err.message || '파일 전송 실패', detail: err.detail || null });
   }
-});
+  }
+);
 
 app.get('/api/disposals', async (req, res) => {
   const userId = await getUserId(req);
