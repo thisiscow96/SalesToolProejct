@@ -23,6 +23,7 @@ import { toYmd as toYmdKst, kstParts, joinDateAndKstTime, kstNowLocalInput } fro
 import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
+import CardMoreToggle from '../components/CardMoreToggle';
 import {
   RowActionMenu,
   CancelTradeModal,
@@ -33,6 +34,7 @@ import {
   saleMenuState,
 } from './TradeCorrection';
 import './Main.css';
+import '../styles/mobile.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 오늘 날짜 yyyy-mm-dd (로컬) */
@@ -416,7 +418,7 @@ function TabReorder() {
         <span className="main-modal-hint">경과일 = 오늘 − 남은 재고 중 가장 오래된 매입일 (먼저 들어온 물건부터 나간다고 보고 계산)</span>
       </div>
       <div className="main-table-wrap">
-        <table className="main-table">
+        <table className="main-table main-table--cards">
           <thead>
             <tr>
               <th className="main-col-product">상품명</th>
@@ -437,13 +439,13 @@ function TabReorder() {
                   key={row.id}
                   className={level === 'danger' ? 'main-row-aging-danger' : level === 'warn' ? 'main-row-aging-warn' : undefined}
                 >
-                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                  <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
-                  <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
-                  <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                  <td>{row.unit}</td>
-                  <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
-                  <td className="main-col-aging">
+                  <td data-card="title" data-label="상품명" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
+                  <td data-card="extra" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td data-card="key" data-label="단위">{row.unit}</td>
+                  <td data-card="key" data-label="최근 매입일" className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                  <td data-card="key" data-label="경과일" className="main-col-aging">
                     {level ? (
                       <span
                         className={`main-aging-badge main-aging-badge--${level}`}
@@ -456,6 +458,7 @@ function TabReorder() {
                       '—'
                     )}
                   </td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               );
             })}
@@ -819,7 +822,7 @@ function TabPurchases({ onNavigate } = {}) {
             </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table main-table--purchase-modal">
+            <table className="main-table main-table--purchase-modal main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-check">
@@ -837,10 +840,10 @@ function TabPurchases({ onNavigate } = {}) {
               <tbody>
                 {purchaseRows.map((row) => (
                   <tr key={row.key}>
-                    <td className="main-col-check">
+                    <td data-card="check" className="main-col-check">
                       <input type="checkbox" checked={!!row.selected} onChange={() => togglePurchaseRowSelect(row.key)} />
                     </td>
-                    <td className="main-col-source main-col-source--purchase-input">
+                    <td data-card="wide" data-label="출처" className="main-col-source main-col-source--purchase-input">
                       <input
                         type="text"
                         className="main-input-source-name"
@@ -850,7 +853,7 @@ function TabPurchases({ onNavigate } = {}) {
                         onChange={(e) => updatePurchaseRow(row.key, { source_name: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-partner">
+                    <td data-card="wide" data-label="매입 거래처" className="main-col-partner">
                       <select
                         value={row.partner_id}
                         title={
@@ -895,7 +898,7 @@ function TabPurchases({ onNavigate } = {}) {
                         )}
                       </select>
                     </td>
-                    <td className="main-col-product">
+                    <td data-card="wide" data-label="상품" className="main-col-product">
                       <select
                         value={row.product_id}
                         title={row.product_id ? products.find((x) => String(x.id) === String(row.product_id))?.name || '' : ''}
@@ -912,17 +915,18 @@ function TabPurchases({ onNavigate } = {}) {
                         ))}
                       </select>
                     </td>
-                    <td className="main-col-qty main-col-qty--purchase-input">
+                    <td data-card="field" data-label="수량" className="main-col-qty main-col-qty--purchase-input">
                       <input
                         className="main-input-qty main-input-qty--purchase"
                         type="number"
+                        inputMode="decimal"
                         step="0.001"
                         min="0"
                         value={row.quantity}
                         onChange={(e) => updatePurchaseRow(row.key, { quantity: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-unit-price main-col-unit-price--purchase-input">
+                    <td data-card="field" data-label="단가" className="main-col-unit-price main-col-unit-price--purchase-input">
                       <UnitPriceInput
                         className={'main-input-unit-price--purchase' + (row.unit_price_auto ? ' main-input-unit-price--suggested' : '')}
                         value={row.unit_price}
@@ -940,7 +944,7 @@ function TabPurchases({ onNavigate } = {}) {
                         </div>
                       )}
                     </td>
-                    <td className="main-col-date main-col-date--purchase-input">
+                    <td data-card="wide" data-label="매입일" className="main-col-date main-col-date--purchase-input">
                       <input
                         className="main-input-date main-input-date--purchase"
                         type="date"
@@ -948,7 +952,7 @@ function TabPurchases({ onNavigate } = {}) {
                         onChange={(e) => updatePurchaseRow(row.key, { purchase_date: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-row-actions">
+                    <td data-card="action" className="main-col-row-actions">
                       <button
                         type="button"
                         className="main-modal-row-del"
@@ -1006,7 +1010,7 @@ function TabPurchases({ onNavigate } = {}) {
             </label>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table main-table--convert-modal">
+            <table className="main-table main-table--convert-modal main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-purchase-id">매입 ID</th>
@@ -1019,13 +1023,14 @@ function TabPurchases({ onNavigate } = {}) {
               <tbody>
                 {convertRows.map((r) => (
                   <tr key={r.purchase_id}>
-                    <td className="num main-col-purchase-id" title={`매입 ID ${r.purchase_id}`}>{r.purchase_id}</td>
-                    <td className="main-td-scroll main-col-product main-col-product--convert"><CellText>{r.product_name}</CellText></td>
-                    <td className="num main-col-qty main-col-qty--convert">{formatKoNumber(r.remaining_qty)}</td>
-                    <td className="main-col-qty main-col-qty--convert">
+                    <td data-card="sub" data-label="매입 ID" className="num main-col-purchase-id" title={`매입 ID ${r.purchase_id}`}>{r.purchase_id}</td>
+                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--convert"><CellText>{r.product_name}</CellText></td>
+                    <td data-card="key" data-label="남은 수량" className="num main-col-qty main-col-qty--convert">{formatKoNumber(r.remaining_qty)}</td>
+                    <td data-card="field" data-label="전환 수량" className="main-col-qty main-col-qty--convert">
                       <input
                         className="main-input-qty main-input-qty--convert"
                         type="number"
+                        inputMode="decimal"
                         step="0.001"
                         min="0"
                         max={r.remaining_qty}
@@ -1035,7 +1040,7 @@ function TabPurchases({ onNavigate } = {}) {
                         }
                       />
                     </td>
-                    <td className="main-col-unit-price main-col-unit-price--convert">
+                    <td data-card="field" data-label="판매 단가" className="main-col-unit-price main-col-unit-price--convert">
                       <UnitPriceInput
                         className="main-input-unit-price--convert"
                         value={r.unit_price}
@@ -1053,7 +1058,7 @@ function TabPurchases({ onNavigate } = {}) {
       </Modal>
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">매입 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-check">선택</th>
@@ -1072,7 +1077,7 @@ function TabPurchases({ onNavigate } = {}) {
             <tbody>
               {list.map((row) => (
                 <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
-                  <td className="main-col-check">
+                  <td data-card="check" className="main-col-check">
                     <input
                       type="checkbox"
                       checked={!!selected[row.id]}
@@ -1081,21 +1086,21 @@ function TabPurchases({ onNavigate } = {}) {
                       aria-label={`매입 #${row.id} 선택`}
                     />
                   </td>
-                  <td className="main-col-datetime">
+                  <td data-card="sub" data-label="매입일" className="main-col-datetime">
                     {formatPurchaseTableDateTime(row)}
                     {row.status === 'cancelled' && (
                       <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소된 매입'}>취소</span>
                     )}
                   </td>
-                  <td className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
-                  <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                  <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
-                  <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
-                  <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
-                  <td className="main-col-manage">
+                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
+                  <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td data-card="extra" data-label="매출 반영" className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
+                  <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
+                  <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
+                  <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                  <td data-card="action" className="main-col-manage">
                     <RowActionMenu
                       label={`매입 #${row.id}`}
                       state={purchaseMenuState(row)}
@@ -1103,6 +1108,7 @@ function TabPurchases({ onNavigate } = {}) {
                       onCancel={() => setCorrection({ type: 'cancel', row })}
                     />
                   </td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               ))}
             </tbody>
@@ -1490,7 +1496,7 @@ function TabSales({ navFilter } = {}) {
           )}
           {!loadingUnpaid && unpaidForPartner.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap">
-              <table className="main-table">
+              <table className="main-table main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -1526,22 +1532,22 @@ function TabSales({ navFilter } = {}) {
                     const due = computeUnpaidAmount(s);
                     return (
                       <tr key={s.id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!collectSaleSelected[s.id]}
                             onChange={() => setCollectSaleSelected((m) => ({ ...m, [s.id]: !m[s.id] }))}
                           />
                         </td>
-                        <td className="main-col-datetime main-collect-datetime-cell">{formatSaleDateTime(s)}</td>
-                        <td className="main-td-scroll main-col-partner"><CellText>{s.partner_name}</CellText></td>
-                        <td className="main-td-scroll main-col-partner"><CellText>{s.partner_location || '—'}</CellText></td>
-                        <td className="main-td-scroll main-col-product"><CellText>{s.product_name}</CellText></td>
-                        <td className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(s.total_amount)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(due)}</td>
-                        <td className="main-col-amount">
+                        <td data-card="sub" data-label="매출일" className="main-col-datetime main-collect-datetime-cell">{formatSaleDateTime(s)}</td>
+                        <td data-card="extra" data-label="판매처" className="main-td-scroll main-col-partner"><CellText>{s.partner_name}</CellText></td>
+                        <td data-card="extra" data-label="납품/위치" className="main-td-scroll main-col-partner"><CellText>{s.partner_location || '—'}</CellText></td>
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{s.product_name}</CellText></td>
+                        <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
+                        <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(s.total_amount)}</td>
+                        <td data-card="extra" data-label="기수금" className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
+                        <td data-card="key" data-label="미수" className="num main-col-amount">{formatKoNumber(due)}</td>
+                        <td data-card="wide" data-label="현재 수금금액" className="main-col-amount">
                           <CollectAmountInput
                             disabled={!collectSaleSelected[s.id]}
                             placeholder={`최대 ${formatKoNumber(due)}`}
@@ -1550,6 +1556,7 @@ function TabSales({ navFilter } = {}) {
                             onChange={(v) => setCollectAlloc((m) => ({ ...m, [s.id]: v }))}
                           />
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -1632,7 +1639,7 @@ function TabSales({ navFilter } = {}) {
           )}
           {!loadingRefundable && refundableFiltered.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap main-modal-refund-wrap">
-              <table className="main-table main-table--refund-modal">
+              <table className="main-table main-table--refund-modal main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -1703,7 +1710,7 @@ function TabSales({ navFilter } = {}) {
                     };
                     return (
                       <tr key={s.id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!refundSaleSelected[s.id]}
@@ -1721,20 +1728,20 @@ function TabSales({ navFilter } = {}) {
                             }}
                           />
                         </td>
-                        <td className="main-col-partner main-td-partner">
+                        <td data-card="sub" data-label="거래처" className="main-col-partner main-td-partner">
                           <CellText>{s.partner_name}</CellText>
                         </td>
-                        <td className="main-col-datetime main-col-datetime-full">
+                        <td data-card="sub" data-label="매출일" className="main-col-datetime main-col-datetime-full">
                           <span className="main-sale-datetime-line">{formatSaleDateTime(s)}</span>
                         </td>
-                        <td className="main-td-scroll main-col-product">
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
                           <CellText>{s.product_name}</CellText>
                         </td>
-                        <td className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(collected)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(s.refunded_qty || 0)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(maxQ)}</td>
-                        <td className="main-col-qty">
+                        <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
+                        <td data-card="extra" data-label="수금 수량" className="num main-col-qty">{formatKoNumber(collected)}</td>
+                        <td data-card="extra" data-label="환불된 수량" className="num main-col-qty">{formatKoNumber(s.refunded_qty || 0)}</td>
+                        <td data-card="key" data-label="환불 가능 수량" className="num main-col-qty">{formatKoNumber(maxQ)}</td>
+                        <td data-card="field" data-label="환불 요청수량" className="main-col-qty">
                           <input
                             className="main-input-qty main-input-qty-refund"
                             type="text"
@@ -1750,12 +1757,12 @@ function TabSales({ navFilter } = {}) {
                             }
                           />
                         </td>
-                        <td className="num main-col-amount">{formatKoNumber(computeUnpaidAmount(s))}</td>
-                        <td className="num main-col-amount main-col-amount-readonly">
+                        <td data-card="key" data-label="미수" className="num main-col-amount">{formatKoNumber(computeUnpaidAmount(s))}</td>
+                        <td data-card="wide" data-label="반품 금액" className="num main-col-amount main-col-amount-readonly">
                           {refundSaleSelected[s.id] && Number.isFinite(reqQty) && reqQty > 0 ? (
                             <>
                               {formatKoNumber(preview.returnAmount)}
-                              <small className="main-refund-split" style={{ display: 'block', fontSize: '0.75em', opacity: 0.75, whiteSpace: 'nowrap' }}>
+                              <small className="main-refund-split">
                                 미수 차감 {formatKoNumber(preview.creditAmount)} · 환불 {formatKoNumber(preview.refundAmount)}
                               </small>
                             </>
@@ -1763,7 +1770,7 @@ function TabSales({ navFilter } = {}) {
                             '—'
                           )}
                         </td>
-                        <td className="main-td-refund-reason">
+                        <td data-card="wide" data-label="사유" className="main-td-refund-reason">
                           <div className="main-refund-reason-cell">
                             <select
                               className="main-refund-reason-select"
@@ -1810,6 +1817,7 @@ function TabSales({ navFilter } = {}) {
                             )}
                           </div>
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -1830,7 +1838,7 @@ function TabSales({ navFilter } = {}) {
         </p>
       ) : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">매출일</th>
@@ -1850,15 +1858,15 @@ function TabSales({ navFilter } = {}) {
                 const rf = Number(row.refunded_qty || 0);
                 return (
                   <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
-                    <td className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
-                    <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                    <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                    <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                    <td className="num main-col-qty">{formatKoNumber(rf)}</td>
-                    <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
-                    <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
-                    <td><span className={'main-status main-status--pay-' + (row.payment_status || 'unpaid')}>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</span></td>
-                    <td>
+                    <td data-card="sub" data-label="매출일" className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
+                    <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                    <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                    <td data-card="extra" data-label="환불된 수량" className="num main-col-qty">{formatKoNumber(rf)}</td>
+                    <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
+                    <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                    <td data-card="key" data-label="수금"><span className={'main-status main-status--pay-' + (row.payment_status || 'unpaid')}>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</span></td>
+                    <td data-card="key" data-label="상태">
                       <span
                         className={'main-status main-status--sale-' + (row.status || 'normal')}
                         title={row.status === 'cancelled' && row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : undefined}
@@ -1866,7 +1874,7 @@ function TabSales({ navFilter } = {}) {
                         {row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}
                       </span>
                     </td>
-                    <td className="main-col-manage">
+                    <td data-card="action" className="main-col-manage">
                       <RowActionMenu
                         label={`매출 #${row.id}`}
                         state={saleMenuState(row)}
@@ -1874,6 +1882,7 @@ function TabSales({ navFilter } = {}) {
                         onCancel={() => setCorrection({ type: 'cancel', row })}
                       />
                     </td>
+                    <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                   </tr>
                 );
               })}
@@ -1935,7 +1944,7 @@ function TabPayments() {
       </div>
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">수금일</th>
@@ -1948,11 +1957,11 @@ function TabPayments() {
             <tbody>
               {list.map((row) => (
                 <tr key={row.id}>
-                  <td className="main-col-datetime">{formatPaymentDateTime(row)}</td>
-                  <td><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
-                  <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td className="num main-col-amount">{formatKoNumber(row.amount)}</td>
-                  <td className="main-col-memo">{row.memo || '-'}</td>
+                  <td data-card="sub" data-label="수금일" className="main-col-datetime">{formatPaymentDateTime(row)}</td>
+                  <td data-card="key" data-label="구분"><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
+                  <td data-card="title" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                  <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(row.amount)}</td>
+                  <td data-card="key" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
                 </tr>
               ))}
             </tbody>
@@ -2105,7 +2114,7 @@ function TabProductMaster() {
             </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table">
+            <table className="main-table main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-product">상품명 *</th>
@@ -2120,13 +2129,13 @@ function TabProductMaster() {
               <tbody>
                 {productRows.map((row) => (
                   <tr key={row.key}>
-                    <td className="main-col-product"><input value={row.name} onChange={(e) => updateProductRow(row.key, { name: e.target.value })} placeholder="필수" /></td>
-                    <td><input value={row.unit} onChange={(e) => updateProductRow(row.key, { unit: e.target.value })} /></td>
-                    <td><input value={row.category_large} onChange={(e) => updateProductRow(row.key, { category_large: e.target.value })} /></td>
-                    <td><input value={row.category_mid} onChange={(e) => updateProductRow(row.key, { category_mid: e.target.value })} /></td>
-                    <td><input value={row.category_small} onChange={(e) => updateProductRow(row.key, { category_small: e.target.value })} /></td>
-                    <td><input value={row.memo} onChange={(e) => updateProductRow(row.key, { memo: e.target.value })} /></td>
-                    <td className="main-col-row-actions">
+                    <td data-card="wide" data-label="상품명" className="main-col-product"><input value={row.name} onChange={(e) => updateProductRow(row.key, { name: e.target.value })} placeholder="필수" /></td>
+                    <td data-card="field" data-label="단위"><input value={row.unit} onChange={(e) => updateProductRow(row.key, { unit: e.target.value })} /></td>
+                    <td data-card="field" data-label="대분류"><input value={row.category_large} onChange={(e) => updateProductRow(row.key, { category_large: e.target.value })} /></td>
+                    <td data-card="field" data-label="중분류"><input value={row.category_mid} onChange={(e) => updateProductRow(row.key, { category_mid: e.target.value })} /></td>
+                    <td data-card="field" data-label="소분류"><input value={row.category_small} onChange={(e) => updateProductRow(row.key, { category_small: e.target.value })} /></td>
+                    <td data-card="wide" data-label="비고"><input value={row.memo} onChange={(e) => updateProductRow(row.key, { memo: e.target.value })} /></td>
+                    <td data-card="action" className="main-col-row-actions">
                       <button
                         type="button"
                         className="main-modal-row-del"
@@ -2147,7 +2156,7 @@ function TabProductMaster() {
 
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">등록된 상품이 없습니다. 검색 조건을 바꾸거나 상품 등록으로 추가하세요.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th>ID</th>
@@ -2164,15 +2173,16 @@ function TabProductMaster() {
             <tbody>
               {list.map((row) => (
                 <tr key={row.id}>
-                  <td className="num">{row.id}</td>
-                  <td>{row.product_key || '-'}</td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.name}</CellText></td>
-                  <td>{row.unit}</td>
-                  <td>{row.category_large || '-'}</td>
-                  <td>{row.category_mid || '-'}</td>
-                  <td>{row.category_small || '-'}</td>
-                  <td className="main-col-memo">{row.memo || '-'}</td>
-                  <td className="main-col-date">{formatProductCreatedYmd(row)}</td>
+                  <td data-card="extra" data-label="ID" className="num">{row.id}</td>
+                  <td data-card="sub" data-label="상품 키">{row.product_key || '-'}</td>
+                  <td data-card="title" data-label="상품명" className="main-td-scroll main-col-product"><CellText>{row.name}</CellText></td>
+                  <td data-card="key" data-label="단위">{row.unit}</td>
+                  <td data-card="key" data-label="대분류">{row.category_large || '-'}</td>
+                  <td data-card="extra" data-label="중분류">{row.category_mid || '-'}</td>
+                  <td data-card="extra" data-label="소분류">{row.category_small || '-'}</td>
+                  <td data-card="extra" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
+                  <td data-card="key" data-label="등록일" className="main-col-date">{formatProductCreatedYmd(row)}</td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               ))}
             </tbody>
@@ -2442,7 +2452,7 @@ function TabDisposals() {
           )}
           {!loadingInventory && invFiltered.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap main-modal-disposal-wrap">
-              <table className="main-table main-table--disposal-modal">
+              <table className="main-table main-table--disposal-modal main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -2469,32 +2479,33 @@ function TabDisposals() {
                     const d = disposalDraft[pid] || newDisposalInventoryDraft();
                     return (
                       <tr key={row.product_id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!disposalSelected[pid]}
                             onChange={() => toggleDisposalRowSelect(row.product_id)}
                           />
                         </td>
-                        <td className="main-td-scroll main-col-product main-col-product--disposal">
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--disposal">
                           <CellText>{row.product_name}</CellText>
                         </td>
-                        <td className="num main-col-qty">
+                        <td data-card="key" data-label="재고 수량" className="num main-col-qty">
                           <span className="main-qty-unit-inline">
                             {formatKoNumber(row.quantity)}
                           </span>
                         </td>
-                        <td className="main-td-scroll main-col-source">
+                        <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source">
                           <CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText>
                         </td>
-                        <td className="main-td-scroll main-col-partner">
+                        <td data-card="extra" data-label="매입 거래처" className="main-td-scroll main-col-partner">
                           <CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText>
                         </td>
-                        <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
-                        <td className="main-col-qty main-col-disposal-qty-input">
+                        <td data-card="key" data-label="매입일" className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                        <td data-card="field" data-label="폐기 수량" className="main-col-qty main-col-disposal-qty-input">
                           <input
                             className="main-input-qty main-input-qty--disposal"
                             type="number"
+                            inputMode="decimal"
                             step="0.001"
                             min="0"
                             disabled={!disposalSelected[pid]}
@@ -2507,7 +2518,7 @@ function TabDisposals() {
                             }
                           />
                         </td>
-                        <td className="main-col-date main-col-disposal-date-col">
+                        <td data-card="field" data-label="폐기일" className="main-col-date main-col-disposal-date-col">
                           <input
                             className="main-input-date main-input-date--disposal"
                             type="date"
@@ -2521,7 +2532,7 @@ function TabDisposals() {
                             }
                           />
                         </td>
-                        <td className="main-td-disposal-reason">
+                        <td data-card="wide" data-label="사유" className="main-td-disposal-reason">
                           <div className="main-disposal-reason-cell">
                             <select
                               value={d.reasonCode || DISPOSAL_REASON_SPOIL}
@@ -2556,6 +2567,7 @@ function TabDisposals() {
                             )}
                           </div>
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -2567,7 +2579,7 @@ function TabDisposals() {
       </Modal>
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">폐기 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">폐기일</th>
@@ -2579,14 +2591,14 @@ function TabDisposals() {
             <tbody>
               {list.map((row) => (
                 <tr key={row.id}>
-                  <td className="main-col-datetime">{formatDisposalDateTime(row)}</td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                  <td className="num main-col-qty main-col-qty--singleline">
+                  <td data-card="sub" data-label="폐기일" className="main-col-datetime">{formatDisposalDateTime(row)}</td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty main-col-qty--singleline">
                     <span className="main-qty-unit-inline">
                       {formatKoNumber(row.quantity)}
                     </span>
                   </td>
-                  <td className="main-td-scroll"><CellText>{row.reason || '—'}</CellText></td>
+                  <td data-card="key" data-label="사유" className="main-td-scroll"><CellText>{row.reason || '—'}</CellText></td>
                 </tr>
               ))}
             </tbody>
@@ -2737,7 +2749,7 @@ function TabDailyTrade() {
           <div className="main-daily-section">
             <h2 className="main-daily-section-title">일자 요약</h2>
             <div className="main-table-wrap">
-              <table className="main-table main-table--daily-trade">
+              <table className="main-table main-table--daily-trade main-table--cards">
                 <thead>
                   <tr>
                     <th className="main-col-date main-col-date--daily-narrow">일자</th>
@@ -2761,12 +2773,12 @@ function TabDailyTrade() {
                     const missing = Number(r.cost_missing_count) || 0;
                     return (
                       <tr key={toYmd(r.date) || 'row'}>
-                        <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(pa)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(sa)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
-                        <td className="num main-col-amount">
+                        <td data-card="title" data-label="일자" className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
+                        <td data-card="key" data-label="매입액" className="num main-col-amount">{formatKoNumber(pa)}</td>
+                        <td data-card="extra" data-label="매입 건수" className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
+                        <td data-card="key" data-label="매출액" className="num main-col-amount">{formatKoNumber(sa)}</td>
+                        <td data-card="extra" data-label="매출 건수" className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
+                        <td data-card="extra" data-label="매출 원가" className="num main-col-amount">
                           {formatKoNumber(cost)}
                           {missing > 0 && (
                             <span className="main-cost-missing" title="매입 배분이 없어 원가를 알 수 없는 매출 — 이익·이익률 계산에서 뺐습니다">
@@ -2774,9 +2786,10 @@ function TabDailyTrade() {
                             </span>
                           )}
                         </td>
-                        <td className={`num main-col-amount main-col-profit ${profitClass(profit)}`}>{formatKoNumber(profit)}</td>
-                        <td className={`num main-col-qty main-col-profit ${profitClass(profit)}`}>{formatPct(marginPct(profit, r.costed_sales_amount))}</td>
-                        <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                        <td data-card="key" data-label="이익" className={`num main-col-amount main-col-profit ${profitClass(profit)}`}>{formatKoNumber(profit)}</td>
+                        <td data-card="key" data-label="이익률" className={`num main-col-qty main-col-profit ${profitClass(profit)}`}>{formatPct(marginPct(profit, r.costed_sales_amount))}</td>
+                        <td data-card="extra" data-label="차이(매출−매입)" className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -2784,15 +2797,15 @@ function TabDailyTrade() {
                 {rows.length > 0 && (
                   <tfoot>
                     <tr className="main-table-foot-daily">
-                      <th className="main-col-date main-col-date--daily-narrow">합계</th>
-                      <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
-                      <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
-                      <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
-                      <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
-                      <td className="num main-col-amount">{formatKoNumber(totals.cost)}</td>
-                      <td className={`num main-col-amount main-col-profit ${profitClass(totals.profit)}`}>{formatKoNumber(totals.profit)}</td>
-                      <td className={`num main-col-qty main-col-profit ${profitClass(totals.profit)}`}>{formatPct(marginPct(totals.profit, totals.costedSales))}</td>
-                      <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
+                      <th data-card="foot-title" className="main-col-date main-col-date--daily-narrow">합계</th>
+                      <td data-card="foot" data-label="매입액" className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
+                      <td data-card="foot" data-label="매입 건수" className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
+                      <td data-card="foot" data-label="매출액" className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
+                      <td data-card="foot" data-label="매출 건수" className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
+                      <td data-card="foot" data-label="매출 원가" className="num main-col-amount">{formatKoNumber(totals.cost)}</td>
+                      <td data-card="foot" data-label="이익" className={`num main-col-amount main-col-profit ${profitClass(totals.profit)}`}>{formatKoNumber(totals.profit)}</td>
+                      <td data-card="foot" data-label="이익률" className={`num main-col-qty main-col-profit ${profitClass(totals.profit)}`}>{formatPct(marginPct(totals.profit, totals.costedSales))}</td>
+                      <td data-card="foot" data-label="차이(매출−매입)" className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -2806,7 +2819,7 @@ function TabDailyTrade() {
               같은 날짜·필터 기준으로, 상품과 거래처가 겹치는 매입·매출은 각각 행으로 구분됩니다.
             </p>
             <div className="main-table-wrap main-table-wrap--daily-breakdown">
-              <table className="main-table main-table--daily-breakdown">
+              <table className="main-table main-table--daily-breakdown main-table--cards">
                 <thead>
                   <tr>
                     <th className="main-col-product main-col-product--daily">상품</th>
@@ -2839,26 +2852,26 @@ function TabDailyTrade() {
                       const linePct = isPur || lineMissing > 0 ? null : marginPct(lineProfit, r.amount_sum);
                       return (
                         <tr key={`${r.product_id}-${r.partner_id}-${r.line_kind}`}>
-                          <td className="main-td-scroll main-col-product main-col-product--daily">
+                          <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--daily">
                             <CellText>{r.product_name || '—'}</CellText>
                           </td>
-                          <td className="main-td-scroll main-col-partner main-col-partner--daily">
+                          <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner main-col-partner--daily">
                             <CellText>{r.partner_name || '—'}</CellText>
                           </td>
-                          <td className="main-col-kind">
+                          <td data-card="sub" data-label="구분" className="main-col-kind">
                             <span className={isPur ? 'main-kind-badge main-kind-badge--purchase' : 'main-kind-badge main-kind-badge--sale'}>
                               {isPur ? '매입' : '매출'}
                             </span>
                           </td>
-                          <td className="num main-col-qty main-col-qty--daily">{formatKoNumber(r.line_count)}</td>
-                          <td className="num main-col-qty main-col-qty--daily">
+                          <td data-card="extra" data-label="건수" className="num main-col-qty main-col-qty--daily">{formatKoNumber(r.line_count)}</td>
+                          <td data-card="key" data-label="수량" className="num main-col-qty main-col-qty--daily">
                             <span className="main-qty-unit-inline">{formatKoNumber(r.qty_sum)}</span>
                           </td>
-                          <td className="num main-col-amount">{formatKoNumber(r.amount_sum)}</td>
-                          <td className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
+                          <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(r.amount_sum)}</td>
+                          <td data-card="key" data-label="미수" className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
                             {isPur ? '—' : formatKoNumber(rec)}
                           </td>
-                          <td className="num main-col-amount">
+                          <td data-card="extra" data-label="원가" className="num main-col-amount">
                             {isPur ? '—' : allMissing ? (
                               <span className="main-cost-missing">원가 미확인</span>
                             ) : (
@@ -2868,7 +2881,7 @@ function TabDailyTrade() {
                               </>
                             )}
                           </td>
-                          <td className={`num main-col-amount main-col-profit ${isPur ? '' : profitClass(lineProfit)}`}>
+                          <td data-card="key" data-label="이익(률)" className={`num main-col-amount main-col-profit ${isPur ? '' : profitClass(lineProfit)}`}>
                             {isPur || allMissing ? '—' : (
                               <>
                                 {formatKoNumber(lineProfit)}
@@ -2876,6 +2889,7 @@ function TabDailyTrade() {
                               </>
                             )}
                           </td>
+                          <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                         </tr>
                       );
                     })
@@ -2884,21 +2898,21 @@ function TabDailyTrade() {
                 {breakdown.length > 0 && (
                   <tfoot>
                     <tr className="main-table-foot-daily main-table-foot-breakdown">
-                      <th colSpan={3}>합계 (매입 / 매출)</th>
-                      <td className="num main-col-qty main-col-qty--daily">
+                      <th data-card="foot-title" colSpan={3}>합계 (매입 / 매출)</th>
+                      <td data-card="foot" data-label="건수" className="num main-col-qty main-col-qty--daily">
                         {formatKoNumber(breakdownTotals.purchaseLines)} / {formatKoNumber(breakdownTotals.salesLines)}
                       </td>
-                      <td className="num main-col-qty main-col-qty--daily">
+                      <td data-card="foot" data-label="수량" className="num main-col-qty main-col-qty--daily">
                         {formatKoNumber(breakdownTotals.purchaseQty)} / {formatKoNumber(breakdownTotals.salesQty)}
                       </td>
-                      <td className="num main-col-amount">
+                      <td data-card="foot" data-label="금액" className="num main-col-amount">
                         {formatKoNumber(breakdownTotals.purchaseAmt)} / {formatKoNumber(breakdownTotals.salesAmt)}
                       </td>
-                      <td className="num main-col-amount main-col-receivable main-receivable-positive">
+                      <td data-card="foot" data-label="미수" className="num main-col-amount main-col-receivable main-receivable-positive">
                         {formatKoNumber(breakdownTotals.receivable)}
                       </td>
-                      <td className="num main-col-amount">{formatKoNumber(breakdownTotals.cost)}</td>
-                      <td className={`num main-col-amount main-col-profit ${profitClass(breakdownTotals.profit)}`}>
+                      <td data-card="foot" data-label="원가" className="num main-col-amount">{formatKoNumber(breakdownTotals.cost)}</td>
+                      <td data-card="foot" data-label="이익(률)" className={`num main-col-amount main-col-profit ${profitClass(breakdownTotals.profit)}`}>
                         {formatKoNumber(breakdownTotals.profit)}
                       </td>
                     </tr>
