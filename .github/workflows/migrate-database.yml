@@ -1,8 +1,8 @@
 # 운영 DB 마이그레이션만 실행 (Shell 불필요)
-# Repo → Actions → "Migrate database (Render)" → Run workflow
-# Secrets: DATABASE_URL (Render Postgres External URL 권장)
+# Repo → Actions → "Migrate database" → Run workflow
+# Secrets: DATABASE_URL (Neon 등 새 DB URL, ?sslmode=require 포함)
 
-name: Migrate database (Render)
+name: Migrate database
 
 on:
   workflow_dispatch:

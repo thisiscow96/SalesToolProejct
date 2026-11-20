@@ -9,28 +9,10 @@ const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { Client } = require('pg');
 
+// 접속 설정은 서버와 같은 lib/db-config.js (Neon·Supabase SSL 포함)
+const { getPgConfig } = require('../lib/db-config');
 function getConfig() {
-  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
-  if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
-    const u = new URL(raw);
-    const database = (u.pathname || '/').slice(1).replace(/\?.*$/, '');
-    const needSsl = process.env.NODE_ENV === 'production' || u.hostname.includes('render.com') || (u.searchParams && u.searchParams.get('sslmode'));
-    return {
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 5432,
-      user: u.username || undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-      database: database || undefined,
-      ssl: needSsl ? { rejectUnauthorized: false } : undefined,
-    };
-  }
-  return {
-    host: process.env.PG_HOST || 'localhost',
-    port: Number(process.env.PG_PORT) || 5432,
-    user: process.env.PG_USER || 'postgres',
-    password: process.env.PG_PASSWORD != null ? String(process.env.PG_PASSWORD) : undefined,
-    database: process.env.PG_DATABASE || 'sales_tool',
-  };
+  return getPgConfig();
 }
 
 async function run() {

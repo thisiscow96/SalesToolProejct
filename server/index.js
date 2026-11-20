@@ -2,9 +2,9 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const bcrypt = require('bcrypt');
-const nodemailer = require('nodemailer');
 const multer = require('multer');
-const { Resend } = require('resend');
+const { getPgConfig } = require('./lib/db-config');
+const { sendMail, configuredProviders } = require('./lib/mailer');
 const { Pool } = require('pg');
 
 // ---------- 입력값 검증 ----------
@@ -25,10 +25,11 @@ function normalizePhone(phone) {
 const app = express();
 const port = process.env.PORT || 3000;
 
-// 로컬 개발: 다른 포트(프론트)에서 API 호출 허용
+// CORS: 로컬 개발 + ALLOWED_ORIGINS(쉼표 구분, 예: https://salestool.pages.dev) — 프론트가 API를 직접 부를 때
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:'))) {
+  if (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:') || ALLOWED_ORIGINS.includes(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -37,101 +38,18 @@ app.use((req, res, next) => {
   next();
 });
 
-// PostgreSQL 연결 설정 (WHATWG URL로 파싱해 deprecation 경고 방지)
-// DATABASE_URL은 반드시 postgres(ql):// 로 시작해야 함 (앱 URL 넣으면 DB 포트에 HTTP 요청이 가서 invalid startup packet 에러 발생)
-function getPoolConfig() {
-  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
-  if (raw && (raw.startsWith('postgres://') || raw.startsWith('postgresql://'))) {
-    const u = new URL(raw);
-    return {
-      host: u.hostname,
-      port: u.port ? Number(u.port) : 5432,
-      user: u.username || undefined,
-      password: u.password ? decodeURIComponent(u.password) : undefined,
-      database: u.pathname ? u.pathname.slice(1) : undefined,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
-    };
-  }
-  if (raw) {
-    console.warn('[DB] DATABASE_URL이 postgres:// 또는 postgresql:// 로 시작하지 않습니다. Postgres 연결 정보만 넣어 주세요.');
-  }
-  return {
-    host: process.env.PG_HOST || 'localhost',
-    port: Number(process.env.PG_PORT) || 5432,
-    user: process.env.PG_USER || 'postgres',
-    password: process.env.PG_PASSWORD != null ? String(process.env.PG_PASSWORD) : undefined,
-    database: process.env.PG_DATABASE || 'sales_tool',
-  };
-}
-const pool = new Pool(getPoolConfig());
+// PostgreSQL 연결 설정 — lib/db-config.js (Neon·Supabase 등 무료 Postgres의 SSL·연결 대기 처리 포함)
+const pool = new Pool(getPgConfig({ pool: true }));
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 
-// 이메일 발송: RESEND_API_KEY 있으면 Resend(HTTPS), 없으면 Gmail SMTP. Render/Railway는 SMTP 막혀서 Resend 권장.
-function getMailTransporter() {
-  const host = (process.env.SMTP_HOST || '').trim();
-  const user = (process.env.SMTP_USER || '').trim();
-  const pass = process.env.SMTP_PASS;
-  const hasPass = pass != null && String(pass).length > 0;
-  if (!host || !user || !hasPass) return null;
-  const port = Number(process.env.SMTP_PORT) || 587;
-  const secure = port === 465;
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass: String(pass) },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-  });
-}
+// 이메일 발송 — lib/mailer.js (Resend → Brevo → SMTP 순서로 무료 한도를 이어 씀)
 async function sendVerificationEmail(email, code) {
-  const subject = '판매툴 인증';
   const text = `판매툴 인증\n\n인증번호 : ${code}\n\n5분 안에 입력해 주세요.`;
-
-  const resendKey = (process.env.RESEND_API_KEY || '').trim();
-  if (resendKey) {
-    try {
-      const resend = new Resend(resendKey);
-      const from = (process.env.RESEND_FROM || 'onboarding@resend.dev').trim();
-      const { data, error } = await resend.emails.send({
-        from,
-        to: [email],
-        subject,
-        text,
-      });
-      if (error) {
-        console.error('[이메일 인증] Resend 실패:', error.message);
-        return { sent: false, code, error: error.message };
-      }
-      console.log('[이메일 인증] Resend 발송 성공 →', email);
-      return { sent: true };
-    } catch (err) {
-      const msg = err.message || String(err);
-      console.error('[이메일 인증] Resend 오류:', msg);
-      return { sent: false, code, error: msg };
-    }
-  }
-
-  const transporter = getMailTransporter();
-  if (transporter) {
-    try {
-      await transporter.sendMail({
-        from: (process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
-        to: email,
-        subject,
-        text,
-      });
-      console.log('[이메일 인증] SMTP 발송 성공 →', email);
-      return { sent: true };
-    } catch (err) {
-      const msg = err.code || err.message || String(err);
-      console.error('[이메일 인증] SMTP 발송 실패:', msg);
-      return { sent: false, code, error: msg };
-    }
-  }
-  console.log('[이메일 인증] 발송 수단 없음 (RESEND_API_KEY 또는 SMTP 설정 필요) | 인증번호:', code, '→', email);
-  return { sent: false, code, error: 'RESEND_API_KEY 또는 SMTP_HOST/SMTP_USER/SMTP_PASS 설정 필요' };
+  const r = await sendMail({ to: email, subject: '판매툴 인증', text });
+  return r.sent ? { sent: true, provider: r.provider } : { sent: false, code, error: r.errors.join(' | ') };
 }
+// 메일을 못 보냈을 때 인증번호를 응답에 실어 주는 것은 개발 환경에서만 (운영에서 켜면 이메일 인증을 우회할 수 있음)
+const EXPOSE_DEV_CODE = process.env.EXPOSE_DEV_CODE ? process.env.EXPOSE_DEV_CODE === 'true' : process.env.NODE_ENV !== 'production';
 
 app.use(express.json());
 
@@ -401,9 +319,10 @@ app.post('/api/auth/send-email-verification', async (req, res) => {
       sendResult = { sent: false, code, error: mailErr.message || String(mailErr) };
     }
     const payload = { ok: true, message: sendResult.sent ? '인증번호가 발송되었습니다. 5분 안에 입력하세요.' : '인증번호가 생성되었습니다. 아래 번호를 입력하세요. (이메일 미발송)' };
-    if (!sendResult.sent && sendResult.code) payload.dev_code = sendResult.code;
-    if (!sendResult.sent && sendResult.error) payload.smtp_error = sendResult.error;
-    res.json(payload);
+    if (!sendResult.sent && sendResult.code && EXPOSE_DEV_CODE) payload.dev_code = sendResult.code;
+    if (!sendResult.sent && sendResult.error && EXPOSE_DEV_CODE) payload.smtp_error = sendResult.error;
+    if (!sendResult.sent && !EXPOSE_DEV_CODE) { payload.ok = false; payload.message = '인증 메일을 보내지 못했습니다. 잠시 후 다시 시도하거나 관리자에게 문의하세요.'; }
+    res.status(payload.ok === false ? 503 : 200).json(payload);
   } catch (err) {
     console.error('Send verification error:', err);
     res.status(500).json({ ok: false, message: err.message || '인증번호 발송에 실패했습니다.' });
@@ -520,6 +439,8 @@ app.get('/api/capabilities', (req, res) => {
     app: 'sales-tool-server',
     /** 거래 흐름 POST 라우트가 포함된 빌드면 true — 구버전 서버는 이 경로 자체가 없을 수 있음 */
     tradeFlowPost: true,
+    /** 설정된 인증 메일 발송 수단(순서대로 시도) — 키 값은 노출하지 않음 */
+    mailProviders: configuredProviders(),
     hints: ['POST /api/purchases', 'POST /api/purchases/convert-to-sales', 'POST /api/payments', 'POST /api/sales/:id/refund', 'POST /api/disposals'],
   });
 });
