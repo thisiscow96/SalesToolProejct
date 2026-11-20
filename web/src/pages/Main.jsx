@@ -597,6 +597,8 @@ function TabPurchases() {
       return;
     }
     setSubmitting(true);
+    /** 저장에 성공한 행 — 중간에 실패하면 이 행들을 입력표에서 빼서 다시 저장할 때 중복 등록되지 않게 한다 */
+    const savedKeys = new Set();
     try {
       for (const r of toSubmit) {
         await createPurchase({
@@ -607,12 +609,23 @@ function TabPurchases() {
           purchase_date: r.purchase_date,
           source_name: String(r.source_name ?? '').trim() || undefined,
         });
+        savedKeys.add(r.key);
       }
       setShowForm(false);
       setPurchaseRows([newPurchaseRow()]);
       load();
     } catch (er) {
-      setActionErr(er.message || '매입 등록 실패');
+      const msg = er.message || '매입 등록 실패';
+      if (savedKeys.size > 0) {
+        setPurchaseRows((rows) => {
+          const rest = rows.filter((x) => !savedKeys.has(x.key));
+          return rest.length > 0 ? rest : [newPurchaseRow()];
+        });
+        setActionErr(`${savedKeys.size}건은 저장되어 입력표에서 뺐습니다. 남은 행: ${msg}`);
+        load();
+      } else {
+        setActionErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -683,6 +696,12 @@ function TabPurchases() {
         submitting={submitting}
       >
         <form id="form-purchase-modal" className="main-modal-form" onSubmit={submitPurchase}>
+          {/* 매뉴얼 8: 서버 검증 실패 메시지를 모달 안에 표시 (탭 상단 배너는 모달에 가려 보이지 않음) */}
+          {actionErr && (
+            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+              {actionErr}
+            </div>
+          )}
           <div className="main-modal-toolbar">
             <button type="button" className="main-modal-toolbar-btn" onClick={addPurchaseRow}>
               ＋ 행 추가
@@ -815,6 +834,12 @@ function TabPurchases() {
         submitting={submitting}
       >
         <form id="form-convert-modal" className="main-modal-form" onSubmit={submitConvert}>
+          {/* 매뉴얼 8: 서버 검증 실패 메시지를 모달 안에 표시 (탭 상단 배너는 모달에 가려 보이지 않음) */}
+          {actionErr && (
+            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+              {actionErr}
+            </div>
+          )}
           <div className="main-modal-fields main-modal-fields--collect">
             <label className="main-modal-field-select-wide">
               판매처
@@ -1110,6 +1135,8 @@ function TabSales() {
     setSaleErr('');
     setSubmitting(true);
     const refundedAt = today();
+    /** 환불이 끝난 매출 수 — 중간 실패 시 목록을 다시 불러와 같은 환불이 두 번 나가지 않게 한다 */
+    let doneCount = 0;
     try {
       for (const s of rows) {
         const d = refundDraft[s.id] || newRefundDraft(s);
@@ -1138,6 +1165,7 @@ function TabSales() {
         };
         if (autoAmt > 0) body.refund_amount = autoAmt;
         await refundSale(s.id, body);
+        doneCount += 1;
       }
       setShowRefundModal(false);
       setRefundableSales([]);
@@ -1146,7 +1174,21 @@ function TabSales() {
       setRefundReasonUnified(false);
       load();
     } catch (er) {
-      setSaleErr(er.message || '환불 실패');
+      const msg = er.message || '환불 실패';
+      if (doneCount > 0) {
+        // 처리된 매출은 환불 가능 수량·수금액이 바뀌었으므로 최신 값으로 다시 불러오고 선택·입력을 비운다
+        setSaleErr(`${doneCount}건은 환불 처리되었습니다. 목록을 새로 불러왔으니 남은 건을 다시 선택하세요. (${msg})`);
+        setRefundSaleSelected({});
+        setRefundDraft({});
+        try {
+          setRefundableSales(await fetchSales({ refundable_only: '1' }));
+        } catch {
+          /* 다시 불러오기 실패 시 기존 메시지만 표시 */
+        }
+        load();
+      } else {
+        setSaleErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2038,9 +2080,12 @@ function TabDisposals() {
       return;
     }
     setSubmitting(true);
+    /** 폐기 등록이 끝난 상품 — 중간 실패 시 재고를 다시 불러와 같은 폐기가 두 번 나가지 않게 한다 */
+    let doneCount = 0;
     try {
       for (const p of payload) {
         await createDisposal(p);
+        doneCount += 1;
       }
       setShowDisposalModal(false);
       setInventoryForDisposal([]);
@@ -2048,7 +2093,20 @@ function TabDisposals() {
       setDisposalDraft({});
       load();
     } catch (er) {
-      setActionErr(er.message || '폐기 등록 실패');
+      const msg = er.message || '폐기 등록 실패';
+      if (doneCount > 0) {
+        setActionErr(`${doneCount}건은 폐기 등록되었습니다. 재고를 새로 불러왔으니 남은 건을 다시 선택하세요. (${msg})`);
+        setDisposalSelected({});
+        setDisposalDraft({});
+        try {
+          setInventoryForDisposal(await fetchInventory());
+        } catch {
+          /* 다시 불러오기 실패 시 기존 메시지만 표시 */
+        }
+        load();
+      } else {
+        setActionErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
