@@ -397,6 +397,17 @@ function newProductMasterRow() {
 }
 
 function TabReorder() {
+  // T-209 재고 경과일 기준 [가정]: 3일 이상 주의, 7일 이상 경고.
+  // 경과일은 서버가 계산(오늘 − 남은 재고 중 가장 오래된 매입일). 여기서는 색 단계만 정한다.
+  const AGING_WARN_DAYS = 3;
+  const AGING_DANGER_DAYS = 7;
+  const agingLevel = (days) => {
+    if (days == null || days === '' || !Number.isFinite(Number(days))) return null;
+    const n = Number(days);
+    if (n >= AGING_DANGER_DAYS) return 'danger';
+    if (n >= AGING_WARN_DAYS) return 'warn';
+    return 'ok';
+  };
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -411,33 +422,63 @@ function TabReorder() {
   if (loading) return <p className="main-loading">불러오는 중…</p>;
   if (err) return <p className="main-error">{err}</p>;
   if (list.length === 0) return <p className="main-empty">등록된 재고가 없습니다.</p>;
+  const dangerCount = list.filter((row) => agingLevel(row.aging_days) === 'danger').length;
+  const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
   return (
-    <div className="main-table-wrap">
-      <table className="main-table">
-        <thead>
-          <tr>
-            <th className="main-col-product">상품명</th>
-            <th className="main-col-source">출처</th>
-            <th className="main-col-partner">매입 거래처</th>
-            <th className="main-col-qty">수량</th>
-            <th>단위</th>
-            <th className="main-col-date">매입일</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((row) => (
-            <tr key={row.id}>
-              <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-              <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
-              <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
-              <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-              <td>{row.unit}</td>
-              <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
+    <>
+      <div className="main-aging-summary" role="status">
+        <span className="main-aging-badge main-aging-badge--danger">{AGING_DANGER_DAYS}일 이상 {dangerCount}건</span>
+        <span className="main-aging-badge main-aging-badge--warn">{AGING_WARN_DAYS}일 이상 {warnCount}건</span>
+        <span className="main-modal-hint">경과일 = 오늘 − 남은 재고 중 가장 오래된 매입일 (먼저 들어온 물건부터 나간다고 보고 계산)</span>
+      </div>
+      <div className="main-table-wrap">
+        <table className="main-table">
+          <thead>
+            <tr>
+              <th className="main-col-product">상품명</th>
+              <th className="main-col-source">출처</th>
+              <th className="main-col-partner">매입 거래처</th>
+              <th className="main-col-qty">수량</th>
+              <th>단위</th>
+              <th className="main-col-date">최근 매입일</th>
+              <th className="main-col-aging">경과일</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {list.map((row) => {
+              const level = agingLevel(row.aging_days);
+              const days = Number(row.aging_days);
+              return (
+                <tr
+                  key={row.id}
+                  className={level === 'danger' ? 'main-row-aging-danger' : level === 'warn' ? 'main-row-aging-warn' : undefined}
+                >
+                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
+                  <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
+                  <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td>{row.unit}</td>
+                  <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                  <td className="main-col-aging">
+                    {level ? (
+                      <span
+                        className={`main-aging-badge main-aging-badge--${level}`}
+                        title={`가장 오래된 남은 매입일 ${row.aging_base_date ? toYmd(row.aging_base_date) : '—'}`}
+                        aria-label={`경과 ${days}일${level === 'danger' ? ' (경고)' : level === 'warn' ? ' (주의)' : ''}`}
+                      >
+                        {days}일
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

@@ -612,6 +612,10 @@ app.get('/api/partners', async (req, res) => {
 });
 
 // 재고현황 (중매인 번호 기준)
+// T-209 재고 경과일: 남은 재고 중 "가장 오래된 매입일" 기준 (KST 오늘 − 그 매입일).
+//   남은 재고 = 매출로 배분되지 않은 매입 묶음(purchase.quantity − purchase_allocation 합).
+//   폐기·환불은 매입 묶음을 줄이거나 늘리지 않으므로, 최근 매입부터 재고 수량만큼만 남아 있다고 보고
+//   (오래된 것부터 나간다고 가정) 그 범위에서 가장 오래된 매입일을 쓴다. 남은 묶음이 없으면(환불로만 생긴 재고 등) 마지막 매입일.
 app.get('/api/inventory', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
@@ -621,7 +625,9 @@ app.get('/api/inventory', async (req, res) => {
               lp.purchase_date AS last_purchase_date,
               lp.created_at AS last_purchase_created_at,
               NULLIF(BTRIM(lp.source_name::text), '') AS last_source_name,
-              NULLIF(BTRIM(pt.name::text), '') AS last_partner_name
+              NULLIF(BTRIM(pt.name::text), '') AS last_partner_name,
+              to_char(COALESCE(op.oldest_date, lp.purchase_date), 'YYYY-MM-DD') AS aging_base_date,
+              ($2::date - COALESCE(op.oldest_date, lp.purchase_date))::int AS aging_days
        FROM inventory i
        JOIN product p ON p.id = i.product_id
        LEFT JOIN LATERAL (
@@ -631,10 +637,29 @@ app.get('/api/inventory', async (req, res) => {
          ORDER BY pu.purchase_date DESC, pu.created_at DESC NULLS LAST, pu.id DESC
          LIMIT 1
        ) lp ON true
+       LEFT JOIN LATERAL (
+         SELECT MIN(lot.purchase_date) AS oldest_date
+         FROM (
+           SELECT pu.purchase_date,
+                  SUM(pu.quantity - COALESCE(al.q, 0))
+                    OVER (ORDER BY pu.purchase_date DESC, pu.id DESC) AS cum_newest,
+                  (pu.quantity - COALESCE(al.q, 0)) AS remain
+           FROM purchase pu
+           LEFT JOIN (
+             SELECT pa.purchase_id, SUM(pa.quantity) AS q
+             FROM purchase_allocation pa
+             WHERE pa.user_id = i.user_id
+             GROUP BY pa.purchase_id
+           ) al ON al.purchase_id = pu.id
+           WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id
+             AND pu.quantity - COALESCE(al.q, 0) > 0
+         ) lot
+         WHERE lot.cum_newest - lot.remain < i.quantity
+       ) op ON true
        LEFT JOIN account pt ON pt.id = lp.partner_id AND pt.user_id = i.user_id
        WHERE i.user_id = $1 AND i.quantity > 0
        ORDER BY p.name`,
-      [userId]
+      [userId, kstToday()]
     );
     res.json({ ok: true, data: r.rows });
   } catch (err) {
