@@ -17,7 +17,7 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
-import { computeRefundPossibleQty, computeAutoRefundAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
+import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import './Main.css';
 
@@ -1122,7 +1122,7 @@ function TabSales() {
         return {
           sale_id: s.id,
           amount: Number.isNaN(n) ? 0 : n,
-          max_due: Math.max(0, Number(s.total_amount) - Number(s.paid_amount)),
+          max_due: computeUnpaidAmount(s), // 미수 = 총액 − 반품액 − 수금 (반품 규칙 B)
           max_total: Math.max(0, Number(s.total_amount)),
         };
       })
@@ -1206,13 +1206,14 @@ function TabSales() {
           throw new Error(`매출 #${s.id}: 직접 기입 사유를 입력하세요.`);
         }
         const reasonText = buildRefundReasonFromDraft(d);
-        const autoAmt = computeAutoRefundAmount(s, qty);
+        // 반품 규칙 B: 화면에 보인 반품 금액을 그대로 보낸다. 미수 차감·환불금은 서버가 같은 식으로 정한다
+        const preview = computeReturnPreview(s, qty);
         const body = {
           quantity: qty,
+          return_amount: preview.returnAmount,
           refunded_at: refundedAt,
           reason: reasonText || undefined,
         };
-        if (autoAmt > 0) body.refund_amount = autoAmt;
         await refundSale(s.id, body);
         doneCount += 1;
       }
@@ -1373,7 +1374,7 @@ function TabSales() {
                 </thead>
                 <tbody>
                   {unpaidForPartner.map((s) => {
-                    const due = Number(s.total_amount) - Number(s.paid_amount);
+                    const due = computeUnpaidAmount(s);
                     return (
                       <tr key={s.id}>
                         <td className="main-col-check">
@@ -1411,7 +1412,7 @@ function TabSales() {
       </Modal>
       <Modal
         open={showRefundModal}
-        title="환불 처리 (수금 발생 매출)"
+        title="환불 처리 (반품)"
         wide
         fill
         modalClassName="main-modal--refund"
@@ -1470,12 +1471,12 @@ function TabSales() {
               사유 통일
             </label>
             <span className="main-modal-hint main-modal-hint--refund">
-              수금이 한 번이라도 발생한 매출만 표시됩니다. 체크한 행만 순서대로 환불 처리됩니다. 환불일은 저장 시 오늘 날짜로 적용됩니다.
+              반품 금액은 미수에서 먼저 빠지고, 이미 받은 돈이 남은 매출액보다 많아지는 만큼만 환불금으로 돌려줍니다(외상 매출도 반품 가능). 체크한 행만 순서대로 처리되며 환불일은 저장 시 오늘 날짜입니다.
             </span>
           </div>
           {loadingRefundable && <p className="main-loading">환불 가능 매출 불러오는 중…</p>}
           {!loadingRefundable && refundableSales.length === 0 && (
-            <p className="main-empty">표시할 매출이 없습니다. (수금 발생·잔여 수량 필요)</p>
+            <p className="main-empty">표시할 매출이 없습니다. (반품 가능 수량이 남은 매출만 표시)</p>
           )}
           {!loadingRefundable && refundableSales.length > 0 && refundableFiltered.length === 0 && (
             <p className="main-empty">검색 조건에 맞는 거래처 매출이 없습니다.</p>
@@ -1525,8 +1526,8 @@ function TabSales() {
                       환불 가능 수량
                     </th>
                     <th className="main-col-qty">환불 요청수량</th>
-                    <th className="main-col-amount">매출 금액</th>
-                    <th className="main-col-amount" title="(환불 요청수량 ÷ 환불 가능 수량) × 매출 금액(현재 수금액)">
+                    <th className="main-col-amount" title="반품 전 미수 = 총액 − 반품액 − 수금액">미수</th>
+                    <th className="main-col-amount" title="반품 금액 = 남은 매출액 × (환불 요청수량 ÷ 환불 가능 수량). 아래 줄: 미수에서 빼는 금액 · 현금으로 돌려줄 환불금">
                       반품 금액
                     </th>
                     <th className="main-th-refund-reason">사유</th>
@@ -1538,7 +1539,7 @@ function TabSales() {
                     const collected = computeCollectedQty(s);
                     const d = refundDraft[s.id] || newRefundDraft(s);
                     const reqQty = Number(d.quantity);
-                    const autoReturn = computeAutoRefundAmount(s, Number.isFinite(reqQty) ? reqQty : 0);
+                    const preview = computeReturnPreview(s, Number.isFinite(reqQty) ? reqQty : 0);
                     const applyReason = (patch) => {
                       setRefundDraft((prev) => {
                         if (!refundReasonUnified) {
@@ -1600,11 +1601,18 @@ function TabSales() {
                             }
                           />
                         </td>
-                        <td className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
+                        <td className="num main-col-amount">{formatKoNumber(computeUnpaidAmount(s))}</td>
                         <td className="num main-col-amount main-col-amount-readonly">
-                          {refundSaleSelected[s.id] && Number.isFinite(reqQty) && reqQty > 0
-                            ? formatKoNumber(autoReturn)
-                            : '—'}
+                          {refundSaleSelected[s.id] && Number.isFinite(reqQty) && reqQty > 0 ? (
+                            <>
+                              {formatKoNumber(preview.returnAmount)}
+                              <small className="main-refund-split" style={{ display: 'block', fontSize: '0.75em', opacity: 0.75, whiteSpace: 'nowrap' }}>
+                                미수 차감 {formatKoNumber(preview.creditAmount)} · 환불 {formatKoNumber(preview.refundAmount)}
+                              </small>
+                            </>
+                          ) : (
+                            '—'
+                          )}
                         </td>
                         <td className="main-td-refund-reason">
                           <div className="main-refund-reason-cell">
