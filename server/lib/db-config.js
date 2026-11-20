@@ -29,8 +29,10 @@ function sslFor(hostname, sslMode) {
   return undefined;
 }
 
-function getPgConfig({ pool = false } = {}) {
-  const raw = process.env.DATABASE_URL && process.env.DATABASE_URL.trim();
+// url: 접속 주소를 직접 넘길 때(migrate.js 가 MIGRATE_DATABASE_URL 을 우선 사용 — T-219 R-04). 없으면 DATABASE_URL
+function getPgConfig({ pool = false, url } = {}) {
+  const src = url != null && String(url).trim() ? url : process.env.DATABASE_URL;
+  const raw = src && String(src).trim();
   const poolOpts = pool
     ? {
         max: Number(process.env.DB_POOL_MAX) || 5, // 무료 DB 연결 수 한도 고려

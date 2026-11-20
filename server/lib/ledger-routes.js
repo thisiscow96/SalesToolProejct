@@ -111,13 +111,18 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         closing_balance: 0,
         totals: { sales: 0, returns: 0, receipts: 0, refunds: 0 },
         entries: [],
-        check: { ledger_balance: 0, sale_based_due: 0, diff: 0 },
+        check: { ledger_balance: 0, sale_based_due: 0, overpaid: 0, diff: 0 },
       };
       // 매입만 하는 거래처는 받을 돈 장부가 없다(매입처 미지급은 T-201)
       if (!RECEIVABLE_PARTNER_TYPES.has(partner.type)) return res.json({ ok: true, data: empty });
 
+      // 요약과 행을 같은 시점의 데이터로 읽는다 — 두 쿼리 사이에 수금이 들어와도 기말 잔액 = 마지막 행 잔액 (T-118 R-10)
+      const db = await pool.connect();
+      try {
+      await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+
       // 요약: 기초·기말·기간 합계·행 수·전체 기간 대조 — 한 번에 DB에서
-      const sum = await pool.query(
+      const sum = await db.query(
         `WITH e AS (
            SELECT * FROM partner_ledger_entry WHERE user_id = $1 AND partner_id = $2
          ), inr AS (
@@ -133,7 +138,10 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
            (SELECT COUNT(*)::int FROM inr)                                         AS n,
            (SELECT COALESCE(SUM(increase - decrease), 0) FROM e)                   AS ledger_balance,
            (SELECT COALESCE(SUM(GREATEST(total_amount - returned_amount - paid_amount, 0)), 0)
-              FROM sale WHERE user_id = $1 AND partner_id = $2 AND status <> 'cancelled') AS sale_based_due`,
+              FROM sale WHERE user_id = $1 AND partner_id = $2 AND status <> 'cancelled') AS sale_based_due,
+           -- 돌려줄 돈(013 overpaid_amount: 010 이전 기록의 받은 돈 > 순매출) — 원장에서는 음수 잔액으로 보인다
+           (SELECT COALESCE(SUM(overpaid_amount), 0)
+              FROM sale WHERE user_id = $1 AND partner_id = $2 AND status <> 'cancelled') AS overpaid`,
         [userId, partnerId, fromP, toP]
       );
       const s = sum.rows[0];
@@ -147,7 +155,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
       }
 
       // 행별 잔액 = 전체 기간 누계(기간 앞 행 포함) → 기간 안 행만 돌려준다
-      const rows = await pool.query(
+      const rows = await db.query(
         `WITH ordered AS (
            SELECT e.*,
                   SUM(e.increase - e.decrease) OVER (
@@ -171,7 +179,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
       const receiptIds = rows.rows.filter((r) => r.kind === 'receipt').map((r) => r.ref_id);
       const allocByPayment = new Map();
       if (receiptIds.length) {
-        const al = await pool.query(
+        const al = await db.query(
           `SELECT pa.payment_id, pa.sale_id, pa.amount
              FROM payment_allocation pa
              JOIN payment p ON p.id = pa.payment_id AND p.user_id = $1
@@ -213,7 +221,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
 
       // 취소 매출 보기 — 금액 0, 잔액은 바로 앞 행 잔액 그대로(RULE-02)
       if (includeCancelled) {
-        const c = await pool.query(
+        const c = await db.query(
           `SELECT s.id, to_char(s.sale_date, 'YYYY-MM-DD') AS date, s.quantity, s.unit_price, s.total_amount, s.memo, s.created_at,
                   pr.name AS product_name
              FROM sale s LEFT JOIN product pr ON pr.id = s.product_id
@@ -270,9 +278,19 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           closing_balance: money(s.closing),
           totals: { sales: money(s.sales), returns: money(s.returns), receipts: money(s.receipts), refunds: money(s.refunds) },
           entries,
-          check: { ledger_balance: ledgerBalance, sale_based_due: saleBasedDue, diff: money(Number(s.ledger_balance) - Number(s.sale_based_due)) },
+          // 검증식: 원장 잔액 = 매출별 미수 합 − 돌려줄 돈 (T-219 R-02). 0이 아니면 010 이전 기록 흔적(F-5·F-6)
+          check: {
+            ledger_balance: ledgerBalance,
+            sale_based_due: saleBasedDue,
+            overpaid: money(s.overpaid),
+            diff: money(Number(s.ledger_balance) - Number(s.sale_based_due) + Number(s.overpaid)),
+          },
         },
       });
+      } finally {
+        await db.query('ROLLBACK').catch(() => {});
+        db.release();
+      }
     } catch (err) {
       console.error('Partner ledger error:', err);
       res.status(500).json({ ok: false, message: '원장을 불러오지 못했습니다.' });

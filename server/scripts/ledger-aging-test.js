@@ -255,10 +255,23 @@ async function main() {
   check('AC-12 수금 −500 한 행, allocations 2건', lastRow.kind === 'receipt' && lastRow.decrease === 500 && lastRow.allocations?.length === 2 && /매출 #\d+ 200 · 매출 #\d+ 300/.test(lastRow.description), lastRow);
   check('AC-12 S2 완납 → 61–90 0, 90 초과 400, 기말 700 = 연령 총미수', rowC.d61_90 === 0 && rowC.d91p === 400 && rowC.total_due === 700 && L.closing_balance === 700 && L.check.diff === 0, { rowC, closing: L.closing_balance });
 
-  // AC-13 전량 반품인데 금액 일부만 (F-3)
+  // AC-13 전량 반품인데 금액 일부만 (F-3) — T-219 R-06(T104-U-5 A안): API는 400으로 막는다.
+  //   이미 그렇게 저장된 이전 기록은 테스트 DB에 SQL로 만들고, 원장·연령·미수 목록·수금에 모두 보이는지 본다
   const S5 = await sell(F, 10, 100, ago(40));
-  await ret(S5, 10, TODAY, 600);
+  const r13 = await request('POST', `/api/sales/${S5}/refund`, { quantity: 10, refunded_at: TODAY, reason: '테스트 반품', return_amount: 600 }, A);
+  check('AC-13a 전량 반품 + 반품 금액 600(< 순매출 1,000) → 400 FULL_RETURN_AMOUNT', r13.status === 400 && r13.json?.code === 'FULL_RETURN_AMOUNT', r13);
+  {
+    const ins = await pool.query(
+      `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, credit_amount, return_amount, reason, refunded_at)
+       SELECT user_id, id, 10, 0, 600, 600, '이전 기록(F-3)', $2::date FROM sale WHERE id = $1 RETURNING id`,
+      [S5, TODAY]
+    );
+    if (!ins.rows[0]) throw new Error('AC-13 이전 기록 만들기 실패');
+    await pool.query(`UPDATE sale SET returned_amount = 600, status = 'refunded', payment_status = 'unpaid' WHERE id = $1`, [S5]);
+  }
   const st5 = (await pool.query('SELECT status, payment_status FROM sale WHERE id = $1', [S5])).rows[0];
+  const up13 = (await request('GET', `/api/sales?unpaid_only=1&partner_id=${F.id}`, null, A)).json?.data || [];
+  check('AC-13b refunded 인데 미수 400 → 미수 목록(unpaid_only)에 보임', up13.some((x) => x.id === S5 && Number(x.unpaid_amount) === 400), up13);
   r = await ledger(A, F.id);
   L = r.json.data;
   det = (await aging(A, `?partner_id=${F.id}`)).json.data;
@@ -303,6 +316,34 @@ async function main() {
   L = (await ledger(A, I.id)).json.data;
   det = (await aging(A, `?partner_id=${I.id}`)).json.data;
   check('AC-17 옛 흔적 → check.diff 500, 연령에 S8 없음', L.check.diff === 500 && L.check.sale_based_due === 0 && L.check.ledger_balance === 500 && det.rows.length === 0, L.check);
+
+  // R-01·R-02 (T-219) 010 이전 "환불금 없이 반품"한 완납 매출: 받은 돈 1,000 > 순매출 700 → overpaid 300(013)
+  {
+    const K = await mkPartner(A, 'K초과수금', 'customer');
+    const S9 = await sell(K, 10, 100, ago(20));
+    await receive(K, 1000, ago(19), [{ sale_id: S9, amount: 1000 }]);
+    // 옛 코드 모양: 환불금 0, 반품 3개, 받은 돈 그대로 → 013 백필 결과와 같은 값으로 직접 만든다
+    await pool.query(`ALTER TABLE sale DROP CONSTRAINT sale_paid_not_over_net`);
+    await pool.query(
+      `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, credit_amount, return_amount, reason, refunded_at)
+       SELECT user_id, id, 3, 0, 300, 300, '옛 반품(환불금 없음)', $2::date FROM sale WHERE id = $1`, [S9, ago(18)]);
+    await pool.query(`UPDATE sale SET returned_amount = 300, overpaid_amount = 300, payment_status = 'paid' WHERE id = $1`, [S9]);
+    await pool.query(`ALTER TABLE sale ADD CONSTRAINT sale_paid_not_over_net CHECK (paid_amount <= total_amount - returned_amount + overpaid_amount)`);
+    const pm = await request('PATCH', `/api/sales/${S9}`, { reason: '메모 고침', changes: { memo: '초과 수금 메모' } }, A);
+    check('R-01 받은 돈 > 순매출 매출 메모 수정 → 200 (예전 500)', pm.status === 200 && pm.json?.data?.memo === '초과 수금 메모', pm);
+    L = (await ledger(A, K.id)).json.data;
+    check('R-01 원장 −300 = 매출별 미수 0 − 돌려줄 돈 300 → diff 0', L.closing_balance === -300 && L.check.overpaid === 300 && L.check.diff === 0, L.check);
+    const rr = await mustOk(await request('POST', `/api/sales/${S9}/refund`, { quantity: 7, refunded_at: TODAY, reason: '남은 수량 반품' }, A), 'R-02 반품');
+    const s9 = (await pool.query('SELECT paid_amount, returned_amount, overpaid_amount, status FROM sale WHERE id = $1', [S9])).rows[0];
+    const rf9 = (await pool.query('SELECT return_amount, refund_amount, credit_amount FROM refund WHERE id = $1', [rr.refund_id])).rows[0];
+    L = (await ledger(A, K.id)).json.data;
+    const lastRet = L.entries.filter((e) => e.kind === 'return').at(-1);
+    check('R-02 남은 7개 반품: V 700 · 현금 1,000(초과 300 포함) · 반품 행 −700 · 원장 0 = 미수 0, diff 0',
+      rr.return_amount === 700 && rr.refund_amount === 1000 && Number(rf9.return_amount) === 700 && lastRet?.decrease === 700
+        && Number(s9.paid_amount) === 0 && Number(s9.overpaid_amount) === 0 && s9.status === 'refunded'
+        && L.closing_balance === 0 && L.check.diff === 0 && L.check.overpaid === 0,
+      { rr, s9, rf9, check: L.check, closing: L.closing_balance });
+  }
 
   // AC-18 매입처
   r = await ledger(A, E.id);
@@ -353,6 +394,14 @@ async function main() {
   }
   console.log('  ' + rowsOut.join('\n  '));
   check('검증식: 거래처 7곳 원장 잔액 = 매출별 미수 합 = 연령 총미수(옛 흔적 I만 diff 500)', allOk, rowsOut);
+
+  // AC-13c (T-219 R-06) refunded 라도 미수가 남은 매출은 수금 배분 가능 — 검증식 확인 뒤(F 잔액이 바뀌므로)
+  {
+    const p13 = await request('POST', '/api/payments', { partner_id: F.id, amount: 400, paid_at: `${TODAY}T10:00:00+09:00`, entry_kind: 'receive', allocations: [{ sale_id: S5, amount: 400 }] }, A);
+    const s5 = (await pool.query('SELECT paid_amount, payment_status FROM sale WHERE id = $1', [S5])).rows[0];
+    const lf = (await ledger(A, F.id)).json.data;
+    check('AC-13c refunded·미수 400 매출에 수금 400 → 201, 완납, 원장 0', p13.status === 201 && s5.payment_status === 'paid' && lf.closing_balance === 0 && lf.check.diff === 0, { p13: p13.status, s5, check: lf.check });
+  }
 
   // EXPLAIN — 인덱스 사용 확인(설계 4.3). 데이터가 적으면 플래너가 순차 스캔을 고르므로 seqscan off 로 경로만 본다
   const c1 = await pool.connect();
