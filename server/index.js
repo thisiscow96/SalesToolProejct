@@ -8,6 +8,7 @@ const { getPgConfig } = require('./lib/db-config');
 const { sendMail, configuredProviders } = require('./lib/mailer');
 const authToken = require('./lib/auth-token');
 const { parseListOptions, searchClause, runList } = require('./lib/list-query'); // T-211 목록 검색·페이지
+const { recordAudit, registerAuditRoutes } = require('./lib/audit-log'); // T-212 변경 이력
 const { Pool } = require('pg');
 
 // ---------- 입력값 검증 ----------
@@ -516,6 +517,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(403).json({ ok: false, message: '비활성화된 계정입니다.' });
     }
     loginThrottle.reset(throttleKey);
+    await recordAudit(pool, { userId: row.id, entityType: 'auth', action: 'login', note: '로그인' }); // T-212
     const token = authToken.signToken(AUTH.secret, { userId: row.id, agentNo: row.agent_no }, AUTH_TTL_SEC);
     res.json({
       ok: true,
@@ -761,6 +763,7 @@ app.post('/api/partners', async (req, res) => {
        RETURNING ${PARTNER_RETURNING}`,
       [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null]
     );
+    await recordAudit(client, { userId, entityType: 'account', entityId: r.rows[0].id, partnerId: r.rows[0].id, action: 'create', before: null, after: r.rows[0] }); // T-212
     await client.query('COMMIT');
     res.status(201).json({ ok: true, data: r.rows[0] });
   } catch (err) {
@@ -791,7 +794,7 @@ app.put('/api/partners/:id', async (req, res) => {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`account-name:${userId}`]);
     // 다른 사용자의 거래처는 존재 여부도 드러내지 않고 404
-    const cur = await client.query('SELECT id FROM account WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+    const cur = await client.query('SELECT * FROM account WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]); // * = T-212 변경 전 값
     if (cur.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ ok: false, message: '거래처를 찾을 수 없습니다.' });
@@ -811,6 +814,7 @@ app.put('/api/partners/:id', async (req, res) => {
         RETURNING ${PARTNER_RETURNING}`,
       [id, userId, ...keys.map((k) => f[k])]
     );
+    await recordAudit(client, { userId, entityType: 'account', entityId: id, partnerId: id, action: 'update', before: cur.rows[0], after: f }); // T-212
     await client.query('COMMIT');
     res.json({ ok: true, data: r.rows[0] });
   } catch (err) {
@@ -827,6 +831,8 @@ app.put('/api/partners/:id', async (req, res) => {
 require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstToday });
 // 첫 화면 대시보드 "오늘" (T-208) — lib/dashboard-routes.js
 require('./lib/dashboard-routes').registerDashboardRoutes(app, { pool, getUserId, kstToday });
+// 변경 이력(감사 로그) 화면 (T-212) — lib/audit-log.js
+registerAuditRoutes(app, { pool, getUserId });
 // 중매인 개인 품목·공용 등록 요청 (T-216) — lib/product-request-routes.js
 require('./lib/product-request-routes').registerProductRequestRoutes(app, { pool, getUserIdAndAdmin, connectOr503, generateProductKey });
 // 매입처 지급·지급 원장·미지급 연령 (T-201) — 라우트는 lib/payable-routes.js
