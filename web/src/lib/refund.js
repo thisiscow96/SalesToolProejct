@@ -19,30 +19,43 @@ export function computeNetAmount(s) {
   return Math.max(0, cents(s.total_amount) - cents(s.returned_amount)) / 100;
 }
 
-/** 미수(원) = 총액 − 반품액 − 수금액 (0 미만은 0). 서버가 준 unpaid_amount 가 있으면 그 값 */
+/** 미수(원) = 총액 − 반품액 − 수금액 − 할인 − 상계 (0 미만은 0). 서버가 준 unpaid_amount 가 있으면 그 값 */
 export function computeUnpaidAmount(s) {
   if (s.unpaid_amount != null && s.unpaid_amount !== '') return Math.max(0, Number(s.unpaid_amount) || 0);
-  return Math.max(0, cents(s.total_amount) - cents(s.returned_amount) - cents(s.paid_amount)) / 100;
+  // T-401: 할인·상계도 미수를 줄인다
+  return Math.max(0, cents(s.total_amount) - cents(s.returned_amount) - cents(s.paid_amount) - cents(s.discount_amount) - cents(s.offset_amount)) / 100;
 }
 
 /**
- * 반품 미리보기 — { returnAmount: 반품 금액 V, creditAmount: 미수에서 빼는 금액, refundAmount: 현금으로 돌려줄 금액 }
+ * 반품 미리보기 — { returnAmount: 반품 금액 V, creditAmount: 미수에서 빼는 금액, discountReversal: 되돌리는 할인, refundAmount: 현금으로 돌려줄 금액,
+ *                  blockedByOffset: 상계로 정리된 금액까지 닿으면 true(서버 409 SALE_OFFSET_SETTLED) }
+ * T-401 3.4: 미수 차감 → 할인 되돌림 → 현금 환불 순서 (서버 POST /api/sales/:id/refund 와 같은 식)
  * 예) 1,000원 완납 10개 중 5개 → V 500, 미수 차감 0, 환불 500 (가짜 미수 없음 — R1)
  *     500원 외상 5개 전부 → V 500, 미수 차감 500, 환불 0 (받은 적 없는 돈은 돌려주지 않음 — R2)
  *     1,000원 중 300원 수금 10개 중 5개 → V 500, 미수 차감 500, 환불 0, 남은 미수 200
  */
 export function computeReturnPreview(s, requestQty) {
-  const zero = { returnAmount: 0, creditAmount: 0, refundAmount: 0 };
+  const zero = { returnAmount: 0, creditAmount: 0, discountReversal: 0, refundAmount: 0, blockedByOffset: false };
   const remaining = computeRefundPossibleQty(s);
   const rq = Number(requestQty);
   if (!(remaining > 0) || !Number.isFinite(rq) || rq <= 0) return zero;
   const netC = Math.max(0, cents(s.total_amount) - cents(s.returned_amount));
   const paidC = cents(s.paid_amount);
   const vC = rq >= remaining - 1e-9 ? netC : Math.round((netC * rq) / remaining);
-  const dueC = Math.max(0, netC - paidC);
+  const discC = cents(s.discount_amount);
+  const offC = cents(s.offset_amount);
+  const dueC = Math.max(0, netC - paidC - discC - offC);
   const creditC = Math.min(vC, dueC);
+  const drevC = Math.min(vC - creditC, discC);
   const excessC = Math.max(0, paidC - netC); // 010 이전 데이터의 받은 돈 > 순매출 — 서버와 같이 함께 환불
-  return { returnAmount: vC / 100, creditAmount: creditC / 100, refundAmount: (vC - creditC + excessC) / 100 };
+  const cashC = vC - creditC - drevC + excessC;
+  return {
+    returnAmount: vC / 100,
+    creditAmount: creditC / 100,
+    discountReversal: drevC / 100,
+    refundAmount: cashC / 100,
+    blockedByOffset: cashC > paidC,
+  };
 }
 
 /**

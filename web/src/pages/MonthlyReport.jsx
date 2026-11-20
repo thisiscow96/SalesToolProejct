@@ -66,6 +66,19 @@ function summaryRows(d) {
   if (d.payments.opening_amount > 0 || p.payments.opening_amount > 0) {
     rows.push({ key: 'opening', label: '기초 정리', sub: '이전 매입 일괄 정리', cur: d.payments.opening_amount, count: d.payments.opening_count, prev: p.payments.opening_amount, ch: { diff: d.payments.opening_amount - p.payments.opening_amount, pct: null }, good: 'none' });
   }
+  // T-401 정산 할인·상계 — 현금이 아니라 수금·지급 줄과 따로. 이번 달·전월 모두 0 이면 숨김
+  const z = (o, k = 'amount') => Number(o?.[k]) || 0;
+  const diffOnly = (a, b) => ({ diff: a - b, pct: null });
+  if (z(d.sale_discounts) || z(p.sale_discounts)) {
+    rows.push({ key: 'sale_discounts', label: '매출 할인', sub: '정산 때 깎아 준 금액(현금 아님)', cur: -z(d.sale_discounts), count: d.sale_discounts?.count, prev: -z(p.sale_discounts), ch: diffOnly(-z(d.sale_discounts), -z(p.sale_discounts)), good: 'none', neg: true });
+    rows.push({ key: 'profit_after_discount', label: '할인 반영 이익', sub: '매출 이익 − 매출 할인 + 반품 때 되돌린 할인', strong: true, cur: z(d.profit, 'profit_after_discount'), prev: z(p.profit, 'profit_after_discount'), ch: diffOnly(z(d.profit, 'profit_after_discount'), z(p.profit, 'profit_after_discount')), good: 'up' });
+  }
+  if (z(d.payments, 'discount_amount') || z(p.payments, 'discount_amount')) {
+    rows.push({ key: 'pay_discounts', label: '매입 할인', sub: '매입처가 깎아 준 금액(현금 아님, 원가·이익에 넣지 않음)', cur: z(d.payments, 'discount_amount'), count: d.payments.discount_count, prev: z(p.payments, 'discount_amount'), ch: diffOnly(z(d.payments, 'discount_amount'), z(p.payments, 'discount_amount')), good: 'none' });
+  }
+  if (z(d.offsets) || z(p.offsets)) {
+    rows.push({ key: 'offsets', label: '상계', sub: '받을 돈·줄 돈을 같은 금액만큼 지움(현금 아님)', cur: z(d.offsets), count: d.offsets?.count, prev: z(p.offsets), ch: diffOnly(z(d.offsets), z(p.offsets)), good: 'none' });
+  }
   return rows;
 }
 

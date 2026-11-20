@@ -22,7 +22,15 @@ const qty = (n) => Number(n || 0).toLocaleString('ko-KR', { maximumFractionDigit
 /** 연령 구간 막대 색 단계 — 오래될수록 진하게 */
 const BUCKET_TONE = { d0_30: 'ok', d31_60: 'info', d61_90: 'warn', d91p: 'danger' };
 
-function TodayCard({ label, amount, count, unit, onOpen, actionLabel }) {
+/** T-401 현금이 아닌 정리(할인·상계) 한 줄 — 둘 다 0 이면 숨김 */
+function settleNote(disc, ofs) {
+  const d = Number(disc?.amount) || 0;
+  const o = Number(ofs?.amount) || 0;
+  if (!d && !o) return null;
+  return `할인 ${won(d)} · 상계 ${won(o)} (현금 아님)`;
+}
+
+function TodayCard({ label, amount, count, unit, onOpen, actionLabel, note }) {
   return (
     <section className="dash-card dash-kpi" aria-label={label}>
       <h3 className="dash-kpi-label">{label}</h3>
@@ -33,6 +41,7 @@ function TodayCard({ label, amount, count, unit, onOpen, actionLabel }) {
       <p className="dash-kpi-count">
         {count > 0 ? `${count.toLocaleString('ko-KR')}${unit}` : `오늘 ${label.replace('오늘 ', '')} 없음`}
       </p>
+      {note ? <p className="dash-kpi-note">{note}</p> : null}
       <button type="button" className="dash-link" onClick={onOpen}>
         {actionLabel} <span aria-hidden="true">›</span>
       </button>
@@ -121,8 +130,8 @@ export default function TabDashboard({ onNavigate }) {
       <div className="dash-kpis">
         <TodayCard label="오늘 매입" amount={today.purchases.amount} count={today.purchases.count} unit="건" actionLabel="매입정보" onOpen={() => go('purchases')} />
         <TodayCard label="오늘 매출" amount={today.sales.amount} count={today.sales.count} unit="건" actionLabel="매출정보" onOpen={() => go('sales')} />
-        <TodayCard label="오늘 수금" amount={today.receipts.amount} count={today.receipts.count} unit="건" actionLabel="수금정보" onOpen={() => go('payments')} />
-        {today.payments && <TodayCard label="오늘 지급" amount={today.payments.amount} count={today.payments.count} unit="건" actionLabel="지급정보" onOpen={() => go('supplier-payments')} />}
+        <TodayCard label="오늘 수금" amount={today.receipts.amount} count={today.receipts.count} unit="건" actionLabel="수금정보" onOpen={() => go('payments')} note={settleNote(today.discounts, today.offsets)} />
+        {today.payments && <TodayCard label="오늘 지급" amount={today.payments.amount} count={today.payments.count} unit="건" actionLabel="지급정보" onOpen={() => go('supplier-payments')} note={settleNote(today.pay_discounts, today.offsets)} />}
       </div>
 
       <section className="dash-card dash-recv" aria-labelledby="dash-recv-title">

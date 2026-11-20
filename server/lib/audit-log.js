@@ -27,7 +27,8 @@
  */
 const { parseListOptions, runList } = require('./list-query');
 
-const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login', 'staff', 'staff_entry'];
+const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login', 'staff', 'staff_entry',
+  'discount', 'offset', 'offset_cancel']; // T-401 정산 할인·상계
 const SKIP_FIELDS = new Set(['id', 'user_id', 'created_at', 'updated_at']);
 
 function same(a, b) {
@@ -142,13 +143,40 @@ const UNION_SQL = `
    WHERE tc.user_id = $1
   UNION ALL
   SELECT 'supplier_payment', spay.id::bigint, 'payment_cancel', spay.cancelled_at, 'supplier_payment', spay.id,
-         CASE WHEN spay.kind = 'opening' THEN '기초 정리 ' ELSE '' END || to_char(spay.amount, 'FM999,999,999,990') || '원',
+         CASE WHEN spay.kind = 'opening' THEN '기초 정리 ' WHEN spay.kind = 'discount' THEN '매입 할인 ' ELSE '' END || to_char(spay.amount, 'FM999,999,999,990') || '원',
          spay.partner_id, 'self', spay.cancel_reason::text,
          ARRAY['status']::text[],
          jsonb_build_object('status', 'active', 'amount', spay.amount, 'paid_at', spay.paid_at),
          jsonb_build_object('status', 'cancelled'), NULL::int
     FROM supplier_payment spay
-   WHERE spay.user_id = $1 AND spay.status = 'cancelled' AND spay.cancelled_at IS NOT NULL
+   WHERE spay.user_id = $1 AND spay.status = 'cancelled' AND spay.cancelled_at IS NOT NULL AND spay.kind <> 'offset' -- 상계는 offset_cancel 한 줄로
+  UNION ALL
+  -- T-401 매출 할인 등록·취소, 상계 등록·취소 (원천 행에서 읽는다 — 이중 기록 없음)
+  SELECT 'payment', py.id::bigint, 'discount', py.created_at, 'payment', py.id,
+         '매출 할인 ' || to_char(py.amount, 'FM999,999,999,990') || '원', py.partner_id, 'self', py.memo,
+         ARRAY['amount']::text[], NULL::jsonb, jsonb_build_object('amount', py.amount, 'paid_at', py.paid_at), NULL::int
+    FROM payment py
+   WHERE py.user_id = $1 AND py.entry_kind = 'discount'
+  UNION ALL
+  SELECT 'payment_cancel', py.id::bigint, 'payment_cancel', py.cancelled_at, 'payment', py.id,
+         '매출 할인 ' || to_char(py.amount, 'FM999,999,999,990') || '원', py.partner_id, 'self', py.cancel_reason::text,
+         ARRAY['status']::text[], jsonb_build_object('status', 'active', 'amount', py.amount, 'paid_at', py.paid_at),
+         jsonb_build_object('status', 'cancelled'), NULL::int
+    FROM payment py
+   WHERE py.user_id = $1 AND py.entry_kind = 'discount' AND py.status = 'cancelled' AND py.cancelled_at IS NOT NULL
+  UNION ALL
+  SELECT 'settlement_offset', so.id::bigint, 'offset', so.created_at, 'settlement_offset', so.id,
+         '상계 ' || to_char(so.amount, 'FM999,999,999,990') || '원 (미수·미지급 동시 차감)', so.partner_id, 'self', so.memo,
+         ARRAY['amount']::text[], NULL::jsonb, jsonb_build_object('amount', so.amount, 'offset_at', so.offset_at), NULL::int
+    FROM settlement_offset so
+   WHERE so.user_id = $1
+  UNION ALL
+  SELECT 'settlement_offset_cancel', so.id::bigint, 'offset_cancel', so.cancelled_at, 'settlement_offset', so.id,
+         '상계 ' || to_char(so.amount, 'FM999,999,999,990') || '원', so.partner_id, 'self', so.cancel_reason::text,
+         ARRAY['status']::text[], jsonb_build_object('status', 'active', 'amount', so.amount),
+         jsonb_build_object('status', 'cancelled'), NULL::int
+    FROM settlement_offset so
+   WHERE so.user_id = $1 AND so.status = 'cancelled' AND so.cancelled_at IS NOT NULL
   UNION ALL
   SELECT 'product_request', pr.id::bigint, 'product_request', pr.created_at, 'product', pr.product_id,
          prod.name, NULL::int, 'self', pr.note,

@@ -19,6 +19,7 @@
  *  - 미수 잔액 = 거래처 원장 뷰(partner_ledger_entry)의 증가−감소 누계(기준일까지). 월초 = 전달 말일 기준, 월말 = 그 달 말일 기준
  *  - 미지급 잔액 = 지급 원장 뷰(supplier_ledger_entry)의 누계(기준일까지, 기초 정리 포함)
  *    → 월말 − 월초 = 매출 − 반품 − 수금 + 환불 지급 (미수) / 매입 − 지급 − 기초 정리 (미지급)  이 식이 항상 맞는다.
+ *    T-401 뒤: 미수 = 매출 − 반품 − 수금 − 매출 할인 − 상계 + 환불 지급 + 할인 되돌림 / 미지급 = 매입 − 지급 − 기초 정리 − 매입 할인 − 상계
  *
  * 원칙: 모든 집계에 user_id = 토큰 사용자. 금액은 DB NUMERIC 으로 더하고 응답 직전에만 Number.
  *       현재·전월 두 번의 집계를 같은 시점 데이터로 읽으려고 REPEATABLE READ 읽기 전용 트랜잭션 하나에서 실행한다.
@@ -115,11 +116,30 @@ SELECT
     WHERE py.user_id = $1 AND py.entry_kind = 'refund'
       AND py.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
       AND py.paid_at <  (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')) AS refund_payments,
+  -- T-401 매출 할인(정산 때 깎아 준 금액, 할인을 기록한 날 기준)·상계·반품 때 되돌린 할인
+  (SELECT json_build_object('amount', COALESCE(SUM(py.amount), 0), 'count', COUNT(*))
+     FROM payment py
+    WHERE py.user_id = $1 AND py.entry_kind = 'discount' AND py.status = 'active'
+      AND py.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND py.paid_at <  (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')) AS sale_discounts,
+  (SELECT json_build_object('amount', COALESCE(SUM(so.amount), 0), 'count', COUNT(*))
+     FROM settlement_offset so
+    WHERE so.user_id = $1 AND so.status = 'active'
+      AND so.offset_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND so.offset_at <  (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')) AS offsets,
+  (SELECT json_build_object('amount', COALESCE(SUM(r.discount_reversed_amount), 0), 'count', COUNT(*) FILTER (WHERE r.discount_reversed_amount > 0))
+     FROM refund r
+     JOIN sale s ON s.id = r.sale_id AND s.user_id = r.user_id AND s.status <> 'cancelled'
+    WHERE r.user_id = $1 AND r.refunded_at >= $2::date AND r.refunded_at <= $3::date) AS discount_reversals,
   (SELECT json_build_object(
             'amount', COALESCE(SUM(sp.amount) FILTER (WHERE sp.kind = 'pay'), 0),
             'count', COUNT(*) FILTER (WHERE sp.kind = 'pay'),
             'opening_amount', COALESCE(SUM(sp.amount) FILTER (WHERE sp.kind = 'opening'), 0),
-            'opening_count', COUNT(*) FILTER (WHERE sp.kind = 'opening'))
+            'opening_count', COUNT(*) FILTER (WHERE sp.kind = 'opening'),
+            -- T-401 매입 할인·상계 (현금 지급 amount 에는 넣지 않는다)
+            'discount_amount', COALESCE(SUM(sp.amount) FILTER (WHERE sp.kind = 'discount'), 0),
+            'discount_count', COUNT(*) FILTER (WHERE sp.kind = 'discount'),
+            'offset_amount', COALESCE(SUM(sp.amount) FILTER (WHERE sp.kind = 'offset'), 0))
      FROM supplier_payment sp
     WHERE sp.user_id = $1 AND sp.status = 'active'
       AND sp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
@@ -199,16 +219,24 @@ function shapeSummary(x) {
     },
     receipts: ac(x.receipts),
     refund_payments: ac(x.refund_payments),
+    sale_discounts: ac(x.sale_discounts), // T-401
+    offsets: ac(x.offsets),
+    discount_reversals: ac(x.discount_reversals),
     payments: {
       amount: money(pays.amount),
       count: Number(pays.count || 0),
       opening_amount: money(pays.opening_amount),
       opening_count: Number(pays.opening_count || 0),
+      discount_amount: money(pays.discount_amount),
+      discount_count: Number(pays.discount_count || 0),
+      offset_amount: money(pays.offset_amount),
     },
     profit: {
       cost,
       costed_sales: costedSales,
       profit: money(r2(costedSales - cost)),
+      // T-401: 이익 − 매출 할인 + 할인 되돌림 (매입 할인은 넣지 않음 — 설계 2.4, 사용자 확인 U-3)
+      profit_after_discount: money(r2(costedSales - cost - money(x.sale_discounts?.amount) + money(x.discount_reversals?.amount))),
       margin_pct: x.margin_pct == null ? null : Number(x.margin_pct),
       cost_missing_count: Number(sales.cost_missing_count || 0),
     },

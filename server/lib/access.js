@@ -41,7 +41,7 @@ function noCreditConfirm(req) {
 function receiveOnly(req) {
   const k = req.body && typeof req.body === 'object' ? req.body.entry_kind : undefined;
   if (k === undefined || k === null || k === '' || k === 'receive') return null;
-  return { field: 'entry_kind', message: '환불 등록은 중매인(주인)만 할 수 있습니다.' };
+  return { field: 'entry_kind', message: '환불·할인 등록은 중매인(주인)만 할 수 있습니다.' }; // T-401: discount 도 여기서 막힌다
 }
 // R-43 (F-17): 파일 전송 기능이 꺼져 있으면 로그인 확인보다 먼저 404 — 기존 보안 회귀 N-10 그대로
 function sfUploadGate() {
@@ -131,6 +131,11 @@ function buildRules(env = process.env) {
     ['R-55', 'GET', '/api/partners/:id/reminder', OWNER], // T-214 입금 안내 미리보기·발송 이력 — 주인 전용
     ['R-56', 'POST', '/api/partners/:id/reminder', OWNER, { ui: 'partner.reminder' }],
     ['R-57', 'POST', '/api/partners/:id/reminder/copy', OWNER, { ui: 'partner.reminder' }],
+    // T-401 정산 할인·상계 — 입력·취소는 주인만, 상계 목록은 전원 조회
+    ['R-58', 'POST', '/api/payments/:id/cancel', OWNER, { ui: 'payment.discount_cancel' }],
+    ['R-59', 'POST', '/api/offsets', OWNER, { ui: 'offset.create' }],
+    ['R-60', 'POST', '/api/offsets/:id/cancel', OWNER, { ui: 'offset.cancel' }],
+    ['R-61', 'GET', '/api/offsets', ALL],
   ];
 }
 
@@ -209,6 +214,8 @@ function allowedUi(role, rules = buildRules()) {
     // 본문 조건으로 막히는 부분 기능도 화면에 알려 준다
     out.add('payment.receive_only');
     if (!envFlag('STAFF_INPUT_CAN_CONFIRM_CREDIT')) out.add('credit.confirm_blocked');
+  } else {
+    out.add('payment.discount'); // T-401: 수금 등록의 할인 구분(R-34 본문 조건) — 주인만
   }
   return [...out].sort();
 }

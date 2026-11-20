@@ -3,7 +3,7 @@
 // - 미수 연령: 거래처별 미수를 매출일 기준 30일 이내 / 31–60 / 61–90 / 90일 초과로. 줄을 누르면 매출별 남은 미수
 // 금액 계산은 모두 서버(DB NUMERIC)에서 하고, 화면은 받은 숫자를 그대로 보여 준다.
 import { Fragment, useEffect, useId, useState } from 'react';
-import { fetchPartnerLedger, fetchReceivablesAging } from '../api';
+import { fetchPartnerLedger, fetchReceivablesAging, createOffset, cancelOffset } from '../api';
 import { fetchPayableLedger, fetchPayablesAging } from '../lib/payablesApi';
 import { kstTodayYmd } from '../lib/dates';
 import PaymentReminderModal from '../components/PaymentReminderModal'; // T-214 입금 안내
@@ -12,6 +12,8 @@ import './PartnerLedger.css';
 
 /** 받을 돈 장부가 있는 거래처 유형(server ledger-routes RECEIVABLE_PARTNER_TYPES 와 같음) — 입금 안내 버튼(T-214) */
 const RECEIVABLE_LEDGER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
+/** 상계 가능한 유형 = 매입·판매를 함께 하는 유형(server settlement-routes OFFSET_PARTNER_TYPES 와 같음) — T-401 */
+const OFFSET_TYPES = new Set(['same_market', 'wholesaler', 'market_wholesaler']);
 
 export const won = (n) => (n == null ? '-' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 }));
 /**
@@ -55,8 +57,10 @@ const KIND_CLASS = {
   sale: 'sale', return: 'return', receipt: 'receipt', refund_cash: 'refund', sale_cancelled: 'cancelled',
   // T-201 지급 원장 — 매입(+)은 매출과, 지급(−)은 수금과 같은 색
   purchase: 'sale', payment: 'receipt', purchase_cancelled: 'cancelled', payment_cancelled: 'cancelled',
+  // T-401 정산 할인·상계
+  discount: 'discount', offset: 'offset', discount_reversal: 'refund', discount_cancelled: 'cancelled', offset_cancelled: 'cancelled',
 };
-const CANCELLED_KINDS = new Set(['sale_cancelled', 'purchase_cancelled', 'payment_cancelled']);
+const CANCELLED_KINDS = new Set(['sale_cancelled', 'purchase_cancelled', 'payment_cancelled', 'discount_cancelled', 'offset_cancelled']);
 
 /** 기간 버튼 — 기본은 최근 3개월([가정] 설계 T104-U-7). 날짜는 KST 기준 */
 const PERIODS = [
@@ -110,6 +114,10 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [reminderOpen, setReminderOpen] = useState(false); // T-214
+  // T-401 상계: offsetDlg = { receivable, payable, amount, memo, busy, err } | null, reloadKey 로 원장 다시 읽기
+  const [offsetDlg, setOffsetDlg] = useState(null);
+  const [cancelOfs, setCancelOfs] = useState(null); // { id, amount, reason, busy, err }
+  const [reloadKey, setReloadKey] = useState(0);
   useModalBehavior(!!partner, onClose);
 
   useEffect(() => {
@@ -129,7 +137,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
     return () => {
       alive = false;
     };
-  }, [partner, range.from, range.to, includeCancelled, payable]);
+  }, [partner, range.from, range.to, includeCancelled, payable, reloadKey]);
 
   if (!partner) return null;
   const pickPeriod = (key) => {
@@ -149,13 +157,55 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   const diff = data?.check?.diff || 0;
   // T-214 입금 안내 — 받을 돈 장부가 있는 거래처만(매입처 제외). 미수 0 이어도 열 수는 있다(모달이 안내)
   const canRemind = !payable && !!data && RECEIVABLE_LEDGER_TYPES.has(data.partner?.type) && can('partner.reminder'); // T-213 주인만
+  // T-401 상계 버튼 — 매입·판매를 함께 하는 거래처, 주인만
+  const canOffset = !payable && !!data && OFFSET_TYPES.has(data.partner?.type) && can('offset.create');
+  const openOffset = async () => {
+    setOffsetDlg({ loading: true });
+    try {
+      const [rv, pv] = await Promise.all([fetchPartnerLedger(partner.id, {}), fetchPayableLedger(partner.id, {})]);
+      const receivable = Number(rv.check?.sale_based_due ?? rv.closing_balance) || 0;
+      const payableAmt = Number(pv.closing_balance) || 0;
+      const max = Math.max(0, Math.min(receivable, payableAmt));
+      setOffsetDlg({ receivable, payable: payableAmt, max, amount: max ? String(max) : '', memo: '' });
+    } catch (e) {
+      setOffsetDlg({ err: e.message, receivable: 0, payable: 0, max: 0, amount: '', memo: '' });
+    }
+  };
+  const submitOffset = async (ev) => {
+    ev.preventDefault();
+    const amt = Number(String(offsetDlg.amount).replace(/,/g, ''));
+    if (!(amt > 0) || amt > offsetDlg.max) {
+      setOffsetDlg((d) => ({ ...d, err: `상계 금액은 0보다 크고 ${won(d.max)}원 이하로 넣으세요.` }));
+      return;
+    }
+    setOffsetDlg((d) => ({ ...d, busy: true, err: '' }));
+    try {
+      await createOffset({ partner_id: partner.id, amount: amt, memo: offsetDlg.memo.trim() || undefined });
+      setOffsetDlg(null);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setOffsetDlg((d) => ({ ...d, busy: false, err: e.message }));
+    }
+  };
+  const submitCancelOffset = async (ev) => {
+    ev.preventDefault();
+    if (!cancelOfs.reason.trim()) { setCancelOfs((c) => ({ ...c, err: '취소 사유를 입력하세요.' })); return; }
+    setCancelOfs((c) => ({ ...c, busy: true, err: '' }));
+    try {
+      await cancelOffset(cancelOfs.id, { reason: cancelOfs.reason.trim() });
+      setCancelOfs(null);
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setCancelOfs((c) => ({ ...c, busy: false, err: e.message }));
+    }
+  };
 
   return (
     <div className="main-modal-backdrop ledger-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="main-modal main-modal--wide ledger-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="main-modal-header ledger-header">
           <h2 id={titleId}>{partner.name} {payable ? '지급 원장' : '원장'}</h2>
-          <p className="ledger-sub">{payable ? '줄 돈 장부 · 미지급 잔액 = 매입 − 지급' : '받을 돈 장부 · 잔액 = 매출 − 반품 − 수금 + 환불 지급'}</p>
+          <p className="ledger-sub">{payable ? '줄 돈 장부 · 미지급 잔액 = 매입 − 지급 − 매입 할인 − 상계' : '받을 돈 장부 · 잔액 = 매출 − 반품 − 수금 − 할인 − 상계 + 환불 지급'}</p>
         </div>
         <div className="main-modal-body">
           <div className="ledger-controls">
@@ -220,8 +270,20 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
                 </div>
                 <div>
                   <dt>지급</dt>
-                  <dd className="is-minus">−{won(t.payments)}</dd>
+                  <dd className="is-minus">−{won((t.payments || 0) - (t.discounts || 0) - (t.offsets || 0))}</dd>
                 </div>
+                {t.discounts > 0 && (
+                <div>
+                  <dt>매입 할인</dt>
+                  <dd className="is-minus">−{won(t.discounts)}</dd>
+                </div>
+                )}
+                {t.offsets > 0 && (
+                <div>
+                  <dt>상계</dt>
+                  <dd className="is-minus">−{won(t.offsets)}</dd>
+                </div>
+                )}
                 <div className="ledger-summary-closing">
                   <dt>미지급 잔액</dt>
                   <dd>{won(data.closing_balance)}</dd>
@@ -245,10 +307,28 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
                   <dt>수금</dt>
                   <dd className="is-minus">−{won(t.receipts)}</dd>
                 </div>
+                {t.discounts > 0 && (
+                <div>
+                  <dt>할인</dt>
+                  <dd className="is-minus">−{won(t.discounts)}</dd>
+                </div>
+                )}
+                {t.offsets > 0 && (
+                <div>
+                  <dt>상계</dt>
+                  <dd className="is-minus">−{won(t.offsets)}</dd>
+                </div>
+                )}
                 <div>
                   <dt>환불 지급</dt>
                   <dd className="is-plus">+{won(t.refunds)}</dd>
                 </div>
+                {t.discount_reversals > 0 && (
+                <div>
+                  <dt>할인 되돌림</dt>
+                  <dd className="is-plus">+{won(t.discount_reversals)}</dd>
+                </div>
+                )}
                 <div className="ledger-summary-closing">
                   <dt>기말 잔액</dt>
                   <dd>{won(data.closing_balance)}</dd>
@@ -291,6 +371,11 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
                           <td className="ledger-desc">
                             {e.description}
                             {e.memo && e.kind !== 'refund_cash' ? <span className="ledger-memo"> · {e.memo}</span> : null}
+                            {e.kind === 'offset' && e.offset_id && can('offset.cancel') && (
+                              <button type="button" className="ledger-inline-btn" onClick={() => setCancelOfs({ id: e.offset_id, amount: e.decrease, reason: '' })} aria-label={`상계 #${e.offset_id} 취소`}>
+                                상계 취소
+                              </button>
+                            )}
                           </td>
                           {CANCELLED_KINDS.has(e.kind) ? (
                             <>
@@ -330,6 +415,11 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
             거래명세서
           </button>
           )}
+          {canOffset && (
+          <button type="button" className="main-modal-btn secondary ledger-offset-btn" onClick={openOffset}>
+            상계
+          </button>
+          )}
           {canRemind && (
           <button type="button" className="main-modal-btn secondary ledger-remind-btn" onClick={() => setReminderOpen(true)}>
             입금 안내 보내기
@@ -341,6 +431,57 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
         </div>
       </div>
       {reminderOpen && <PaymentReminderModal partner={partner} onClose={() => setReminderOpen(false)} />}
+      {offsetDlg && (
+        <div className="main-modal-backdrop ledger-sub-backdrop" role="presentation" onMouseDown={(ev) => ev.target === ev.currentTarget && !offsetDlg.busy && setOffsetDlg(null)}>
+          <div className="main-modal ledger-offset-modal" role="dialog" aria-modal="true" aria-label="상계">
+            <div className="main-modal-header"><h2>상계 — {partner.name}</h2></div>
+            <form className="main-modal-body main-modal-form" onSubmit={submitOffset}>
+              {offsetDlg.loading ? <p className="main-loading">받을 돈·줄 돈 불러오는 중…</p> : (
+                <>
+                  {offsetDlg.err && <div className="main-alert-banner" role="alert">{offsetDlg.err}</div>}
+                  <dl className="ledger-summary ledger-offset-summary">
+                    <div><dt>받을 돈(미수)</dt><dd>{won(offsetDlg.receivable)}</dd></div>
+                    <div><dt>줄 돈(미지급)</dt><dd>{won(offsetDlg.payable)}</dd></div>
+                    <div className="ledger-summary-closing"><dt>최대 상계액</dt><dd>{won(offsetDlg.max)}</dd></div>
+                  </dl>
+                  <p className="ledger-sub">받을 돈과 줄 돈을 같은 금액만큼 한 번에 지웁니다. 현금 수금·지급 합계에는 들어가지 않습니다. 오래된 매출·매입부터 채웁니다.</p>
+                  <label className="ledger-offset-field">
+                    상계 금액
+                    <input type="text" inputMode="decimal" value={offsetDlg.amount} onChange={(ev) => setOffsetDlg((d) => ({ ...d, amount: ev.target.value }))} disabled={!offsetDlg.max} />
+                  </label>
+                  <label className="ledger-offset-field">
+                    메모
+                    <input type="text" maxLength={500} value={offsetDlg.memo} onChange={(ev) => setOffsetDlg((d) => ({ ...d, memo: ev.target.value }))} placeholder="예: 11월분 맞정산" />
+                  </label>
+                </>
+              )}
+              <div className="main-modal-footer">
+                <button type="button" className="main-modal-btn secondary" onClick={() => setOffsetDlg(null)} disabled={offsetDlg.busy}>닫기</button>
+                <button type="submit" className="main-modal-btn primary" disabled={offsetDlg.busy || offsetDlg.loading || !offsetDlg.max}>{offsetDlg.busy ? '처리 중…' : '상계 저장'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {cancelOfs && (
+        <div className="main-modal-backdrop ledger-sub-backdrop" role="presentation" onMouseDown={(ev) => ev.target === ev.currentTarget && !cancelOfs.busy && setCancelOfs(null)}>
+          <div className="main-modal ledger-offset-modal" role="dialog" aria-modal="true" aria-label="상계 취소">
+            <div className="main-modal-header"><h2>상계 취소</h2></div>
+            <form className="main-modal-body main-modal-form" onSubmit={submitCancelOffset}>
+              {cancelOfs.err && <div className="main-alert-banner" role="alert">{cancelOfs.err}</div>}
+              <p className="ledger-sub">상계 #{cancelOfs.id} {won(cancelOfs.amount)}원을 취소합니다. 받을 돈과 줄 돈이 함께 그만큼 다시 늘어납니다.</p>
+              <label className="ledger-offset-field">
+                취소 사유
+                <input type="text" maxLength={200} value={cancelOfs.reason} onChange={(ev) => setCancelOfs((c) => ({ ...c, reason: ev.target.value }))} placeholder="예: 금액 오입력" required />
+              </label>
+              <div className="main-modal-footer">
+                <button type="button" className="main-modal-btn secondary" onClick={() => setCancelOfs(null)} disabled={cancelOfs.busy}>닫기</button>
+                <button type="submit" className="main-modal-btn primary tc-btn-danger" disabled={cancelOfs.busy || !cancelOfs.reason.trim()}>{cancelOfs.busy ? '처리 중…' : '취소 실행'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
