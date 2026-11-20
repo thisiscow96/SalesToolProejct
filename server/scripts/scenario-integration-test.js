@@ -689,8 +689,9 @@ async function main() {
   });
   record(
     'S-017',
-    r.status === 500 && String(r.json?.message || '').includes('거래처'),
-    `status=${r.status} ${r.json?.message}`
+    // 기대결과 "500 또는 에러 메시지" — 입력 검증 오류는 2026-11-20부터 400으로 응답(S-012와 같은 4xx/5xx 기준)
+    r.status >= 400 && String(r.json?.message || '').includes('거래처'),
+    `status=${r.status} (기대: 4xx/5xx) ${r.json?.message}`
   );
 
   // ----- S-018

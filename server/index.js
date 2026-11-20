@@ -403,7 +403,8 @@ app.post('/api/auth/register', async (req, res) => {
 // 로그인 API (중매인 번호 + 비밀번호 → 사용자 정보 반환)
 app.post('/api/auth/login', async (req, res) => {
   const { agent_no, password } = req.body || {};
-  console.log('[login] body =', req.body);
+  // 비밀번호가 로그에 남지 않도록 중매인 번호만 기록한다
+  console.log('[login] agent_no =', agent_no);
   if (!agent_no || password === undefined) {
     return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
@@ -1078,6 +1079,13 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
   }
 });
 
+/** 입력 검증 실패 — 400으로 응답하기 위한 오류 */
+function badRequest(message) {
+  const e = new Error(message);
+  e.statusCode = 400;
+  return e;
+}
+
 // 수금 등록 (배분 + 매출 paid 갱신)
 app.post('/api/payments', async (req, res) => {
   const userId = await getUserId(req);
@@ -1119,14 +1127,22 @@ app.post('/api/payments', async (req, res) => {
         const sid = parseInt(a.sale_id, 10);
         const al = Number(a.amount);
         if (!Number.isFinite(sid) || !(al > 0)) {
-          throw new Error('배분 행에 매출 ID와 금액이 필요합니다.');
+          throw badRequest('배분 행에 매출 ID와 금액이 필요합니다.');
         }
         const s = await client.query(
-          `SELECT id, partner_id, total_amount, paid_amount FROM sale WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+          `SELECT id, partner_id, total_amount, paid_amount, status FROM sale WHERE id = $1 AND user_id = $2 FOR UPDATE`,
           [sid, userId]
         );
         const sale = s.rows[0];
-        if (!sale || sale.partner_id !== pid) throw new Error(`매출 ${sid} 는 선택한 거래처와 맞지 않습니다.`);
+        if (!sale || sale.partner_id !== pid) throw badRequest(`매출 ${sid} 는 선택한 거래처와 맞지 않습니다.`);
+        // 매뉴얼 4.2: 수금은 미수 매출에만, 미수 금액까지만 배분한다 (화면 검증을 API에서도 동일하게 적용)
+        if (sale.status === 'refunded' || sale.status === 'cancelled') {
+          throw badRequest(`매출 ${sid} 는 환불·취소된 매출이라 수금을 배분할 수 없습니다.`);
+        }
+        const due = Number(sale.total_amount) - Number(sale.paid_amount);
+        if (al > due + 0.01) {
+          throw badRequest(`매출 ${sid} 의 미수(${due})보다 많이 배분할 수 없습니다.`);
+        }
         await client.query(`UPDATE sale SET paid_amount = paid_amount + $1, updated_at = NOW() WHERE id = $2`, [al, sid]);
         await syncSalePaymentStatus(client, sid);
         await client.query(`INSERT INTO payment_allocation (payment_id, sale_id, amount) VALUES ($1,$2,$3)`, [paymentId, sid, al]);
@@ -1137,7 +1153,7 @@ app.post('/api/payments', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('POST payments error:', err);
-    res.status(500).json({ ok: false, message: err.message || '수금 등록에 실패했습니다.' });
+    res.status(err.statusCode || 500).json({ ok: false, message: err.message || '수금 등록에 실패했습니다.' });
   } finally {
     client.release();
   }
