@@ -23,3 +23,29 @@ export function computeAutoRefundAmount(s, requestQty) {
   const ratio = Math.min(1, rq / remaining);
   return Math.round(ratio * paid * 100) / 100;
 }
+
+/** 수량은 DB에 소수 셋째 자리까지(NUMERIC(12,3)) 저장된다 */
+export const REFUND_QTY_MAX_DECIMALS = 3;
+
+/** 환불 요청수량 기본값 = 환불 가능 수량 (부동소수 오차 없이 소수 셋째 자리까지) */
+export function defaultRefundQty(s) {
+  const maxQ = computeRefundPossibleQty(s);
+  return maxQ > 0 ? String(Math.round(maxQ * 1000) / 1000) : '';
+}
+
+/**
+ * 환불 요청수량 검증 (T-107) — 형식(글자 수)이 아니라 범위로 본다: 0 < 수량 ≤ 환불 가능 수량, 소수 셋째 자리까지.
+ * 예전 규칙 "문자열 최소 3자리"는 기본값(예: 10, 5)을 그대로 저장하면 거절했다.
+ * 반환: 문제가 없으면 null, 있으면 사용자에게 보여 줄 문구(매출 번호는 호출하는 쪽이 붙인다)
+ */
+export function validateRefundQty(input, maxQ, maxLabel = String(maxQ)) {
+  const str = String(input ?? '').trim().replace(/,/g, '');
+  if (!str) return '환불 요청수량을 입력하세요.';
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(str)) return '환불 요청수량은 숫자로 입력하세요. (예: 10, 0.5, 2.125)';
+  const qty = Number(str);
+  if (!Number.isFinite(qty) || qty <= 0) return '환불 요청수량은 0보다 커야 합니다.';
+  const dec = str.includes('.') ? str.split('.')[1].length : 0;
+  if (dec > REFUND_QTY_MAX_DECIMALS) return `환불 요청수량은 소수 ${REFUND_QTY_MAX_DECIMALS}자리까지 입력할 수 있습니다.`;
+  if (!Number.isFinite(Number(maxQ)) || qty > Number(maxQ) + 1e-9) return `환불 요청수량이 환불 가능 수량(${maxLabel})을 초과합니다.`;
+  return null;
+}

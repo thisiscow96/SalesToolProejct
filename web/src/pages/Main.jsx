@@ -17,7 +17,7 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
-import { computeRefundPossibleQty, computeAutoRefundAmount } from '../lib/refund';
+import { computeRefundPossibleQty, computeAutoRefundAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import './Main.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -993,9 +993,8 @@ function TabSales() {
   }, [refundableSales, refundPartnerSearch]);
 
   const newRefundDraft = (s) => {
-    const maxQ = computeRefundPossibleQty(s);
     return {
-      quantity: String(maxQ > 0 ? maxQ : ''),
+      quantity: defaultRefundQty(s),
       reasonCode: REFUND_REASON_CUSTOMER,
       reasonOther: '',
     };
@@ -1124,18 +1123,13 @@ function TabSales() {
     try {
       for (const s of rows) {
         const d = refundDraft[s.id] || newRefundDraft(s);
-        const qtyStr = String(d.quantity ?? '').trim();
-        if (qtyStr.length < 3) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량은 최소 3자리로 입력하세요. (예: 0.001, 10.5)`);
-        }
-        const qty = Number(d.quantity);
+        // 수량은 형식(글자 수)이 아니라 범위로 검증 — 기본값(환불 가능 수량)을 그대로 저장할 수 있어야 한다 (T-107)
         const maxQ = computeRefundPossibleQty(s);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량을 입력하세요.`);
+        const qtyErr = validateRefundQty(d.quantity, maxQ, formatKoNumber(maxQ));
+        if (qtyErr) {
+          throw new Error(`매출 #${s.id}: ${qtyErr}`);
         }
-        if (qty > maxQ + 1e-9) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량이 환불 가능 수량(${formatKoNumber(maxQ)})을 초과합니다.`);
-        }
+        const qty = Number(String(d.quantity).trim().replace(/,/g, ''));
         const rc = d.reasonCode || REFUND_REASON_CUSTOMER;
         if (rc === REFUND_REASON_CUSTOM && !String(d.reasonOther ?? '').trim()) {
           throw new Error(`매출 #${s.id}: 직접 기입 사유를 입력하세요.`);
