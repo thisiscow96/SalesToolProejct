@@ -458,3 +458,18 @@
     overflow-wrap: anywhere;
   }
 }
+
+/* 외상 한도 넘은 거래처 (T-207) — 있을 때만 보이는 카드, 왼쪽 빨간 띠 */
+.dash-over {
+  border-left: 4px solid var(--c-danger);
+}
+.dash-over-count {
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

@@ -5,6 +5,7 @@
 // Main.jsx 병행 작업과 겹치지 않게 별도 파일로 둔다(API 호출도 이 파일 안에서).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_BASE, getToken, fetchPartners } from '../api';
+import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
 import './FifoSale.css';
 
 const SALE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
@@ -104,6 +105,7 @@ export function FifoSaleModal({ row, onClose, onDone }) {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(null); // 저장 결과(이어서 판매용)
+  const [creditWarn, setCreditWarn] = useState(null); // T-207 외상 한도 경고(서버 409 CREDIT_LIMIT)
   const [stock, setStock] = useState(null); // 저장 뒤 다시 읽은 재고·판매 가능 { inventory_qty, sellable_qty }
   const seq = useRef(0);
   const qtyRef = useRef(null);
@@ -169,19 +171,28 @@ export function FifoSaleModal({ row, onClose, onDone }) {
     qtyRef.current?.focus();
   };
 
-  const submit = async (e) => {
+  // 판매처·수량·단가·판매일을 고치면 이전 한도 경고는 맞지 않으므로 지운다
+  useEffect(() => setCreditWarn(null), [partnerId, quantity, unitPrice, saleDate]);
+
+  const submit = (e) => {
     e.preventDefault();
+    save(false);
+  };
+  /** confirmed=true 는 외상 한도 경고를 보고 「한도 넘어도 저장」을 누른 경우(T-207) */
+  const save = async (confirmed) => {
     if (!canSave) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await createFifoSale({
+      const res = await fifoRequest('POST', '/sales', {
         partner_id: Number(partnerId),
         sale_date: saleDate,
         memo: memo.trim() || undefined,
         items: [{ product_id: row.product_id, quantity: String(quantity), unit_price: String(unitPrice) }],
-      });
-      const s = res.sales[0];
+        ...(confirmed ? { credit_confirmed: true } : {}),
+      }).then((d) => ({ ...d.data, credit_warnings: d.credit_warnings }));
+      const s = { ...res.sales[0], credit_warnings: res.credit_warnings || null };
+      setCreditWarn(null);
       setDone(s);
       setPreview(null);
       // 머리말의 재고·판매 가능을 저장 뒤 값으로(이어서 판매할 때 최대치도 이 값)
@@ -190,6 +201,11 @@ export function FifoSaleModal({ row, onClose, onDone }) {
         .catch(() => setStock(null));
       onDone?.(`${row.product_name} ${fmt(s.quantity)}${row.unit ? ' ' + row.unit : ''} 판매 저장(매출 #${s.sale_id})`, res);
     } catch (er) {
+      const cw = creditWarningsOf(er);
+      if (cw) {
+        setCreditWarn(cw);
+        return;
+      }
       setError(er);
       if (er.code === 'STOCK_SHORT') loadPreview();
     } finally {
@@ -227,10 +243,14 @@ export function FifoSaleModal({ row, onClose, onDone }) {
                 매출 {fmt(done.total_amount)}원 · 원가 {fmt(done.cost)}원 · 이익 {fmt(done.profit)}원
                 {done.margin_pct != null ? ` (${done.margin_pct}%)` : ''}
               </p>
+              {done.credit_warnings && (
+                <p className="credit-saved-note">외상 한도를 넘겨 저장했습니다 — {done.credit_warnings.map(creditLine).join(' · ')}</p>
+              )}
               <p className="fifo-hint">거래명세서는 매출정보 탭 또는 거래처 탭에서 볼 수 있습니다.</p>
             </div>
           ) : (
             <form id="fifo-sale-form" className="main-modal-form tc-form fifo-form" onSubmit={submit}>
+              <CreditLimitWarning warnings={creditWarn} busy={submitting} onConfirm={() => save(true)} onCancel={() => setCreditWarn(null)} />
               {error && (
                 <div className="main-alert-banner tc-alert" role="alert">
                   <p className="tc-alert-msg">{error.message}</p>

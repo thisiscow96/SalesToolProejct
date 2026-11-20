@@ -9,6 +9,41 @@ import { kstTodayYmd } from '../lib/dates';
 import './PartnerLedger.css';
 
 export const won = (n) => (n == null ? '-' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 }));
+/**
+ * 외상 한도·사용률 (T-207) — 사용 금액은 기간과 무관한 지금 미수(매출별 미수 합).
+ * 막대는 100%에서 멈추고, 넘으면 빨간색 + 초과 금액.
+ */
+function CreditUsage({ credit }) {
+  const pct = credit.usage_pct;
+  const width = pct == null ? (credit.over ? 100 : 0) : Math.min(pct, 100);
+  const level = credit.over ? 'over' : pct != null && pct >= 80 ? 'near' : 'ok';
+  return (
+    <div className={`ledger-credit ledger-credit--${level}`}>
+      <div className="ledger-credit-head">
+        <span className="ledger-credit-title">외상 한도</span>
+        <span className="ledger-credit-nums">
+          지금 미수 <strong>{won(credit.receivable)}</strong> / 한도 {won(credit.credit_limit)}
+          {pct != null && <> ({pct}%)</>}
+        </span>
+      </div>
+      <div
+        className="ledger-credit-bar"
+        role="progressbar"
+        aria-label="외상 한도 사용률"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(width)}
+        aria-valuetext={credit.over ? `한도 초과 ${won(credit.over_amount)}원` : `남은 한도 ${won(credit.available)}원`}
+      >
+        <span style={{ width: `${width}%` }} />
+      </div>
+      <p className="ledger-credit-foot">
+        {credit.over ? <>한도 초과 <strong>{won(credit.over_amount)}원</strong> — 다음 판매 때 경고합니다.</> : <>남은 한도 {won(credit.available)}원</>}
+      </p>
+    </div>
+  );
+}
+
 const qtyText = (n) => (n == null ? '' : Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 3 }));
 
 const KIND_CLASS = {
@@ -212,6 +247,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
                 </div>
               </dl>
               )}
+              {!payable && data.credit && <CreditUsage credit={data.credit} />}
               {data.entries.length === 0 && !data.from ? (
                 <p className="main-empty">거래 기록이 없습니다.</p>
               ) : (

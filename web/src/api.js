@@ -212,15 +212,22 @@ export async function createPurchase(body) {
   return data.data;
 }
 
-export async function convertPurchasesToSales(items) {
+/**
+ * 매출 전환. opts.credit_confirmed=true 는 외상 한도 경고를 보고 저장하는 경우(T-207).
+ * 실패 오류에는 서버 code·detail 을 붙인다(409 CREDIT_LIMIT 이면 detail.credit_warnings).
+ * 돌려주는 값은 예전과 같은 data 배열이고, 한도를 넘겨 저장했으면 배열에 credit_warnings 속성이 붙는다.
+ */
+export async function convertPurchasesToSales(items, opts = {}) {
   const res = await apiFetch(`${API_BASE}/purchases/convert-to-sales`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items, ...(opts.credit_confirmed ? { credit_confirmed: true } : {}) }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.message || '매출 전환 실패');
-  return data.data;
+  if (!res.ok) throw Object.assign(new Error(data.message || '매출 전환 실패'), { status: res.status, code: data.code || null, detail: data.detail || null });
+  const out = data.data;
+  if (Array.isArray(out) && data.credit_warnings) out.credit_warnings = data.credit_warnings;
+  return out;
 }
 
 export async function createPayment(body) {

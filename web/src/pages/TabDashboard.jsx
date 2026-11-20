@@ -149,6 +149,45 @@ export default function TabDashboard({ onNavigate }) {
         )}
       </section>
 
+      {/* T-207 외상 한도를 넘은 거래처 — 있을 때만 보인다(넘은 금액 큰 순 상위 5) */}
+      {data.over_limit_partners?.count > 0 && (
+        <section className="dash-card dash-over" aria-labelledby="dash-over-title">
+          <div className="dash-card-head">
+            <h3 id="dash-over-title" className="dash-card-title">
+              외상 한도 넘은 거래처 <span className="dash-over-count">{data.over_limit_partners.count}곳</span>
+            </h3>
+            <button type="button" className="dash-link" onClick={() => go('partners')}>
+              거래처 <span aria-hidden="true">›</span>
+            </button>
+          </div>
+          <ol className="dash-list">
+            {data.over_limit_partners.items.map((p) => (
+              <li key={p.partner_id} className="dash-row">
+                <button
+                  type="button"
+                  className="dash-row-btn"
+                  onClick={() => setLedgerPartner({ id: p.partner_id, name: p.partner_name, type: p.partner_type })}
+                  aria-label={`${p.partner_name} 원장 보기, 미수 ${won(p.receivable)}원, 한도 ${won(p.credit_limit)}원, ${won(p.over_amount)}원 초과`}
+                >
+                  <span className="dash-row-main">
+                    <span className="dash-row-name">{p.partner_name}</span>
+                    <span className="dash-row-sub">
+                      미수 {won(p.receivable)} / 한도 {won(p.credit_limit)}
+                      {p.usage_pct != null ? ` (${p.usage_pct}%)` : ''}
+                    </span>
+                  </span>
+                  <span className="dash-row-amount dash-num dash-num--danger">+{won(p.over_amount)}</span>
+                  <span className="dash-row-go" aria-hidden="true">원장 ›</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+          {data.over_limit_partners.count > data.over_limit_partners.items.length && (
+            <p className="dash-foot">상위 {data.over_limit_partners.items.length}곳만 보입니다. 나머지는 거래처 탭에서 확인하세요.</p>
+          )}
+        </section>
+      )}
+
       <div className="dash-lists">
         <section className="dash-card" aria-labelledby="dash-stale-title">
           <div className="dash-card-head">

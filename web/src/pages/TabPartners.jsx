@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { fetchPartners, fetchReceivablesAging, getToken, getUser, API_BASE } from '../api';
 import { PartnerLedgerModal, ReceivablesAgingView, won } from './PartnerLedger';
 import CardMoreToggle from '../components/CardMoreToggle';
+import '../components/CreditLimitWarning.css';
 import './TabPartners.css';
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
@@ -57,8 +58,18 @@ async function sendPartner(method, url, body) {
 export const createPartner = (body) => sendPartner('POST', `${API_BASE}/partners`, body);
 export const updatePartner = (id, body) => sendPartner('PUT', `${API_BASE}/partners/${encodeURIComponent(id)}`, body);
 
-const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', location: '', address: '', memo: '' };
-const FIELDS = ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo'];
+const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', location: '', address: '', memo: '', credit_limit: '' };
+const FIELDS = ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo', 'credit_limit'];
+
+/* ── 외상 한도 (T-207) — 서버는 NUMERIC 문자열("10000.00")로 준다. 입력은 콤마 허용, 비우면 한도 없음 ── */
+/** 서버 값 → 입력칸 문자열("10000.00" → "10,000", null → "") */
+const limitToInput = (v) => (v == null || v === '' ? '' : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: 2 }));
+/** 입력칸 → 비교·전송용 정규 문자열("10,000" → "10000", "" → "") */
+const normLimit = (s) => {
+  const t = String(s ?? '').replace(/,/g, '').trim();
+  return t === '' ? '' : String(Number(t));
+};
+const LIMIT_RE = /^\d{1,12}(\.\d{1,2})?$/;
 
 /**
  * 거래처 등록·수정 모달.
@@ -82,6 +93,7 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
     if (partner) {
       const f = {};
       for (const k of FIELDS) f[k] = partner[k] == null ? '' : String(partner[k]);
+      f.credit_limit = limitToInput(partner.credit_limit);
       setForm(f);
     } else {
       setForm({ ...EMPTY_FORM, type: defaultType });
@@ -113,10 +125,20 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
       setErr('거래처 이름을 입력하세요.');
       return;
     }
+    const limitText = String(form.credit_limit ?? '').replace(/,/g, '').trim();
+    if (limitText !== '' && !LIMIT_RE.test(limitText)) {
+      setErr('외상 한도는 0 이상의 금액으로 입력하세요(비우면 한도 없음).');
+      return;
+    }
     let body;
     if (isEdit) {
       body = {};
       for (const k of FIELDS) {
+        if (k === 'credit_limit') {
+          const before = partner.credit_limit == null ? '' : String(Number(partner.credit_limit));
+          if (normLimit(form.credit_limit) !== before) body.credit_limit = limitText === '' ? null : limitText;
+          continue;
+        }
         const before = partner[k] == null ? '' : String(partner[k]);
         if (k in partner || form[k] !== '') {
           if (form[k].trim() !== before.trim()) body[k] = form[k];
@@ -127,7 +149,7 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
         return;
       }
     } else {
-      body = { ...form };
+      body = { ...form, credit_limit: limitText === '' ? null : limitText };
     }
     setSubmitting(true);
     (isEdit ? updatePartner(partner.id, body) : createPartner(body))
@@ -198,6 +220,24 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
                 주소
                 <input type="text" maxLength={2000} autoComplete="off" value={form.address} onChange={set('address')} />
               </label>
+              {RECEIVABLE_TYPES.has(form.type) && (
+                <label className="partner-field-wide">
+                  <span className="partner-label">외상 한도(원)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    maxLength={20}
+                    autoComplete="off"
+                    placeholder="비우면 한도 없음"
+                    aria-describedby={`${formId}-limit-hint`}
+                    value={form.credit_limit}
+                    onChange={set('credit_limit')}
+                  />
+                  <span id={`${formId}-limit-hint`} className="partner-hint">
+                    판매·매출 수정 후 미수가 이 금액을 넘으면 저장 전에 경고합니다(막지는 않음). 0 = 외상 없음.
+                  </span>
+                </label>
+              )}
               <label className="partner-field-full">
                 메모
                 <textarea rows={3} maxLength={2000} value={form.memo} onChange={set('memo')} />
@@ -215,6 +255,19 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
         </div>
       </div>
     </div>
+  );
+}
+
+/** 미수 칸 아래 한도 한 줄 — 한도 없는 거래처는 표시 안 함. 넘으면 빨간 글자 (T-207) */
+function creditLine(p, due) {
+  if (p.credit_limit == null || !RECEIVABLE_TYPES.has(p.type)) return null;
+  const limit = Number(p.credit_limit);
+  const over = Math.round(Number(due || 0) * 100) > Math.round(limit * 100);
+  const pct = limit > 0 ? ` · ${Math.round((Number(due || 0) / limit) * 1000) / 10}%` : '';
+  return (
+    <span className={'credit-limit-line' + (over ? ' credit-limit-line--over' : '')}>
+      {over ? '한도 초과 · ' : ''}한도 {won(limit)}{pct}
+    </span>
   );
 }
 
@@ -420,11 +473,19 @@ export default function TabPartners() {
                   <td data-card="key" data-label="미수" className="partner-due">
                     {(() => {
                       const d = dueMap.get(p.id);
-                      if (!d || !d.total_due) return <span className="partner-due-none">—</span>;
+                      if (!d || !d.total_due) {
+                        return (
+                          <>
+                            <span className="partner-due-none">—</span>
+                            {creditLine(p, 0)}
+                          </>
+                        );
+                      }
                       return (
                         <>
                           <span className="partner-due-amt">{won(d.total_due)}</span>
                           {d.d91p > 0 && <span className="partner-due-over">90일 초과 {won(d.d91p)}</span>}
+                          {creditLine(p, d.total_due)}
                         </>
                       );
                     })()}
