@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { fetchPartners, fetchReceivablesAging, getToken, getUser, API_BASE } from '../api';
 import { PartnerLedgerModal, ReceivablesAgingView, won } from './PartnerLedger';
+import CardMoreToggle from '../components/CardMoreToggle';
 import './TabPartners.css';
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
@@ -371,7 +372,7 @@ export default function TabPartners() {
         {dueErr && <p className="main-error">미수를 불러오지 못했습니다: {dueErr}</p>}
         <p className="partner-count">{shown.length === list.length ? `${list.length}곳` : `${shown.length}곳 / 전체 ${list.length}곳`}</p>
         <div className="main-table-wrap">
-          <table className="main-table partner-table">
+          <table className="main-table partner-table main-table--cards">
             <thead>
               <tr>
                 <th>거래처</th>
@@ -392,16 +393,16 @@ export default function TabPartners() {
             <tbody>
               {shown.map((p) => (
                 <tr key={p.id}>
-                  <td className="partner-name">{p.name}</td>
-                  <td>
+                  <td data-card="title" data-label="거래처" className="partner-name">{p.name}</td>
+                  <td data-card="sub" data-label="유형">
                     <span className={`partner-type partner-type--${p.type}`}>{partnerTypeLabel(p.type)}</span>
                   </td>
-                  <td>{p.contact || '-'}</td>
-                  <td>{p.phone || '-'}</td>
-                  <td>{p.location || '-'}</td>
-                  <td className="partner-address">{p.address || '-'}</td>
-                  <td className="main-col-memo">{p.memo || '-'}</td>
-                  <td className="partner-due">
+                  <td data-card="key" data-label="담당자">{p.contact || '-'}</td>
+                  <td data-card="key" data-label="연락처">{p.phone || '-'}</td>
+                  <td data-card="key" data-label="위치">{p.location || '-'}</td>
+                  <td data-card="extra" data-label="주소" className="partner-address">{p.address || '-'}</td>
+                  <td data-card="extra" data-label="메모" className="main-col-memo">{p.memo || '-'}</td>
+                  <td data-card="key" data-label="미수" className="partner-due">
                     {(() => {
                       const d = dueMap.get(p.id);
                       if (!d || !d.total_due) return <span className="partner-due-none">—</span>;
@@ -413,7 +414,7 @@ export default function TabPartners() {
                       );
                     })()}
                   </td>
-                  <td>
+                  <td data-card="action">
                     <span className="partner-actions">
                     {RECEIVABLE_TYPES.has(p.type) && (
                       <button
@@ -439,6 +440,7 @@ export default function TabPartners() {
                     </button>
                     </span>
                   </td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               ))}
             </tbody>

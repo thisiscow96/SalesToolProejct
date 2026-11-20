@@ -295,8 +295,24 @@
   }
 
   .stmt-table tfoot th,
-  .stmt-table tfoot td {
+  .stmt-table tfoot td,
+  .stmt-table tfoot tr:first-child th,
+  .stmt-table tfoot tr:first-child td {
     border: 0;
+  }
+
+  /* 합계 줄 위 구분선은 행 전체에 한 번(칸마다 그으면 끊겨 보임) */
+  .stmt-table tfoot tr:first-child {
+    border-top: 2px solid var(--c-border-strong);
+  }
+
+  .stmt-table tfoot tr {
+    padding: var(--sp-1) 0;
+  }
+
+  .stmt-table tfoot tr th,
+  .stmt-table tfoot tr td {
+    padding: var(--sp-1) 0;
   }
 
   .stmt-table tfoot .stmt-col-status {
