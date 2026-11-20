@@ -1395,6 +1395,8 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
   const client = await connectOr503(res);
   if (!client) return;
   const created = [];
+  // 입력·소유 오류는 4xx 로 돌려준다 (T-114, DEF-T112-03 — 예전에는 남의 매입 ID·판매처도 500 이었다)
+  const reqError = (status, message) => Object.assign(new Error(message), { httpStatus: status });
   try {
     await client.query('BEGIN');
     const wh = await getUserWarehouseLabel(client, userId);
@@ -1418,25 +1420,27 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       const saleDate = it.sale_date;
       const smemo = it.memo?.trim() || null;
       if (!Number.isFinite(purchaseId) || !Number.isFinite(custId) || !(qtyIn > 0) || !(upIn >= 0) || !saleDate) {
-        throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
+        throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       }
       const n = await roundQtyPrice(client, it.quantity, it.unit_price);
       const qty = Number(n.qty);
-      if (!(qty > 0)) throw new Error('각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
+      if (!(qty > 0)) throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       const pu = await client.query(
         `SELECT id, partner_id, product_id, quantity FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [purchaseId, userId]
       );
       const p = pu.rows[0];
-      if (!p) throw new Error(`매입 ${purchaseId} 를 찾을 수 없습니다.`);
+      // 남의 매입 ID 도 '없음'과 같은 404 — 다른 회원 매입의 존재를 알려 주지 않는다
+      if (!p) throw reqError(404, `매입 ${purchaseId} 를 찾을 수 없습니다.`);
       const al = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM purchase_allocation WHERE purchase_id = $1`, [purchaseId]);
       const allocated = Number(al.rows[0].s);
       const remaining = Number(p.quantity) - allocated;
-      if (qty > remaining + 1e-9) throw new Error(`매입 ${purchaseId} 의 남은 수량(${remaining})보다 많게 판매할 수 없습니다.`);
+      if (qty > remaining + 1e-9) throw reqError(400, `매입 ${purchaseId} 의 남은 수량(${remaining})보다 많게 판매할 수 없습니다.`);
 
       const cust = await client.query(`SELECT id, type, name, location, address FROM account WHERE id = $1 AND user_id = $2`, [custId, userId]);
       const c = cust.rows[0];
-      if (!c || !SALE_PARTNER_TYPES.has(c.type)) throw new Error('판매 가능한 거래처를 선택하세요.');
+      if (!c) throw reqError(404, '판매처를 찾을 수 없습니다.');
+      if (!SALE_PARTNER_TYPES.has(c.type)) throw reqError(400, '판매 가능한 거래처를 선택하세요.');
 
       await upsertInventoryDelta(client, userId, p.product_id, `-${n.qty}`);
 
@@ -1472,9 +1476,10 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
     res.status(201).json({ ok: true, data: created });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('convert-to-sales error:', err);
-    const msg = err.message || '매출 전환에 실패했습니다.';
-    const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
+    const code = err.httpStatus || (err.code === 'NEGATIVE_INVENTORY' ? 400 : 500);
+    if (code >= 500) console.error('convert-to-sales error:', err);
+    // 500 은 DB 오류 문구를 그대로 내보내지 않는다
+    const msg = code >= 500 ? '매출 전환에 실패했습니다.' : err.message || '매출 전환에 실패했습니다.';
     res.status(code).json({ ok: false, message: msg });
   } finally {
     client.release();
