@@ -35,6 +35,7 @@ import {
   purchaseMenuState,
   saleMenuState,
 } from './TradeCorrection';
+import { FifoSaleModal, FifoSellButton, SellableCell } from './FifoSale';
 import './Main.css';
 import '../styles/mobile.css';
 
@@ -396,13 +397,19 @@ function TabReorder() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
-  useEffect(() => {
-    setLoading(true);
+  // T-205 재고에서 바로 판매: 모달을 연 재고 행, 저장 알림
+  const [sellRow, setSellRow] = useState(null);
+  const [sellNotice, setSellNotice] = useState('');
+  const loadInventory = (quiet) => {
+    if (!quiet) setLoading(true);
     setErr('');
-    fetchInventory()
+    return fetchInventory()
       .then(setList)
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
+  };
+  useEffect(() => {
+    loadInventory();
   }, []);
   if (loading) return <p className="main-loading">불러오는 중…</p>;
   if (err) return <p className="main-error">{err}</p>;
@@ -411,6 +418,17 @@ function TabReorder() {
   const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
   return (
     <>
+      <CorrectionNotice text={sellNotice} onClear={() => setSellNotice('')} />
+      {sellRow && (
+        <FifoSaleModal
+          row={sellRow}
+          onClose={() => setSellRow(null)}
+          onDone={(msg) => {
+            setSellNotice(msg);
+            loadInventory(true);
+          }}
+        />
+      )}
       <div className="main-filters main-filters--csv-only">
         <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('inventory', list)}>엑셀(CSV) 다운로드</button>
       </div>
@@ -427,9 +445,11 @@ function TabReorder() {
               <th className="main-col-source">출처</th>
               <th className="main-col-partner">매입 거래처</th>
               <th className="main-col-qty">수량</th>
-              <th>단위</th>
+              <th className="main-col-sellable">판매 가능</th>
+              <th className="main-col-inv-unit">단위</th>
               <th className="main-col-date">최근 매입일</th>
               <th className="main-col-aging">경과일</th>
+              <th className="main-col-sell">판매</th>
             </tr>
           </thead>
           <tbody>
@@ -445,7 +465,8 @@ function TabReorder() {
                   <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
                   <td data-card="extra" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                  <td data-card="key" data-label="단위">{row.unit}</td>
+                  <td data-card="extra" data-label="판매 가능" className="num main-col-sellable"><SellableCell row={row} /></td>
+                  <td data-card="key" data-label="단위" className="main-col-inv-unit">{row.unit}</td>
                   <td data-card="key" data-label="최근 매입일" className="main-col-date">{formatInventoryDateOnly(row)}</td>
                   <td data-card="key" data-label="경과일" className="main-col-aging">
                     {level ? (
@@ -460,6 +481,7 @@ function TabReorder() {
                       '—'
                     )}
                   </td>
+                  <td data-card="action" className="main-col-sell"><FifoSellButton row={row} onClick={setSellRow} /></td>
                   <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               );
@@ -1892,7 +1914,12 @@ function TabSales({ navFilter } = {}) {
                   <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
                     <td data-card="sub" data-label="매출일" className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
                     <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
+                      <CellText>{row.product_name}</CellText>
+                      {row.entry_mode === 'fifo' && (
+                        <span className="fifo-badge" title={`재고에서 오래된 매입부터 나간 판매${row.allocation_count > 1 ? ` (매입 ${row.allocation_count}건에서)` : ''}`}>재고 판매</span>
+                      )}
+                    </td>
                     <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
                     <td data-card="extra" data-label="환불된 수량" className="num main-col-qty">{formatKoNumber(rf)}</td>
                     <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
