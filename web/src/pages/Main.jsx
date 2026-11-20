@@ -1689,7 +1689,7 @@ function TabPayments() {
                 <th>구분</th>
                 <th className="main-col-partner">거래처</th>
                 <th className="main-col-amount">금액</th>
-                <th>비고</th>
+                <th className="main-col-memo">비고</th>
               </tr>
             </thead>
             <tbody>
@@ -1699,7 +1699,7 @@ function TabPayments() {
                   <td><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
                   <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                   <td className="num main-col-amount">{formatKoNumber(row.amount)}</td>
-                  <td>{row.memo || '-'}</td>
+                  <td className="main-col-memo">{row.memo || '-'}</td>
                 </tr>
               ))}
             </tbody>
@@ -1904,7 +1904,7 @@ function TabProductMaster() {
                 <th>대분류</th>
                 <th>중분류</th>
                 <th>소분류</th>
-                <th>비고</th>
+                <th className="main-col-memo">비고</th>
                 <th className="main-col-date">등록일</th>
               </tr>
             </thead>
@@ -1918,7 +1918,7 @@ function TabProductMaster() {
                   <td>{row.category_large || '-'}</td>
                   <td>{row.category_mid || '-'}</td>
                   <td>{row.category_small || '-'}</td>
-                  <td>{row.memo || '-'}</td>
+                  <td className="main-col-memo">{row.memo || '-'}</td>
                   <td className="main-col-date">{formatProductCreatedYmd(row)}</td>
                 </tr>
               ))}
@@ -2604,7 +2604,7 @@ export default function Main() {
           <span className="main-logo-mark" aria-hidden="true" />
           판매툴
         </h1>
-        <span className="main-user">
+        <span className="main-user" title={user?.name ? `${user.name}님` : undefined}>
           <span className="main-user-avatar" aria-hidden="true">{(user?.name || '?').trim().charAt(0)}</span>
           <span className="main-user-name">{user?.name}님</span>
         </span>
