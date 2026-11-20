@@ -12,6 +12,7 @@
  * - 수량 계산은 DB NUMERIC 으로 한 문장에서 한다(RULE-15). JS 로 수량을 빼거나 더하지 않는다.
  */
 
+const credit = require('./credit-limit'); // T-207 외상 한도
 const MAX_ITEMS = 20;
 const MEMO_MAX = 500;
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -421,6 +422,8 @@ function registerFifoRoutes(app, deps) {
       const cust = acc.rows[0];
       if (!cust) throw fifoError(404, 'NOT_FOUND', '판매처를 찾을 수 없습니다.');
       if (!SALE_PARTNER_TYPES.has(cust.type)) throw fifoError(400, 'PARTNER_TYPE', '판매 가능한 거래처를 선택하세요.', { field: 'partner_id' });
+      // T-207 외상 한도: 저장 전 미수를 기억 → COMMIT 직전에 넘었는지 본다
+      const creditPrev = await credit.creditBefore(client, userId, [partnerId]);
 
       const productIds = [...new Set(items.map((it) => it.productId))];
       const pr = await client.query(`SELECT id, name FROM product WHERE id = ANY($1::int[])`, [productIds]);
@@ -509,8 +512,13 @@ function registerFifoRoutes(app, deps) {
           })),
         });
       }
+      const creditWarnings = await credit.assertCreditOrConfirmed(client, userId, creditPrev, body);
       await client.query('COMMIT');
-      return res.status(201).json({ ok: true, data: { partner_id: partnerId, sale_date: saleDate, sales: created } });
+      return res.status(201).json({
+        ok: true,
+        data: { partner_id: partnerId, sale_date: saleDate, sales: created },
+        ...(creditWarnings.length ? { credit_warnings: creditWarnings } : {}),
+      });
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       return sendFifoError(res, err, '판매 저장에 실패했습니다.');

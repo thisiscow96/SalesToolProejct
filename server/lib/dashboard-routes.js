@@ -14,6 +14,7 @@
  * 원칙: 모든 집계에 user_id = 토큰 사용자. 금액은 DB NUMERIC으로 더하고 응답 직전에만 Number.
  */
 const { AGING_BUCKETS, RECEIVABLE_DUE_CTE, money } = require('./ledger-routes');
+const { overLimitPartners } = require('./credit-limit'); // T-207 한도 넘은 거래처
 
 /*
  * T-201 오늘 지급·총 미지급 — 위 SQL 과 같은 매개변수($1 user_id · $2 오늘 · $6 상위 N)
@@ -157,7 +158,10 @@ function registerDashboardRoutes(app, { pool, getUserId, kstToday }) {
     if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
     const asOf = kstToday();
     try {
-      const r = await pool.query(DASHBOARD_SQL, [userId, asOf, null, STALE_WARN_DAYS, STALE_DANGER_DAYS, TOP_N]);
+      const [r, overLimit] = await Promise.all([
+        pool.query(DASHBOARD_SQL, [userId, asOf, null, STALE_WARN_DAYS, STALE_DANGER_DAYS, TOP_N]),
+        overLimitPartners(pool, userId, TOP_N),
+      ]);
       const x = r.rows[0];
       const rv = x.receivables || {};
       const level = (days) => (days >= STALE_DANGER_DAYS ? 'danger' : 'warn');
@@ -212,6 +216,8 @@ function registerDashboardRoutes(app, { pool, getUserId, kstToday }) {
             sale_count: p.sale_count,
             oldest_days: p.oldest_days,
           })),
+          // T-207 외상 한도를 넘은 거래처(넘은 금액 큰 순 상위 5, count 는 전체 곳 수)
+          over_limit_partners: overLimit,
           stale_inventory: {
             warn_days: STALE_WARN_DAYS,
             danger_days: STALE_DANGER_DAYS,

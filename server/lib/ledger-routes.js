@@ -15,6 +15,7 @@
 
 /** 행이 이보다 많으면 기간을 줄이라고 400 — [가정] 휴대폰 화면·응답 크기 기준, 시드 측정 후 조정 */
 const LEDGER_MAX_ROWS = 5000;
+const { creditSummary } = require('./credit-limit'); // T-207
 
 /** 연령 구간 — 경계는 설계 T104-RULE-05 (30일째는 30일 이내, 31일째부터 31–60) */
 const AGING_BUCKETS = [
@@ -117,8 +118,11 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
     const toP = to || null;
 
     try {
-      const pr = await pool.query('SELECT id, name, type FROM account WHERE id = $1 AND user_id = $2', [partnerId, userId]);
+      const pr = await pool.query('SELECT id, name, type, credit_limit FROM account WHERE id = $1 AND user_id = $2', [partnerId, userId]);
       const partner = pr.rows[0];
+      // T-207 외상 한도 — partner 객체 모양은 그대로 두고 credit 으로 따로 보낸다(NULL 이면 credit: null)
+      const creditLimit = partner ? partner.credit_limit : null;
+      if (partner) delete partner.credit_limit;
       if (!partner) return res.status(404).json({ ok: false, code: 'NOT_FOUND', message: '거래처를 찾을 수 없습니다.' });
 
       const empty = {
@@ -131,6 +135,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         totals: { sales: 0, returns: 0, receipts: 0, refunds: 0 },
         entries: [],
         check: { ledger_balance: 0, sale_based_due: 0, overpaid: 0, diff: 0 },
+        credit: null,
       };
       // 매입만 하는 거래처는 받을 돈 장부가 없다(매입처 미지급은 T-201)
       if (!RECEIVABLE_PARTNER_TYPES.has(partner.type)) return res.json({ ok: true, data: empty });
@@ -297,6 +302,8 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           closing_balance: money(s.closing),
           totals: { sales: money(s.sales), returns: money(s.returns), receipts: money(s.receipts), refunds: money(s.refunds) },
           entries,
+          // 외상 한도·사용률 (T-207) — 사용 금액 = 매출별 미수 합(receivables_by_partner 와 같은 정의, 기간과 무관한 지금 값)
+          credit: creditSummary(creditLimit, saleBasedDue),
           // 검증식: 원장 잔액 = 매출별 미수 합 − 돌려줄 돈 (T-219 R-02). 0이 아니면 010 이전 기록 흔적(F-5·F-6)
           check: {
             ledger_balance: ledgerBalance,

@@ -5,6 +5,7 @@
 // Main.jsx 의 매입 등록·CSV 툴바 등 병행 작업과 겹치지 않게 별도 파일로 둔다(API 호출도 이 파일 안에서).
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE, getToken, fetchInventory } from '../api';
+import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
 import './TradeCorrection.css';
 
 const CANCEL_REASONS = ['오입력', '중복 입력', '거래 취소'];
@@ -523,7 +524,11 @@ export function EditSaleModal({ row, partners, onClose, onDone, onReload }) {
   const [reason, setReason] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const set = (k) => (e) => setV((s) => ({ ...s, [k]: e.target.value }));
+  const [creditWarn, setCreditWarn] = useState(null); // T-207 외상 한도 경고(서버 409 CREDIT_LIMIT)
+  const set = (k) => (e) => {
+    setCreditWarn(null); // 값을 고치면 이전 경고는 맞지 않는다
+    setV((s) => ({ ...s, [k]: e.target.value }));
+  };
 
   const changes = {};
   if (Number(v.quantity) !== Number(init.quantity)) changes.quantity = Number(v.quantity);
@@ -539,8 +544,12 @@ export function EditSaleModal({ row, partners, onClose, onDone, onReload }) {
       ? '수금이 있는 매출은 판매일·메모만 고칠 수 있습니다. 금액을 바꾸려면 반품(환불)으로 처리하세요.'
       : '';
 
-  const submit = async (e) => {
+  const submit = (e) => {
     e.preventDefault();
+    save(false);
+  };
+  /** confirmed=true 는 외상 한도 경고를 보고 「한도 넘어도 저장」을 누른 경우(T-207) */
+  const save = async (confirmed) => {
     if (!reason.trim()) {
       setError({ message: '수정 사유를 입력하세요.' });
       return;
@@ -548,9 +557,20 @@ export function EditSaleModal({ row, partners, onClose, onDone, onReload }) {
     setSubmitting(true);
     setError(null);
     try {
-      await updateSale(row.id, { reason: reason.trim(), expected_updated_at: toIso(row.updated_at), changes });
-      onDone(`매출 #${row.id}를 수정했습니다.`);
+      const res = await updateSale(row.id, {
+        reason: reason.trim(),
+        expected_updated_at: toIso(row.updated_at),
+        changes,
+        ...(confirmed ? { credit_confirmed: true } : {}),
+      });
+      const over = res?.credit_warnings?.length ? ` 외상 한도를 넘겨 저장했습니다 — ${res.credit_warnings.map(creditLine).join(' · ')}` : '';
+      onDone(`매출 #${row.id}를 수정했습니다.${over}`);
     } catch (er) {
+      const cw = creditWarningsOf(er);
+      if (cw) {
+        setCreditWarn(cw);
+        return;
+      }
       setError(er);
       if (er.code === 'STALE_DATA' || er.code === 'ALREADY_CANCELLED') onReload?.();
     } finally {
@@ -561,6 +581,7 @@ export function EditSaleModal({ row, partners, onClose, onDone, onReload }) {
   return (
     <CorrectionModal title={`매출 #${row.id} 수정`} onClose={onClose} formId="tc-edit-sale" saveLabel="저장" submitting={submitting} saveDisabled={changedCount === 0}>
       <form id="tc-edit-sale" className="main-modal-form tc-form" onSubmit={submit}>
+        <CreditLimitWarning warnings={creditWarn} busy={submitting} onConfirm={() => save(true)} onCancel={() => setCreditWarn(null)} />
         <CorrectionAlert error={error} />
         {lockTip && <p className="tc-lock-note">{lockTip}</p>}
         <div className="tc-grid">

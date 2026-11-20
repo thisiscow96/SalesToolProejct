@@ -28,6 +28,7 @@ import TabHistory from './AuditHistory'; // T-212 변경 이력
 import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
 import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
+import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
 import { PersonalProductModal, ProductRequestAdminPanel, productOptionLabel } from './ProductRequest';
 import {
   RowActionMenu,
@@ -547,10 +548,13 @@ function TabPurchases({ onNavigate } = {}) {
   const [selected, setSelected] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
+  const [convertCreditWarn, setConvertCreditWarn] = useState(null); // T-207 외상 한도 경고
   const [purchaseRows, setPurchaseRows] = useState([newPurchaseRow()]);
   const [convertCustomer, setConvertCustomer] = useState('');
   const [convertDate, setConvertDate] = useState(today());
   const [convertRows, setConvertRows] = useState([]);
+  // 수량·단가·판매일을 고치면 이전 외상 한도 경고는 맞지 않으므로 지운다(T-207)
+  useEffect(() => setConvertCreditWarn(null), [convertRows, convertDate]);
   const [actionErr, setActionErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
   // 매입 등록·매출 전환 모달 위에서 바로 거래처 추가 (T-102): null | 'purchase' | 'sale'
@@ -807,8 +811,8 @@ function TabPurchases({ onNavigate } = {}) {
     }
   };
 
-  const submitConvert = (e) => {
-    e.preventDefault();
+  const submitConvert = (e, confirmed = false) => {
+    e?.preventDefault();
     if (!convertCustomer) {
       setActionErr('판매처를 선택하세요.');
       return;
@@ -822,13 +826,20 @@ function TabPurchases({ onNavigate } = {}) {
       unit_price: parseMoneyToNumber(r.unit_price),
       sale_date: convertDate,
     }));
-    convertPurchasesToSales(items)
-      .then(() => {
+    convertPurchasesToSales(items, confirmed ? { credit_confirmed: true } : {})
+      .then((saved) => {
         setShowConvert(false);
+        setConvertCreditWarn(null);
         setSelected({});
+        // 외상 한도를 넘겨 저장했으면 목록 위 알림으로 남긴다(T-207)
+        if (saved?.credit_warnings?.length) setCorrectionNotice(`매출 전환을 저장했습니다. 외상 한도를 넘겼습니다 — ${saved.credit_warnings.map(creditLine).join(' · ')}`);
         load();
       })
-      .catch((er) => setActionErr(er.message))
+      .catch((er) => {
+        const cw = creditWarningsOf(er);
+        if (cw) setConvertCreditWarn(cw);
+        else setActionErr(er.message);
+      })
       .finally(() => setSubmitting(false));
   };
 
@@ -1092,12 +1103,19 @@ function TabPurchases({ onNavigate } = {}) {
         onClose={() => {
           setShowConvert(false);
           setActionErr('');
+          setConvertCreditWarn(null);
         }}
         formId="form-convert-modal"
         saveLabel="저장"
         submitting={submitting}
       >
         <form id="form-convert-modal" className="main-modal-form" onSubmit={submitConvert}>
+          <CreditLimitWarning
+            warnings={convertCreditWarn}
+            busy={submitting}
+            onConfirm={() => submitConvert(null, true)}
+            onCancel={() => setConvertCreditWarn(null)}
+          />
           {/* 매뉴얼 8: 서버 검증 실패 메시지를 모달 안에 표시 (탭 상단 배너는 모달에 가려 보이지 않음) */}
           {actionErr && (
             <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
@@ -1107,7 +1125,14 @@ function TabPurchases({ onNavigate } = {}) {
           <div className="main-modal-fields main-modal-fields--collect">
             <label className="main-modal-field-select-wide">
               판매처
-              <select required value={convertCustomer} onChange={(e) => setConvertCustomer(e.target.value)}>
+              <select
+                required
+                value={convertCustomer}
+                onChange={(e) => {
+                  setConvertCustomer(e.target.value);
+                  setConvertCreditWarn(null);
+                }}
+              >
                 <option value="">선택</option>
                 {salePartners.map((p) => (
                   <option key={p.id} value={p.id}>

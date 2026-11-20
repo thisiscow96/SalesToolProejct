@@ -526,3 +526,57 @@
     color: var(--c-text-3);
   }
 }
+
+/* 외상 한도·사용률 (T-207) */
+.ledger-credit {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+}
+.ledger-credit-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-13);
+}
+.ledger-credit-title {
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+.ledger-credit-nums {
+  font-variant-numeric: tabular-nums;
+}
+.ledger-credit-bar {
+  height: 8px;
+  margin: var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--radius-full);
+  background: var(--c-surface-3);
+  overflow: hidden;
+}
+.ledger-credit-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c-accent);
+}
+.ledger-credit--near .ledger-credit-bar > span {
+  background: var(--c-warning);
+}
+.ledger-credit--over {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+}
+.ledger-credit--over .ledger-credit-bar > span {
+  background: var(--c-danger);
+}
+.ledger-credit-foot {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-2);
+}
+.ledger-credit--over .ledger-credit-foot {
+  color: var(--c-danger-text);
+}

@@ -682,7 +682,7 @@ app.get('/api/partners', async (req, res) => {
   try {
     // payable_amount: 매입 가능 유형만 미지급 합(T-201 W-08), 그 밖은 null
     const r = await pool.query(
-      `SELECT a.id, a.name, a.type, a.contact, a.phone, a.location, a.address,
+      `SELECT a.id, a.name, a.type, a.contact, a.phone, a.location, a.address, a.credit_limit,
               (CASE WHEN a.type IN ('supplier', 'wholesaler', 'market_wholesaler', 'same_market')
                     THEN COALESCE((SELECT SUM(pu.total_amount - pu.paid_amount) FROM purchase pu
                                     WHERE pu.user_id = a.user_id AND pu.partner_id = a.id AND pu.status = 'active'
@@ -724,10 +724,16 @@ function readPartnerBody(body, partial) {
   for (const key of ['contact', 'phone', 'location', 'address', 'memo']) {
     if (key in out && out[key] === '') out[key] = null;
   }
+  // 외상 한도 (T-207) — 비우면 한도 없음(NULL)
+  const cl = credit.readCreditLimit(b);
+  if (cl.error) return { error: cl.error };
+  if (!cl.absent) out.credit_limit = cl.value;
   return { fields: out };
 }
 
-const PARTNER_RETURNING = 'id, name, type, contact, phone, location, address, memo, created_at, updated_at';
+const PARTNER_RETURNING = 'id, name, type, contact, phone, location, address, memo, credit_limit, created_at, updated_at';
+// 외상 한도 (T-207) — 판매·매출 수정 저장 후 미수가 한도를 넘으면 409 CREDIT_LIMIT(확인 후 저장)
+const credit = require('./lib/credit-limit');
 
 /** 같은 사용자의 같은 이름(앞뒤 공백·대소문자 무시) 거래처가 있으면 그 행을 돌려준다 */
 async function findDuplicatePartner(client, userId, name, exceptId) {
@@ -758,10 +764,10 @@ app.post('/api/partners', async (req, res) => {
       return res.status(409).json({ ok: false, message: `이미 같은 이름의 거래처가 있습니다: ${dup.name}`, data: { duplicate_id: dup.id } });
     }
     const r = await client.query(
-      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo, credit_limit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric)
        RETURNING ${PARTNER_RETURNING}`,
-      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null]
+      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null, f.credit_limit ?? null]
     );
     await recordAudit(client, { userId, entityType: 'account', entityId: r.rows[0].id, partnerId: r.rows[0].id, action: 'create', before: null, after: r.rows[0] }); // T-212
     await client.query('COMMIT');
@@ -1585,6 +1591,8 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
         [userId, lockIds]
       );
     }
+    // T-207 외상 한도: 저장 전 미수를 기억해 두고, COMMIT 직전에 넘었는지 본다(lib/credit-limit.js)
+    const creditPrev = await credit.creditBefore(client, userId, items.map((it) => parseInt(it.partner_id, 10)));
     for (const it of items) {
       const purchaseId = parseInt(it.purchase_id, 10);
       const custId = parseInt(it.partner_id, 10);
@@ -1646,10 +1654,13 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       });
       created.push({ sale_id: saleId, purchase_id: purchaseId });
     }
+    const creditWarnings = await credit.assertCreditOrConfirmed(client, userId, creditPrev, req.body);
     await client.query('COMMIT');
-    res.status(201).json({ ok: true, data: created });
+    res.status(201).json({ ok: true, data: created, ...(creditWarnings.length ? { credit_warnings: creditWarnings } : {}) });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    // 외상 한도 초과(T-207) — 저장하지 않고 경고 내용을 돌려준다. credit_confirmed=true 로 다시 보내면 저장
+    if (err.corrCode === 'CREDIT_LIMIT') return res.status(409).json({ ok: false, code: err.corrCode, message: err.message, detail: err.detail });
     const code = err.httpStatus || (err.code === 'NEGATIVE_INVENTORY' ? 400 : 500);
     if (code >= 500) console.error('convert-to-sales error:', err);
     // 500 은 DB 오류 문구를 그대로 내보내지 않는다
@@ -2666,6 +2677,8 @@ app.patch('/api/sales/:id', async (req, res) => {
       await fifo.assertFifoSaleDate(client, { userId, saleId: id, saleDate: next.sale_date });
     }
 
+    // T-207 외상 한도: 바뀐 뒤 판매처의 미수를 수정 전후로 비교한다(늘었고 한도를 넘으면 경고)
+    const creditPrev = await credit.creditBefore(client, userId, [next.partner_id]);
     await client.query(
       `UPDATE sale SET quantity = $1::numeric, unit_price = $2::numeric, total_amount = $3::numeric,
               partner_id = $4, sale_date = $5::date, memo = $6, updated_at = NOW()
@@ -2673,6 +2686,7 @@ app.patch('/api/sales/:id', async (req, res) => {
       [n.qty, n.price, n.total, next.partner_id, next.sale_date, next.memo, id]
     );
     await syncSalePaymentStatus(client, id); // 수금 0이라 unpaid 유지 — 안전 차원(6.4)
+    const creditWarnings = await credit.assertCreditOrConfirmed(client, userId, creditPrev, req.body);
     const before = { ...stripLockMeta(sale), allocations };
     const beforePick = {};
     const after = {};
@@ -2686,7 +2700,7 @@ app.patch('/api/sales/:id', async (req, res) => {
     });
     const row = await client.query(`${SALE_ROW_SQL} WHERE s.id = $1 AND s.user_id = $2`, [id, userId]);
     await client.query('COMMIT');
-    res.json({ ok: true, data: row.rows[0], changed_fields: changed });
+    res.json({ ok: true, data: row.rows[0], changed_fields: changed, ...(creditWarnings.length ? { credit_warnings: creditWarnings } : {}) });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     sendCorrError(res, err, '매출 수정에 실패했습니다.');

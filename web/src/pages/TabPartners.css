@@ -116,3 +116,10 @@
   display: inline-flex;
   gap: 2px;
 }
+
+/* 외상 한도 입력 안내 (T-207) */
+.partner-hint {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+  font-weight: 400;
+}
