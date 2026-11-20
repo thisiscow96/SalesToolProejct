@@ -31,8 +31,10 @@
 }
 
 .main-logo {
+  flex: none;
   display: flex;
   align-items: center;
+  white-space: nowrap;
   gap: var(--sp-2);
   margin: 0;
   font-size: var(--fs-16);
@@ -79,6 +81,8 @@
 }
 
 .main-logout {
+  flex: none;
+  white-space: nowrap;
   height: 32px;
   padding: 0 var(--sp-3);
   font-size: var(--fs-13);
@@ -118,6 +122,62 @@
 
 .main-tabs::-webkit-scrollbar {
   display: none;
+}
+
+/* 탭 줄이 넘칠 때 양 끝을 흐리게 해 "옆에 메뉴가 더 있다"를 보여 준다(T-110).
+   스크롤 위치에 따라 보이고 사라지며(scroll-driven animation), 넘치지 않거나
+   지원하지 않는 브라우저에서는 나타나지 않는다. */
+.main-tabs::before,
+.main-tabs::after {
+  content: '';
+  position: sticky;
+  z-index: 1;
+  flex: none;
+  width: var(--sp-8);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.main-tabs::before {
+  left: 0;
+  order: -1;
+  margin-right: calc(var(--sp-8) * -1 - var(--sp-1));
+  background: linear-gradient(to right, var(--c-surface), transparent);
+}
+
+.main-tabs::after {
+  right: 0;
+  order: 99;
+  margin-left: calc(var(--sp-8) * -1 - var(--sp-1));
+  background: linear-gradient(to left, var(--c-surface), transparent);
+}
+
+@supports (animation-timeline: scroll()) {
+  .main-tabs::before,
+  .main-tabs::after {
+    animation-duration: auto;
+    animation-timeline: scroll(inline);
+    animation-fill-mode: both;
+    animation-timing-function: linear;
+  }
+
+  .main-tabs::before {
+    animation-name: main-tabs-fade-start;
+  }
+
+  .main-tabs::after {
+    animation-name: main-tabs-fade-end;
+  }
+}
+
+@keyframes main-tabs-fade-start {
+  0% { opacity: 0; }
+  12%, 100% { opacity: 1; }
+}
+
+@keyframes main-tabs-fade-end {
+  0%, 88% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 .main-tab {
@@ -207,7 +267,9 @@
     transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   }
 
-  .main-tab::after {
+  .main-tab::after,
+  .main-tabs::before,
+  .main-tabs::after {
     display: none;
   }
 
@@ -632,6 +694,11 @@ td.main-td-scroll {
 .main-table td.main-col-product {
   min-width: 12rem;
   width: 28%;
+}
+/* 비고: 좁은 화면에서 글이 3~4줄로 접혀 행 높이가 2배가 되지 않게 최소 폭(T-110) */
+.main-table th.main-col-memo,
+.main-table td.main-col-memo {
+  min-width: 14rem;
 }
 td.main-td-scroll.main-col-partner,
 td.main-td-scroll.main-col-product,
@@ -1545,8 +1612,35 @@ td.main-td-scroll.main-col-source {
     padding: 0 var(--sp-4);
   }
 
+  /* 상단바(T-110): 이름은 화면에서 숨기고(읽기 프로그램에는 남김) 아바타 이니셜만,
+     로그아웃은 글자 유지 + 40px 터치 영역 — 320px 폭까지 한 줄에 들어간다 */
+  .main-user {
+    flex: none;
+  }
+
+  .main-user-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: var(--fs-13);
+  }
+
   .main-user-name {
-    max-width: 7.5em;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .main-logout {
+    flex: none;
+    height: 40px;
+    padding: 0 var(--sp-3);
   }
 
   .main-tabs {
