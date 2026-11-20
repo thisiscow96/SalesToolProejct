@@ -663,8 +663,15 @@ app.get('/api/partners', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
   try {
+    // payable_amount: 매입 가능 유형만 미지급 합(T-201 W-08), 그 밖은 null
     const r = await pool.query(
-      'SELECT id, name, type, contact, phone, location, address FROM account WHERE user_id = $1 ORDER BY name',
+      `SELECT a.id, a.name, a.type, a.contact, a.phone, a.location, a.address,
+              (CASE WHEN a.type IN ('supplier', 'wholesaler', 'market_wholesaler', 'same_market')
+                    THEN COALESCE((SELECT SUM(pu.total_amount - pu.paid_amount) FROM purchase pu
+                                    WHERE pu.user_id = a.user_id AND pu.partner_id = a.id AND pu.status = 'active'
+                                      AND pu.payment_status IN ('unpaid', 'partial')), 0)
+               END)::numeric AS payable_amount
+         FROM account a WHERE a.user_id = $1 ORDER BY a.name`,
       [userId]
     );
     res.json({ ok: true, data: r.rows });
@@ -805,6 +812,9 @@ app.put('/api/partners/:id', async (req, res) => {
 require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstToday });
 // 첫 화면 대시보드 "오늘" (T-208) — lib/dashboard-routes.js
 require('./lib/dashboard-routes').registerDashboardRoutes(app, { pool, getUserId, kstToday });
+// 매입처 지급·지급 원장·미지급 연령 (T-201) — 라우트는 lib/payable-routes.js
+const { registerPayableRoutes, syncPurchasePaymentStatus, activePaymentsOfPurchase } = require('./lib/payable-routes');
+registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, parsePaidAtInput });
 
 // 재고현황 (중매인 번호 기준)
 // T-209 재고 경과일: 남은 재고 중 "가장 오래된 매입일" 기준 (KST 오늘 − 그 매입일).
@@ -871,22 +881,40 @@ app.get('/api/purchases', async (req, res) => {
   const from = req.query.from_date || today;
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
+  const unpaidOnly = req.query.unpaid_only === '1' || req.query.unpaid_only === 'true';
+  const partnerFilter = req.query.partner_id ? parsePositiveIdParam(req.query.partner_id) : null;
+  if (req.query.partner_id && !partnerFilter) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'partner_id', message: '거래처 번호가 올바르지 않습니다.' });
+  }
   try {
     let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
              pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
+             pu.paid_amount, pu.payment_status,
+             (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
              (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
              FROM purchase pu
              JOIN product p ON p.id = pu.product_id
              JOIN account pt ON pt.id = pu.partner_id
-             WHERE pu.user_id = $1 AND pu.purchase_date BETWEEN $2 AND $3`;
-    const params = [userId, from, to];
+             WHERE pu.user_id = $1`;
+    const params = [userId];
+    // T-201: unpaid_only=1 이면 미지급·일부 지급(취소 제외)만 전체 기간(매출 unpaid_only 와 같음) — 지급 등록 모달용
+    if (unpaidOnly) {
+      q += ` AND pu.status = 'active' AND pu.payment_status IN ('unpaid', 'partial') AND pu.total_amount - pu.paid_amount > 0`;
+    } else {
+      params.push(from, to);
+      q += ' AND pu.purchase_date BETWEEN $2 AND $3';
+    }
+    if (partnerFilter) {
+      params.push(partnerFilter);
+      q += ` AND pu.partner_id = $${params.length}`;
+    }
     if (productId && Number.isFinite(productId)) {
       params.push(productId);
       q += ` AND pu.product_id = $${params.length}`;
     }
-    q += ' ORDER BY pu.purchase_date DESC, pu.id DESC';
+    q += unpaidOnly ? ' ORDER BY pu.purchase_date, pu.id' : ' ORDER BY pu.purchase_date DESC, pu.id DESC';
     const r = await pool.query(q, params);
     res.json({ ok: true, data: r.rows });
   } catch (err) {
@@ -1445,8 +1473,8 @@ app.post('/api/purchases', async (req, res) => {
     }
     const src = source_name != null && String(source_name).trim() ? String(source_name).trim().slice(0, 200) : null;
     const ins = await client.query(
-      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name, payment_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $6::numeric <= 0 THEN 'paid'::payment_status ELSE 'unpaid'::payment_status END)
        RETURNING id`,
       [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src]
     );
@@ -1919,6 +1947,8 @@ async function assertInventoryEnough(client, productId, invQty, needQty) {
 
 const PURCHASE_ROW_SQL = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
        pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
+       pu.paid_amount, pu.payment_status,
+       (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
        p.name AS product_name, p.unit, pt.name AS partner_name,
        COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
        (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
@@ -2004,6 +2034,12 @@ app.post('/api/purchases/:id/cancel', async (req, res) => {
     const sales = await linkedSalesOfPurchase(client, userId, id);
     if (sales.length > 0) {
       throw corrError(409, 'PURCHASE_HAS_SALES', `연결된 매출 ${sales.length}건을 먼저 취소하세요.`, { sales });
+    }
+    // T-201 RULE-07 ① — 지급이 걸린 매입은 취소 불가(지급정보에서 지급을 먼저 취소)
+    const paidNow = await client.query('SELECT paid_amount > 0 AS has_paid FROM purchase WHERE id = $1', [id]);
+    if (paidNow.rows[0]?.has_paid) {
+      const payments = await activePaymentsOfPurchase(client, userId, id);
+      throw corrError(409, 'PURCHASE_HAS_PAYMENT', `지급 ${payments.length}건이 있어 취소할 수 없습니다. 지급정보에서 지급을 먼저 취소하세요.`, { payments });
     }
     // RULE-X1 — 재고는 상품 단위라 현재 재고로만 판단(F1·F4)
     const inv = await lockInventoryRows(client, userId, [p.product_id]);
@@ -2185,6 +2221,23 @@ app.patch('/api/purchases/:id', async (req, res) => {
     if (c.qty_changed && c.below_alloc) {
       throw corrError(409, 'QTY_BELOW_ALLOCATED', `매출로 전환된 수량(${Number(allocated)})보다 적게 바꿀 수 없습니다.`, { allocated_qty: Number(allocated) });
     }
+    // T-201 RULE-07 ②③ — 지급이 걸린 매입은 매입처 변경 불가, 총액을 지급액 아래로 줄이기 불가
+    const paidQ = await client.query(
+      `SELECT paid_amount::text AS paid_amount, paid_amount > 0 AS has_paid, $2::numeric < paid_amount AS below_paid
+         FROM purchase WHERE id = $1`,
+      [id, n.total]
+    );
+    const paidRow = paidQ.rows[0];
+    if (paidRow.has_paid && changed.includes('partner_id')) {
+      const payments = await activePaymentsOfPurchase(client, userId, id);
+      throw corrError(409, 'PURCHASE_HAS_PAYMENT', `지급 ${payments.length}건이 있어 매입처를 바꿀 수 없습니다. 지급정보에서 지급을 먼저 취소하세요.`, { payments });
+    }
+    if (c.total_changed && paidRow.below_paid) {
+      throw corrError(409, 'PAID_OVER_TOTAL', `이미 지급한 금액(${Number(paidRow.paid_amount).toLocaleString('ko-KR')})보다 매입 금액을 적게 바꿀 수 없습니다.`, {
+        paid_amount: Number(paidRow.paid_amount),
+        new_total: Number(n.total),
+      });
+    }
     let partnerRow = null;
     if (changed.includes('partner_id')) {
       const acc = await client.query(`SELECT id, type, name, location FROM account WHERE id = $1 AND user_id = $2`, [next.partner_id, userId]);
@@ -2248,6 +2301,8 @@ app.patch('/api/purchases/:id', async (req, res) => {
        WHERE id = $9`,
       [n.qty, n.price, n.total, next.partner_id, next.product_id, next.purchase_date, next.memo, next.source_name, id]
     );
+    // T-201 RULE-06 — 총액이 바뀌면 지급 상태 다시 계산(지급 0이어도 0원 ↔ 양수 매입 상태가 바뀜)
+    if (c.total_changed) await syncPurchasePaymentStatus(client, [id]);
     const before = stripLockMeta(p);
     const after = {};
     const beforePick = {};
