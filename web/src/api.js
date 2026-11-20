@@ -134,11 +134,24 @@ export async function fetchPartners() {
   return data.data;
 }
 
-export async function fetchInventory() {
-  const res = await apiFetch(`${API_BASE}/inventory`, { headers: authHeaders() });
+export async function fetchInventory(params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await apiFetch(`${API_BASE}/inventory${q ? `?${q}` : ''}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
+}
+
+/**
+ * T-211 목록 한 페이지 조회 — resource: inventory·purchases·sales·payments·disposals
+ * params 에 limit(기본 50)·offset·q·partner_id 와 기존 필터를 넣는다. 반환 { data, total, limit, offset }
+ */
+export async function fetchListPage(resource, params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await apiFetch(`${API_BASE}/${resource}?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return { data: data.data, total: data.total ?? data.data.length, limit: data.limit ?? null, offset: data.offset ?? 0 };
 }
 
 export async function fetchPurchases(params = {}) {
