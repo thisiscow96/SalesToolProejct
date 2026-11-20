@@ -537,7 +537,9 @@ app.get('/api/capabilities', (req, res) => {
     tradeFlowPost: true,
     /** 설정된 인증 메일 발송 수단(순서대로 시도) — 키 값은 노출하지 않음 */
     mailProviders: configuredProviders(),
-    hints: ['POST /api/purchases', 'POST /api/purchases/convert-to-sales', 'POST /api/payments', 'POST /api/sales/:id/refund', 'POST /api/disposals'],
+    hints: ['POST /api/purchases', 'POST /api/purchases/convert-to-sales', 'POST /api/payments', 'POST /api/sales/:id/refund', 'POST /api/disposals', 'POST /api/purchases/:id/cancel', 'PATCH /api/purchases/:id', 'POST /api/sales/:id/cancel', 'PATCH /api/sales/:id'],
+    /** 매입·매출 정정(T-103) 라우트 포함 */
+    tradeCorrection: true,
   });
 });
 
@@ -821,7 +823,7 @@ app.get('/api/inventory', async (req, res) => {
        LEFT JOIN LATERAL (
          SELECT pu.purchase_date, pu.created_at, pu.partner_id, pu.source_name
          FROM purchase pu
-         WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id
+         WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
          ORDER BY pu.purchase_date DESC, pu.created_at DESC NULLS LAST, pu.id DESC
          LIMIT 1
        ) lp ON true
@@ -839,7 +841,7 @@ app.get('/api/inventory', async (req, res) => {
              WHERE pa.user_id = i.user_id
              GROUP BY pa.purchase_id
            ) al ON al.purchase_id = pu.id
-           WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id
+           WHERE pu.user_id = i.user_id AND pu.product_id = i.product_id AND pu.status = 'active'
              AND pu.quantity - COALESCE(al.q, 0) > 0
          ) lot
          WHERE lot.cum_newest - lot.remain < i.quantity
@@ -866,6 +868,7 @@ app.get('/api/purchases', async (req, res) => {
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
   try {
     let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
+             pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
              (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
@@ -993,7 +996,7 @@ app.get('/api/sales', async (req, res) => {
   try {
     let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.status, s.memo,
-             s.returned_amount,
+             s.returned_amount, s.cancelled_at, s.cancel_reason, s.updated_at,
              GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
              COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
@@ -1128,6 +1131,7 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
          FROM purchase pu
          WHERE pu.user_id = $1
            AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
+           AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
            AND ($4::int IS NULL OR pu.partner_id = $4)
          GROUP BY pu.purchase_date::date
        ),
@@ -1225,6 +1229,7 @@ app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
          JOIN account ac ON ac.id = pu.partner_id
          WHERE pu.user_id = $1
            AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
+           AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
            AND ($4::int IS NULL OR ac.id = $4)
          GROUP BY pr.id, pr.name, ac.id, ac.name
          UNION ALL
@@ -1507,12 +1512,13 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       const qty = Number(n.qty);
       if (!(qty > 0)) throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       const pu = await client.query(
-        `SELECT id, partner_id, product_id, quantity FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        `SELECT id, partner_id, product_id, quantity, status FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [purchaseId, userId]
       );
       const p = pu.rows[0];
       // 남의 매입 ID 도 '없음'과 같은 404 — 다른 회원 매입의 존재를 알려 주지 않는다
       if (!p) throw reqError(404, `매입 ${purchaseId} 를 찾을 수 없습니다.`);
+      if (p.status === 'cancelled') throw reqError(400, `매입 ${purchaseId} 는 취소된 매입이라 전환할 수 없습니다.`); // T-103 AC-03
       const al = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM purchase_allocation WHERE purchase_id = $1`, [purchaseId]);
       const allocated = Number(al.rows[0].s);
       const remaining = Number(p.quantity) - allocated;
@@ -1777,6 +1783,775 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
     res.status(code).json({ ok: false, message: err.message || '환불 처리에 실패했습니다.' });
   } finally {
     client.release();
+  }
+});
+
+// ======================================================================
+// 매입·매출 정정 (T-103) — 설계: T-103_정정_설계.md 3장(경우별 허용·거절)·4장(역처리)·6장(API)·8장(잠금)
+//   취소는 지우지 않고 status='cancelled' + 되돌리는 이동 이력 1건 + 정정 이력(trade_correction) 1건
+//   잠금 순서(모든 거래 API 공통): purchase(id 오름차순) → sale(id 오름차순) → inventory(product_id 오름차순)
+//   규칙 검사(수금·반품·전환 수량·재고)는 행을 잠근 뒤 다시 읽어 판정한다(8.2)
+//   오류 응답: { ok:false, code, message, detail } — 기존 화면 호환을 위해 message 유지
+// ======================================================================
+
+/** 정정 API 오류 — httpStatus·code·detail 을 그대로 응답으로 보낸다 */
+function corrError(httpStatus, code, message, detail) {
+  return Object.assign(new Error(message), { httpStatus, corrCode: code, detail: detail ?? undefined });
+}
+
+function sendCorrError(res, err, fallbackMessage) {
+  if (err && err.httpStatus) {
+    const body = { ok: false, code: err.corrCode, message: err.message };
+    if (err.detail !== undefined) body.detail = err.detail;
+    return res.status(err.httpStatus).json(body);
+  }
+  if (err && err.code === 'NEGATIVE_INVENTORY') {
+    return res.status(409).json({ ok: false, code: 'INVENTORY_SHORT', message: '재고가 부족해 되돌릴 수 없습니다.' });
+  }
+  console.error(fallbackMessage, err);
+  // 500 은 DB 오류 문구를 그대로 내보내지 않는다
+  return res.status(500).json({ ok: false, message: fallbackMessage });
+}
+
+const CORRECTION_REASON_MAX = 200;
+
+/** RULE-X2 사유 필수 (1~200자) */
+function readCorrectionReason(body) {
+  const r = body?.reason != null ? String(body.reason).trim() : '';
+  if (!r) throw corrError(400, 'VALIDATION', '정정 사유를 입력하세요.', { field: 'reason' });
+  if (r.length > CORRECTION_REASON_MAX) {
+    throw corrError(400, 'VALIDATION', `정정 사유는 ${CORRECTION_REASON_MAX}자 이내로 입력하세요.`, { field: 'reason' });
+  }
+  return r;
+}
+
+/**
+ * 화면이 본 시점 확인(8.3) — expected_updated_at 이 왔을 때만 비교한다.
+ * pg 가 timestamptz 를 밀리초 Date 로 바꿔 응답하므로(F9) 밀리초 단위로 비교(1ms 미만 차이는 같은 값).
+ * row.updated_epoch_ms 는 SELECT 에서 (EXTRACT(EPOCH FROM updated_at) * 1000) 으로 읽은 값.
+ */
+function assertNotStale(row, expected) {
+  if (expected === undefined || expected === null || expected === '') return;
+  const exp = Date.parse(String(expected));
+  if (!Number.isFinite(exp)) throw corrError(400, 'VALIDATION', 'expected_updated_at 형식이 올바르지 않습니다.', { field: 'expected_updated_at' });
+  const cur = row.updated_epoch_ms == null ? null : Number(row.updated_epoch_ms);
+  if (cur == null || Math.abs(Math.floor(cur) - exp) >= 1) {
+    throw corrError(409, 'STALE_DATA', '다른 곳에서 먼저 바뀌었습니다. 최신 내용으로 다시 불러온 뒤 시도하세요.', {
+      current_updated_at: cur == null ? null : new Date(Math.floor(cur)).toISOString(),
+    });
+  }
+}
+
+async function insertCorrection(client, c) {
+  await client.query(
+    `INSERT INTO trade_correction (user_id, target_type, target_id, action, changed_fields, before_data, after_data, reason)
+     VALUES ($1,$2,$3,$4,$5::text[],$6::jsonb,$7::jsonb,$8)`,
+    [c.userId, c.targetType, c.targetId, c.action, c.changedFields, JSON.stringify(c.before), JSON.stringify(c.after), c.reason]
+  );
+}
+
+/** 재고 행 잠금(product_id 오름차순) — 없으면 0 으로 본다. 반환: Map(product_id → 수량 문자열) */
+async function lockInventoryRows(client, userId, productIds) {
+  const ids = [...new Set(productIds)].sort((a, b) => a - b);
+  const r = await client.query(
+    `SELECT product_id, quantity::text AS quantity FROM inventory
+     WHERE user_id = $1 AND product_id = ANY($2::int[]) ORDER BY product_id FOR UPDATE`,
+    [userId, ids]
+  );
+  const m = new Map(ids.map((id) => [id, '0']));
+  r.rows.forEach((row) => m.set(row.product_id, row.quantity));
+  return m;
+}
+
+/** RULE-X1 재고를 줄이는 정정 — 현재 재고 < 필요 수량이면 409 INVENTORY_SHORT (NUMERIC 비교는 DB에서) */
+async function assertInventoryEnough(client, productId, invQty, needQty) {
+  const r = await client.query(`SELECT $1::numeric >= $2::numeric AS ok`, [invQty, String(needQty)]);
+  if (!r.rows[0].ok) {
+    throw corrError(409, 'INVENTORY_SHORT', `현재 재고 ${Number(invQty)}(으)로 ${Number(needQty)}을(를) 되돌릴 수 없습니다. 폐기·매출 내역을 확인하세요.`, {
+      product_id: productId,
+      inventory_qty: Number(invQty),
+      need_qty: Number(needQty),
+    });
+  }
+}
+
+const PURCHASE_ROW_SQL = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
+       pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
+       p.name AS product_name, p.unit, pt.name AS partner_name,
+       COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
+       (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
+  FROM purchase pu
+  JOIN product p ON p.id = pu.product_id
+  JOIN account pt ON pt.id = pu.partner_id`;
+
+const SALE_ROW_SQL = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
+       s.payment_status, s.paid_amount, s.status, s.memo, s.returned_amount,
+       s.cancelled_at, s.cancel_reason, s.updated_at,
+       GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
+       p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
+       COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
+  FROM sale s
+  JOIN product p ON p.id = s.product_id
+  JOIN account pt ON pt.id = s.partner_id`;
+
+// 정정 이력에 남길 행 모양 — DATE 는 문자열(YYYY-MM-DD)로 남겨 시간대에 따라 하루 밀리지 않게
+const PURCHASE_LOCK_SQL = `SELECT id, partner_id, product_id, quantity::text AS quantity, unit_price::text AS unit_price,
+       total_amount::text AS total_amount, purchase_date::text AS purchase_date, memo, source_name, status,
+       (EXTRACT(EPOCH FROM updated_at) * 1000)::float8 AS updated_epoch_ms
+  FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`;
+const SALE_LOCK_SQL = `SELECT id, partner_id, product_id, quantity::text AS quantity, unit_price::text AS unit_price,
+       total_amount::text AS total_amount, sale_date::text AS sale_date, memo, status, payment_status,
+       paid_amount::text AS paid_amount, returned_amount::text AS returned_amount,
+       (EXTRACT(EPOCH FROM updated_at) * 1000)::float8 AS updated_epoch_ms
+  FROM sale WHERE id = $1 AND user_id = $2 FOR UPDATE`;
+
+function stripLockMeta(row) {
+  const { updated_epoch_ms, ...rest } = row; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
+function parseIdParam(raw) {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 && String(n) === String(raw).trim() ? n : null;
+}
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isValidYmd(s) {
+  if (!YMD_RE.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+/** 매입 상태 확인용 — 연결된(취소 안 된) 매출 목록 */
+async function linkedSalesOfPurchase(client, userId, purchaseId) {
+  const r = await client.query(
+    `SELECT s.id, s.sale_date::text AS sale_date, pt.name AS partner_name, pa.quantity::numeric AS quantity,
+            s.payment_status, s.status
+     FROM purchase_allocation pa
+     JOIN sale s ON s.id = pa.sale_id AND s.user_id = pa.user_id
+     JOIN account pt ON pt.id = s.partner_id
+     WHERE pa.purchase_id = $1 AND pa.user_id = $2
+     ORDER BY s.sale_date, s.id`,
+    [purchaseId, userId]
+  );
+  return r.rows.map((x) => ({ ...x, quantity: Number(x.quantity) }));
+}
+
+// ---------- 6.1 매입 취소 ----------
+app.post('/api/purchases/:id/cancel', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const id = parseIdParam(req.params.id);
+  let reason;
+  try {
+    if (!id) throw corrError(400, 'VALIDATION', '매입 ID가 올바르지 않습니다.', { field: 'id' });
+    reason = readCorrectionReason(req.body);
+  } catch (err) {
+    return sendCorrError(res, err, '매입 취소에 실패했습니다.');
+  }
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    await client.query('BEGIN');
+    const pr = await client.query(PURCHASE_LOCK_SQL, [id, userId]);
+    const p = pr.rows[0];
+    if (!p) throw corrError(404, 'NOT_FOUND', '매입을 찾을 수 없습니다.');
+    if (p.status === 'cancelled') throw corrError(409, 'ALREADY_CANCELLED', '이미 취소된 매입입니다.');
+    assertNotStale(p, req.body?.expected_updated_at);
+    // RULE-P2·P3 — 전환된 수량이 있으면 매출 취소가 먼저
+    const sales = await linkedSalesOfPurchase(client, userId, id);
+    if (sales.length > 0) {
+      throw corrError(409, 'PURCHASE_HAS_SALES', `연결된 매출 ${sales.length}건을 먼저 취소하세요.`, { sales });
+    }
+    // RULE-X1 — 재고는 상품 단위라 현재 재고로만 판단(F1·F4)
+    const inv = await lockInventoryRows(client, userId, [p.product_id]);
+    await assertInventoryEnough(client, p.product_id, inv.get(p.product_id), p.quantity);
+    await upsertInventoryDelta(client, userId, p.product_id, `-${p.quantity}`);
+    const up = await client.query(
+      `UPDATE purchase SET status = 'cancelled', cancelled_at = NOW(), cancel_reason = $1, updated_at = NOW()
+       WHERE id = $2 RETURNING status, cancelled_at, cancel_reason`,
+      [reason, id]
+    );
+    const wh = await getUserWarehouseLabel(client, userId);
+    const acc = await client.query(`SELECT name, location FROM account WHERE id = $1 AND user_id = $2`, [p.partner_id, userId]);
+    await insertTransfer(client, {
+      userId,
+      productId: p.product_id,
+      quantity: p.quantity,
+      actionType: 'purchase_cancel',
+      fromType: 'inventory',
+      toType: 'supplier',
+      fromPartnerId: null,
+      toPartnerId: p.partner_id,
+      beforeLocation: wh,
+      afterLocation: accountLocationLine(acc.rows[0]),
+      purchaseId: id,
+      memo: `매입 취소: ${reason}`.slice(0, 500),
+    });
+    await insertCorrection(client, {
+      userId,
+      targetType: 'purchase',
+      targetId: id,
+      action: 'cancel',
+      changedFields: ['status'],
+      before: stripLockMeta(p),
+      after: { status: 'cancelled', cancelled_at: up.rows[0].cancelled_at, cancel_reason: reason },
+      reason,
+    });
+    const invAfter = await client.query(`SELECT quantity FROM inventory WHERE user_id = $1 AND product_id = $2`, [userId, p.product_id]);
+    await client.query('COMMIT');
+    res.json({
+      ok: true,
+      data: {
+        id,
+        status: 'cancelled',
+        cancelled_at: up.rows[0].cancelled_at,
+        inventory_qty_after: Number(invAfter.rows[0]?.quantity ?? 0),
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendCorrError(res, err, '매입 취소에 실패했습니다.');
+  } finally {
+    client.release();
+  }
+});
+
+const PURCHASE_EDITABLE = ['quantity', 'unit_price', 'partner_id', 'source_name', 'purchase_date', 'memo', 'product_id'];
+const SALE_EDITABLE = ['quantity', 'unit_price', 'partner_id', 'sale_date', 'memo'];
+
+/** changes 객체 확인 — 허용 칸만, 빈 객체는 400 */
+function readChanges(body, allowed) {
+  const ch = body?.changes;
+  if (!ch || typeof ch !== 'object' || Array.isArray(ch)) {
+    throw corrError(400, 'VALIDATION', '바꿀 내용(changes)을 입력하세요.', { field: 'changes' });
+  }
+  const keys = Object.keys(ch);
+  if (keys.length === 0) throw corrError(400, 'VALIDATION', '바꿀 내용(changes)을 입력하세요.', { field: 'changes' });
+  const bad = keys.find((k) => !allowed.includes(k));
+  if (bad) {
+    const msg = bad === 'product_id' ? '매출의 상품은 바꿀 수 없습니다. 매출을 취소한 뒤 다시 전환하세요.' : `바꿀 수 없는 칸입니다: ${bad}`;
+    throw corrError(400, 'VALIDATION', msg, { field: bad });
+  }
+  return ch;
+}
+
+function readQty(v) {
+  const n = Number(v);
+  if (v === null || v === '' || !Number.isFinite(n) || !(n > 0)) throw corrError(400, 'VALIDATION', '수량은 0보다 커야 합니다.', { field: 'quantity' });
+  return v;
+}
+function readPrice(v) {
+  const n = Number(v);
+  if (v === null || v === '' || !Number.isFinite(n) || n < 0) throw corrError(400, 'VALIDATION', '단가는 0 이상이어야 합니다.', { field: 'unit_price' });
+  return v;
+}
+function readDate(v, field) {
+  const s = String(v ?? '').trim();
+  if (!isValidYmd(s)) throw corrError(400, 'VALIDATION', '날짜는 YYYY-MM-DD 형식으로 입력하세요.', { field });
+  return s;
+}
+function readMemo(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+}
+function readIntField(v, field) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n <= 0 || String(n) !== String(v).trim()) throw corrError(400, 'VALIDATION', `${field} 값이 올바르지 않습니다.`, { field });
+  return n;
+}
+
+// ---------- 6.2 매입 수정 ----------
+app.patch('/api/purchases/:id', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const id = parseIdParam(req.params.id);
+  let reason;
+  let ch;
+  try {
+    if (!id) throw corrError(400, 'VALIDATION', '매입 ID가 올바르지 않습니다.', { field: 'id' });
+    reason = readCorrectionReason(req.body);
+    ch = readChanges(req.body, PURCHASE_EDITABLE);
+  } catch (err) {
+    return sendCorrError(res, err, '매입 수정에 실패했습니다.');
+  }
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    // 입력 형식 검사(잠그기 전)
+    const want = {};
+    if ('quantity' in ch) want.quantity = readQty(ch.quantity);
+    if ('unit_price' in ch) want.unit_price = readPrice(ch.unit_price);
+    if ('partner_id' in ch) want.partner_id = readIntField(ch.partner_id, 'partner_id');
+    if ('product_id' in ch) want.product_id = readIntField(ch.product_id, 'product_id');
+    if ('purchase_date' in ch) want.purchase_date = readDate(ch.purchase_date, 'purchase_date');
+    if ('memo' in ch) want.memo = readMemo(ch.memo);
+    if ('source_name' in ch) {
+      const s = readMemo(ch.source_name);
+      if (s && s.length > 200) throw corrError(400, 'VALIDATION', '출처는 200자 이내로 입력하세요.', { field: 'source_name' });
+      want.source_name = s;
+    }
+
+    await client.query('BEGIN');
+    const pr = await client.query(PURCHASE_LOCK_SQL, [id, userId]);
+    const p = pr.rows[0];
+    if (!p) throw corrError(404, 'NOT_FOUND', '매입을 찾을 수 없습니다.');
+    if (p.status === 'cancelled') throw corrError(409, 'ALREADY_CANCELLED', '이미 취소된 매입입니다.');
+    assertNotStale(p, req.body?.expected_updated_at);
+
+    const al = await client.query(`SELECT COALESCE(SUM(quantity), 0)::text AS s FROM purchase_allocation WHERE purchase_id = $1`, [id]);
+    const allocated = al.rows[0].s;
+    const hasSales = Number(allocated) > 0;
+
+    // 새 값 계산(수량·단가는 컬럼 자릿수로 반올림 — 등록과 같은 함수)
+    const n = await roundQtyPrice(client, want.quantity ?? p.quantity, want.unit_price ?? p.unit_price);
+    if (!(Number(n.qty) > 0)) throw corrError(400, 'VALIDATION', '수량은 0보다 커야 합니다.', { field: 'quantity' });
+    const next = {
+      quantity: n.qty,
+      unit_price: n.price,
+      total_amount: n.total,
+      partner_id: want.partner_id ?? p.partner_id,
+      product_id: want.product_id ?? p.product_id,
+      purchase_date: want.purchase_date ?? p.purchase_date,
+      memo: 'memo' in want ? want.memo : p.memo,
+      source_name: 'source_name' in want ? want.source_name : p.source_name,
+    };
+    const cmp = await client.query(
+      `SELECT $1::numeric <> $2::numeric AS qty_changed, $3::numeric <> $4::numeric AS price_changed,
+              $5::numeric <> $6::numeric AS total_changed, ($1::numeric - $2::numeric)::text AS delta,
+              $1::numeric < $7::numeric AS below_alloc`,
+      [n.qty, p.quantity, n.price, p.unit_price, n.total, p.total_amount, allocated]
+    );
+    const c = cmp.rows[0];
+    const changed = [];
+    if (c.qty_changed) changed.push('quantity');
+    if (c.price_changed) changed.push('unit_price');
+    if (c.total_changed) changed.push('total_amount');
+    if (next.partner_id !== p.partner_id) changed.push('partner_id');
+    if (next.product_id !== p.product_id) changed.push('product_id');
+    if (next.purchase_date !== p.purchase_date) changed.push('purchase_date');
+    if ((next.memo ?? null) !== (p.memo ?? null)) changed.push('memo');
+    if ((next.source_name ?? null) !== (p.source_name ?? null)) changed.push('source_name');
+    if (changed.length === 0) throw corrError(400, 'VALIDATION', '바뀐 내용이 없습니다.', { field: 'changes' });
+
+    // RULE-P2·P3 — 전환된 매입은 상품 변경 불가, 수량은 전환 수량 이상만
+    if (changed.includes('product_id') && hasSales) {
+      const sales = await linkedSalesOfPurchase(client, userId, id);
+      throw corrError(409, 'PURCHASE_HAS_SALES', `연결된 매출 ${sales.length}건이 있어 상품을 바꿀 수 없습니다. 매출을 먼저 취소하세요.`, { sales });
+    }
+    if (c.qty_changed && c.below_alloc) {
+      throw corrError(409, 'QTY_BELOW_ALLOCATED', `매출로 전환된 수량(${Number(allocated)})보다 적게 바꿀 수 없습니다.`, { allocated_qty: Number(allocated) });
+    }
+    let partnerRow = null;
+    if (changed.includes('partner_id')) {
+      const acc = await client.query(`SELECT id, type, name, location FROM account WHERE id = $1 AND user_id = $2`, [next.partner_id, userId]);
+      partnerRow = acc.rows[0];
+      if (!partnerRow || !PURCHASE_PARTNER_TYPES.has(partnerRow.type)) {
+        throw corrError(400, 'VALIDATION', '매입 가능한 거래처(공급/도매 등)를 선택하세요.', { field: 'partner_id' });
+      }
+    } else {
+      const acc = await client.query(`SELECT id, type, name, location FROM account WHERE id = $1 AND user_id = $2`, [next.partner_id, userId]);
+      partnerRow = acc.rows[0];
+    }
+    if (changed.includes('product_id')) {
+      const prd = await client.query(`SELECT id FROM product WHERE id = $1`, [next.product_id]);
+      if (!prd.rows[0]) throw corrError(400, 'VALIDATION', '상품을 찾을 수 없습니다.', { field: 'product_id' });
+    }
+
+    // 재고·이동 이력 (잠금: purchase → inventory product_id 순서)
+    const wh = await getUserWarehouseLabel(client, userId);
+    const supLoc = accountLocationLine(partnerRow);
+    const memoT = `매입 정정: ${reason}`.slice(0, 500);
+    if (changed.includes('product_id')) {
+      const inv = await lockInventoryRows(client, userId, [p.product_id, next.product_id]);
+      await assertInventoryEnough(client, p.product_id, inv.get(p.product_id), p.quantity);
+      await upsertInventoryDelta(client, userId, p.product_id, `-${p.quantity}`);
+      await upsertInventoryDelta(client, userId, next.product_id, n.qty);
+      await insertTransfer(client, {
+        userId, productId: p.product_id, quantity: p.quantity, actionType: 'correction',
+        fromType: 'inventory', toType: 'supplier', toPartnerId: p.partner_id,
+        beforeLocation: wh, afterLocation: supLoc, purchaseId: id, memo: memoT,
+      });
+      await insertTransfer(client, {
+        userId, productId: next.product_id, quantity: n.qty, actionType: 'correction',
+        fromType: 'supplier', toType: 'inventory', fromPartnerId: next.partner_id,
+        beforeLocation: supLoc, afterLocation: wh, purchaseId: id, memo: memoT,
+      });
+    } else if (c.qty_changed) {
+      const delta = c.delta; // 새 − 옛 (NUMERIC 문자열)
+      const inv = await lockInventoryRows(client, userId, [p.product_id]);
+      if (Number(delta) < 0) {
+        const need = delta.replace(/^-/, '');
+        await assertInventoryEnough(client, p.product_id, inv.get(p.product_id), need);
+        await upsertInventoryDelta(client, userId, p.product_id, delta);
+        await insertTransfer(client, {
+          userId, productId: p.product_id, quantity: need, actionType: 'correction',
+          fromType: 'inventory', toType: 'supplier', toPartnerId: next.partner_id,
+          beforeLocation: wh, afterLocation: supLoc, purchaseId: id, memo: memoT,
+        });
+      } else {
+        await upsertInventoryDelta(client, userId, p.product_id, delta);
+        await insertTransfer(client, {
+          userId, productId: p.product_id, quantity: delta, actionType: 'correction',
+          fromType: 'supplier', toType: 'inventory', fromPartnerId: next.partner_id,
+          beforeLocation: supLoc, afterLocation: wh, purchaseId: id, memo: memoT,
+        });
+      }
+    }
+
+    await client.query(
+      `UPDATE purchase SET quantity = $1::numeric, unit_price = $2::numeric, total_amount = $3::numeric,
+              partner_id = $4, product_id = $5, purchase_date = $6::date, memo = $7, source_name = $8, updated_at = NOW()
+       WHERE id = $9`,
+      [n.qty, n.price, n.total, next.partner_id, next.product_id, next.purchase_date, next.memo, next.source_name, id]
+    );
+    const before = stripLockMeta(p);
+    const after = {};
+    const beforePick = {};
+    changed.forEach((k) => {
+      beforePick[k] = before[k];
+      after[k] = next[k];
+    });
+    await insertCorrection(client, {
+      userId, targetType: 'purchase', targetId: id, action: 'update', changedFields: changed,
+      before: { ...beforePick, _row: before }, after, reason,
+    });
+    const row = await client.query(`${PURCHASE_ROW_SQL} WHERE pu.id = $1 AND pu.user_id = $2`, [id, userId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, data: row.rows[0], changed_fields: changed });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendCorrError(res, err, '매입 수정에 실패했습니다.');
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * 매출 정정 잠금(8.1): ① 배분에서 purchase_id 조회(잠금 없음) → ② purchase FOR UPDATE → ③ sale FOR UPDATE
+ * → ④ 배분을 다시 읽어 purchase_id 가 같은지 확인(다르면 롤백 후 1회 재시도). 호출 측이 BEGIN 을 한 상태여야 한다.
+ * 반환: { sale, purchase(없을 수 있음), allocations }
+ */
+async function lockSaleForCorrection(client, userId, saleId) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const a0 = await client.query(
+      `SELECT DISTINCT purchase_id FROM purchase_allocation WHERE sale_id = $1 AND user_id = $2 ORDER BY purchase_id`,
+      [saleId, userId]
+    );
+    const pids = a0.rows.map((r) => r.purchase_id);
+    let purchases = [];
+    if (pids.length) {
+      const pr = await client.query(
+        `SELECT id, product_id, quantity::text AS quantity, status FROM purchase
+         WHERE user_id = $1 AND id = ANY($2::int[]) ORDER BY id FOR UPDATE`,
+        [userId, pids]
+      );
+      purchases = pr.rows;
+    }
+    const sr = await client.query(SALE_LOCK_SQL, [saleId, userId]);
+    const sale = sr.rows[0];
+    if (!sale) throw corrError(404, 'NOT_FOUND', '매출을 찾을 수 없습니다.');
+    const a1 = await client.query(
+      `SELECT id, purchase_id, sale_id, quantity::text AS quantity, created_at FROM purchase_allocation
+       WHERE sale_id = $1 AND user_id = $2 ORDER BY id`,
+      [saleId, userId]
+    );
+    const pids1 = [...new Set(a1.rows.map((r) => r.purchase_id))].sort((x, y) => x - y);
+    if (pids1.join(',') === pids.join(',')) {
+      return { sale, purchases, allocations: a1.rows };
+    }
+    // 잠그는 사이 배분이 바뀜 — 처음부터 다시(1회)
+    await client.query('ROLLBACK');
+    await client.query('BEGIN');
+  }
+  throw corrError(409, 'STALE_DATA', '다른 곳에서 먼저 바뀌었습니다. 다시 시도하세요.', {});
+}
+
+/** 매출의 수금·반품 여부(잠근 뒤 판정) */
+async function saleMoneyState(client, sale) {
+  const r = await client.query(
+    `SELECT EXISTS (SELECT 1 FROM payment_allocation WHERE sale_id = $1) AS has_alloc,
+            COALESCE((SELECT SUM(quantity) FROM refund WHERE sale_id = $1), 0)::numeric AS refunded_qty,
+            EXISTS (SELECT 1 FROM refund WHERE sale_id = $1) AS has_refund`,
+    [sale.id]
+  );
+  const x = r.rows[0];
+  return {
+    hasPayment: Number(sale.paid_amount) > 0 || x.has_alloc,
+    hasRefund: x.has_refund || sale.status === 'refunded',
+    refundedQty: Number(x.refunded_qty),
+  };
+}
+
+// ---------- 6.3 매출 취소 ----------
+app.post('/api/sales/:id/cancel', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const id = parseIdParam(req.params.id);
+  let reason;
+  try {
+    if (!id) throw corrError(400, 'VALIDATION', '매출 ID가 올바르지 않습니다.', { field: 'id' });
+    reason = readCorrectionReason(req.body);
+  } catch (err) {
+    return sendCorrError(res, err, '매출 취소에 실패했습니다.');
+  }
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    await client.query('BEGIN');
+    const { sale, allocations } = await lockSaleForCorrection(client, userId, id);
+    if (sale.status === 'cancelled') throw corrError(409, 'ALREADY_CANCELLED', '이미 취소된 매출입니다.');
+    assertNotStale(sale, req.body?.expected_updated_at);
+    const m = await saleMoneyState(client, sale);
+    if (m.hasPayment) {
+      throw corrError(409, 'SALE_HAS_PAYMENT', '수금 배분이 있는 매출은 취소할 수 없습니다. 반품(환불)으로 처리하세요.', {
+        paid_amount: Number(sale.paid_amount),
+      });
+    }
+    if (m.hasRefund) {
+      throw corrError(409, 'SALE_HAS_REFUND', '반품 이력이 있어 취소할 수 없습니다. 남은 수량은 반품으로 처리하세요.', {
+        refunded_qty: m.refundedQty,
+      });
+    }
+    await lockInventoryRows(client, userId, [sale.product_id]);
+    await upsertInventoryDelta(client, userId, sale.product_id, sale.quantity);
+    // 배분 행 삭제 → 매입 잔여가 자동으로 돌아온다(4장 "배분 행을 지우는 이유")
+    await client.query(`DELETE FROM purchase_allocation WHERE sale_id = $1 AND user_id = $2`, [id, userId]);
+    const up = await client.query(
+      `UPDATE sale SET status = 'cancelled', cancelled_at = NOW(), cancel_reason = $1, updated_at = NOW()
+       WHERE id = $2 RETURNING cancelled_at`,
+      [reason, id]
+    );
+    const wh = await getUserWarehouseLabel(client, userId);
+    const acc = await client.query(`SELECT name, location FROM account WHERE id = $1 AND user_id = $2`, [sale.partner_id, userId]);
+    const purchaseId = allocations[0]?.purchase_id ?? null;
+    await insertTransfer(client, {
+      userId,
+      productId: sale.product_id,
+      quantity: sale.quantity,
+      actionType: 'sale_cancel',
+      fromType: 'customer',
+      toType: 'inventory',
+      fromPartnerId: sale.partner_id,
+      toPartnerId: null,
+      beforeLocation: accountLocationLine(acc.rows[0]),
+      afterLocation: wh,
+      saleId: id,
+      purchaseId,
+      memo: `매출 취소: ${reason}`.slice(0, 500),
+    });
+    await insertCorrection(client, {
+      userId,
+      targetType: 'sale',
+      targetId: id,
+      action: 'cancel',
+      changedFields: ['status'],
+      before: { ...stripLockMeta(sale), allocations },
+      after: { status: 'cancelled', cancelled_at: up.rows[0].cancelled_at, cancel_reason: reason },
+      reason,
+    });
+    let remainingAfter = null;
+    if (purchaseId) {
+      const rr = await client.query(
+        `SELECT (pu.quantity - COALESCE((SELECT SUM(quantity) FROM purchase_allocation WHERE purchase_id = pu.id), 0))::numeric AS r
+         FROM purchase pu WHERE pu.id = $1`,
+        [purchaseId]
+      );
+      remainingAfter = Number(rr.rows[0]?.r ?? 0);
+    }
+    const invAfter = await client.query(`SELECT quantity FROM inventory WHERE user_id = $1 AND product_id = $2`, [userId, sale.product_id]);
+    await client.query('COMMIT');
+    res.json({
+      ok: true,
+      data: {
+        id,
+        status: 'cancelled',
+        cancelled_at: up.rows[0].cancelled_at,
+        purchase_id: purchaseId,
+        purchase_remaining_qty_after: remainingAfter,
+        inventory_qty_after: Number(invAfter.rows[0]?.quantity ?? 0),
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendCorrError(res, err, '매출 취소에 실패했습니다.');
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- 6.4 매출 수정 ----------
+app.patch('/api/sales/:id', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const id = parseIdParam(req.params.id);
+  let reason;
+  let ch;
+  try {
+    if (!id) throw corrError(400, 'VALIDATION', '매출 ID가 올바르지 않습니다.', { field: 'id' });
+    reason = readCorrectionReason(req.body);
+    ch = readChanges(req.body, SALE_EDITABLE);
+  } catch (err) {
+    return sendCorrError(res, err, '매출 수정에 실패했습니다.');
+  }
+  const client = await connectOr503(res);
+  if (!client) return;
+  try {
+    const want = {};
+    if ('quantity' in ch) want.quantity = readQty(ch.quantity);
+    if ('unit_price' in ch) want.unit_price = readPrice(ch.unit_price);
+    if ('partner_id' in ch) want.partner_id = readIntField(ch.partner_id, 'partner_id');
+    if ('sale_date' in ch) want.sale_date = readDate(ch.sale_date, 'sale_date');
+    if ('memo' in ch) want.memo = readMemo(ch.memo);
+
+    await client.query('BEGIN');
+    const { sale, purchases, allocations } = await lockSaleForCorrection(client, userId, id);
+    if (sale.status === 'cancelled') throw corrError(409, 'ALREADY_CANCELLED', '이미 취소된 매출입니다.');
+    assertNotStale(sale, req.body?.expected_updated_at);
+
+    const n = await roundQtyPrice(client, want.quantity ?? sale.quantity, want.unit_price ?? sale.unit_price);
+    if (!(Number(n.qty) > 0)) throw corrError(400, 'VALIDATION', '수량은 0보다 커야 합니다.', { field: 'quantity' });
+    const next = {
+      quantity: n.qty,
+      unit_price: n.price,
+      total_amount: n.total,
+      partner_id: want.partner_id ?? sale.partner_id,
+      sale_date: want.sale_date ?? sale.sale_date,
+      memo: 'memo' in want ? want.memo : sale.memo,
+    };
+    const cmp = await client.query(
+      `SELECT $1::numeric <> $2::numeric AS qty_changed, $3::numeric <> $4::numeric AS price_changed,
+              $5::numeric <> $6::numeric AS total_changed, ($1::numeric - $2::numeric)::text AS delta`,
+      [n.qty, sale.quantity, n.price, sale.unit_price, n.total, sale.total_amount]
+    );
+    const c = cmp.rows[0];
+    const changed = [];
+    if (c.qty_changed) changed.push('quantity');
+    if (c.price_changed) changed.push('unit_price');
+    if (c.total_changed) changed.push('total_amount');
+    if (next.partner_id !== sale.partner_id) changed.push('partner_id');
+    if (next.sale_date !== sale.sale_date) changed.push('sale_date');
+    if ((next.memo ?? null) !== (sale.memo ?? null)) changed.push('memo');
+    if (changed.length === 0) throw corrError(400, 'VALIDATION', '바뀐 내용이 없습니다.', { field: 'changes' });
+
+    // RULE-S2·S3·S4 — 수금이 있으면 판매일·메모만, 반품이 있으면 메모만
+    const m = await saleMoneyState(client, sale);
+    if (m.hasRefund && changed.some((k) => k !== 'memo')) {
+      throw corrError(409, 'SALE_HAS_REFUND', '반품 이력이 있는 매출은 메모만 고칠 수 있습니다. 남은 수량은 반품으로 처리하세요.', {
+        refunded_qty: m.refundedQty,
+      });
+    }
+    if (m.hasPayment && changed.some((k) => k !== 'memo' && k !== 'sale_date')) {
+      throw corrError(409, 'SALE_HAS_PAYMENT', '수금이 있는 매출은 판매일·메모만 고칠 수 있습니다.', {
+        paid_amount: Number(sale.paid_amount),
+      });
+    }
+    let partnerRow;
+    {
+      const acc = await client.query(`SELECT id, type, name, location FROM account WHERE id = $1 AND user_id = $2`, [next.partner_id, userId]);
+      partnerRow = acc.rows[0];
+      if (changed.includes('partner_id') && (!partnerRow || !SALE_PARTNER_TYPES.has(partnerRow.type))) {
+        throw corrError(400, 'VALIDATION', '판매 가능한 거래처를 선택하세요.', { field: 'partner_id' });
+      }
+    }
+
+    if (c.qty_changed) {
+      const delta = c.delta; // 새 − 옛
+      const alloc = allocations[0] || null;
+      const memoT = `매출 정정: ${reason}`.slice(0, 500);
+      const wh = await getUserWarehouseLabel(client, userId);
+      const custLoc = accountLocationLine(partnerRow);
+      if (allocations.length > 1) {
+        // 전환은 매출 1건 = 배분 1행(F3). 여러 행이면 어느 매입에서 줄일지 정할 수 없어 수량 변경을 막는다.
+        throw corrError(409, 'QTY_OVER_PURCHASE', '여러 매입에 걸친 매출은 수량을 바꿀 수 없습니다. 매출을 취소한 뒤 다시 전환하세요.', { max_qty: Number(sale.quantity) });
+      }
+      if (Number(delta) > 0) {
+        if (alloc) {
+          const pu = purchases.find((x) => x.id === alloc.purchase_id);
+          const rr = await client.query(
+            `SELECT ($1::numeric + $2::numeric - COALESCE((SELECT SUM(quantity) FROM purchase_allocation WHERE purchase_id = $3), 0))::text AS max_qty,
+                    $4::numeric > ($1::numeric + $2::numeric - COALESCE((SELECT SUM(quantity) FROM purchase_allocation WHERE purchase_id = $3), 0)) AS over`,
+            [alloc.quantity, pu.quantity, alloc.purchase_id, n.qty]
+          );
+          if (rr.rows[0].over) {
+            throw corrError(409, 'QTY_OVER_PURCHASE', `매입의 남은 수량을 넘습니다. 최대 ${Number(rr.rows[0].max_qty)}까지 바꿀 수 있습니다.`, {
+              max_qty: Number(rr.rows[0].max_qty),
+            });
+          }
+        }
+        const inv = await lockInventoryRows(client, userId, [sale.product_id]);
+        await assertInventoryEnough(client, sale.product_id, inv.get(sale.product_id), delta);
+        await upsertInventoryDelta(client, userId, sale.product_id, `-${delta}`);
+        await insertTransfer(client, {
+          userId, productId: sale.product_id, quantity: delta, actionType: 'correction',
+          fromType: 'inventory', toType: 'customer', toPartnerId: next.partner_id,
+          beforeLocation: wh, afterLocation: custLoc, saleId: id, purchaseId: alloc?.purchase_id ?? null, memo: memoT,
+        });
+      } else {
+        const back = delta.replace(/^-/, '');
+        await lockInventoryRows(client, userId, [sale.product_id]);
+        await upsertInventoryDelta(client, userId, sale.product_id, back);
+        await insertTransfer(client, {
+          userId, productId: sale.product_id, quantity: back, actionType: 'correction',
+          fromType: 'customer', toType: 'inventory', fromPartnerId: sale.partner_id,
+          beforeLocation: custLoc, afterLocation: wh, saleId: id, purchaseId: alloc?.purchase_id ?? null, memo: memoT,
+        });
+      }
+      if (alloc) {
+        await client.query(`UPDATE purchase_allocation SET quantity = $1::numeric WHERE id = $2`, [n.qty, alloc.id]);
+      }
+    }
+
+    await client.query(
+      `UPDATE sale SET quantity = $1::numeric, unit_price = $2::numeric, total_amount = $3::numeric,
+              partner_id = $4, sale_date = $5::date, memo = $6, updated_at = NOW()
+       WHERE id = $7`,
+      [n.qty, n.price, n.total, next.partner_id, next.sale_date, next.memo, id]
+    );
+    await syncSalePaymentStatus(client, id); // 수금 0이라 unpaid 유지 — 안전 차원(6.4)
+    const before = { ...stripLockMeta(sale), allocations };
+    const beforePick = {};
+    const after = {};
+    changed.forEach((k) => {
+      beforePick[k] = before[k];
+      after[k] = next[k];
+    });
+    await insertCorrection(client, {
+      userId, targetType: 'sale', targetId: id, action: 'update', changedFields: changed,
+      before: { ...beforePick, _row: before }, after, reason,
+    });
+    const row = await client.query(`${SALE_ROW_SQL} WHERE s.id = $1 AND s.user_id = $2`, [id, userId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, data: row.rows[0], changed_fields: changed });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    sendCorrError(res, err, '매출 수정에 실패했습니다.');
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- 6.5 정정 이력 (W-09) ----------
+app.get('/api/corrections', async (req, res) => {
+  const userId = await getUserId(req);
+  if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
+  const tt = String(req.query.target_type || '');
+  const tid = parseIdParam(req.query.target_id);
+  if (!['purchase', 'sale'].includes(tt) || !tid) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', message: 'target_type(purchase|sale)·target_id가 필요합니다.' });
+  }
+  try {
+    const r = await pool.query(
+      `SELECT id, action, changed_fields, before_data, after_data, reason, created_at
+       FROM trade_correction WHERE user_id = $1 AND target_type = $2 AND target_id = $3
+       ORDER BY created_at DESC, id DESC`,
+      [userId, tt, tid]
+    );
+    res.json({ ok: true, data: r.rows });
+  } catch (err) {
+    console.error('GET corrections error:', err);
+    res.status(500).json({ ok: false, message: '정정 이력을 불러오지 못했습니다.' });
   }
 });
 

@@ -23,6 +23,15 @@ import { toYmd as toYmdKst, kstParts, joinDateAndKstTime, kstNowLocalInput } fro
 import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
+import {
+  RowActionMenu,
+  CancelTradeModal,
+  EditPurchaseModal,
+  EditSaleModal,
+  CorrectionNotice,
+  purchaseMenuState,
+  saleMenuState,
+} from './TradeCorrection';
 import './Main.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -457,8 +466,11 @@ function TabReorder() {
   );
 }
 
-function TabPurchases() {
+function TabPurchases({ onNavigate } = {}) {
   const [list, setList] = useState([]);
+  // 정정(T-103): { type: 'edit' | 'cancel', row } | null, 성공 알림
+  const [correction, setCorrection] = useState(null);
+  const [correctionNotice, setCorrectionNotice] = useState('');
   const [products, setProducts] = useState([]);
   const [partners, setPartners] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -731,8 +743,23 @@ function TabPurchases() {
       .finally(() => setSubmitting(false));
   };
 
+  const onCorrectionDone = (msg) => {
+    setCorrection(null);
+    setSelected({});
+    setCorrectionNotice(msg);
+    load();
+  };
+  /** 매입 취소가 연결 매출로 막혔을 때 — 매출정보 탭에서 그 기간으로 보기 */
+  const goLinkedSales = (sales) => {
+    if (!onNavigate || !sales?.length) return;
+    const dates = sales.map((x) => String(x.sale_date).slice(0, 10)).sort();
+    setCorrection(null);
+    onNavigate('sales', { from_date: dates[0], to_date: dates[dates.length - 1], show_all: true });
+  };
+
   return (
     <>
+      <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
       {actionErr && (
         <div className="main-alert-banner" role="alert">
           {actionErr}
@@ -1039,20 +1066,27 @@ function TabPurchases() {
                 <th className="main-col-qty">잔여</th>
                 <th className="main-col-unit-price">단가</th>
                 <th className="main-col-amount">총액</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
                   <td className="main-col-check">
                     <input
                       type="checkbox"
                       checked={!!selected[row.id]}
                       onChange={() => toggleRow(row.id)}
-                      disabled={Number(row.remaining_qty) <= 0}
+                      disabled={row.status === 'cancelled' || Number(row.remaining_qty) <= 0}
+                      aria-label={`매입 #${row.id} 선택`}
                     />
                   </td>
-                  <td className="main-col-datetime">{formatPurchaseTableDateTime(row)}</td>
+                  <td className="main-col-datetime">
+                    {formatPurchaseTableDateTime(row)}
+                    {row.status === 'cancelled' && (
+                      <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소된 매입'}>취소</span>
+                    )}
+                  </td>
                   <td className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
                   <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                   <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
@@ -1061,11 +1095,40 @@ function TabPurchases() {
                   <td className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
                   <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
                   <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                  <td className="main-col-manage">
+                    <RowActionMenu
+                      label={`매입 #${row.id}`}
+                      state={purchaseMenuState(row)}
+                      onEdit={() => setCorrection({ type: 'edit', row })}
+                      onCancel={() => setCorrection({ type: 'cancel', row })}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {correction?.type === 'cancel' && (
+        <CancelTradeModal
+          kind="purchase"
+          row={correction.row}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+          onGoSales={goLinkedSales}
+        />
+      )}
+      {correction?.type === 'edit' && (
+        <EditPurchaseModal
+          row={correction.row}
+          products={products}
+          partners={purchasePartners.some((p) => p.id === correction.row.partner_id) ? purchasePartners : [...purchasePartners, { id: correction.row.partner_id, name: correction.row.partner_name }]}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+          onGoSales={goLinkedSales}
+        />
       )}
       <PartnerFormModal
         open={partnerAddFor !== null}
@@ -1078,14 +1141,18 @@ function TabPurchases() {
   );
 }
 
-function TabSales() {
+function TabSales({ navFilter } = {}) {
   const [list, setList] = useState([]);
   const [partners, setPartners] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
-  const [fromDate, setFromDate] = useState(firstDayOfMonth());
-  const [toDate, setToDate] = useState(today());
-  const [partnerId, setPartnerId] = useState('');
+  // 매입 취소가 연결 매출로 막혀 넘어온 경우(T-103) 그 기간·판매처로 시작
+  const [fromDate, setFromDate] = useState(() => navFilter?.from_date || firstDayOfMonth());
+  const [toDate, setToDate] = useState(() => navFilter?.to_date || today());
+  const [partnerId, setPartnerId] = useState(() => (navFilter?.partner_id ? String(navFilter.partner_id) : ''));
+  // 정정(T-103)
+  const [correction, setCorrection] = useState(null);
+  const [correctionNotice, setCorrectionNotice] = useState('');
   const [showCollect, setShowCollect] = useState(false);
   const [collectPartner, setCollectPartner] = useState('');
   const [collectDateTime, setCollectDateTime] = useState(() => defaultCollectDateTime());
@@ -1096,7 +1163,7 @@ function TabSales() {
   const [saleErr, setSaleErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
   /** false: 최초·기본은 수금 완료 매출만 목록 */
-  const [showAllSales, setShowAllSales] = useState(false);
+  const [showAllSales, setShowAllSales] = useState(() => !!navFilter?.show_all);
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundableSales, setRefundableSales] = useState([]);
   const [loadingRefundable, setLoadingRefundable] = useState(false);
@@ -1333,8 +1400,15 @@ function TabSales() {
     window.location.assign(`/statement?${q.toString()}`);
   };
 
+  const onCorrectionDone = (msg) => {
+    setCorrection(null);
+    setCorrectionNotice(msg);
+    load();
+  };
+
   return (
     <>
+      <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="sale-from" /> ~{' '}
@@ -1768,13 +1842,14 @@ function TabSales() {
                 <th className="main-col-amount">총액</th>
                 <th>수금</th>
                 <th>상태</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => {
                 const rf = Number(row.refunded_qty || 0);
                 return (
-                  <tr key={row.id}>
+                  <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
                     <td className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
                     <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
                     <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
@@ -1783,13 +1858,40 @@ function TabSales() {
                     <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
                     <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
                     <td><span className={'main-status main-status--pay-' + (row.payment_status || 'unpaid')}>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</span></td>
-                    <td><span className={'main-status main-status--sale-' + (row.status || 'normal')}>{row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}</span></td>
+                    <td>
+                      <span
+                        className={'main-status main-status--sale-' + (row.status || 'normal')}
+                        title={row.status === 'cancelled' && row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : undefined}
+                      >
+                        {row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}
+                      </span>
+                    </td>
+                    <td className="main-col-manage">
+                      <RowActionMenu
+                        label={`매출 #${row.id}`}
+                        state={saleMenuState(row)}
+                        onEdit={() => setCorrection({ type: 'edit', row })}
+                        onCancel={() => setCorrection({ type: 'cancel', row })}
+                      />
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+      )}
+      {correction?.type === 'cancel' && (
+        <CancelTradeModal kind="sale" row={correction.row} onClose={() => setCorrection(null)} onDone={onCorrectionDone} onReload={load} />
+      )}
+      {correction?.type === 'edit' && (
+        <EditSaleModal
+          row={correction.row}
+          partners={salePartners.some((p) => p.id === correction.row.partner_id) ? salePartners : [...salePartners, { id: correction.row.partner_id, name: correction.row.partner_name }]}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+        />
       )}
     </>
   );
@@ -2826,6 +2928,12 @@ export default function Main() {
   const user = getUser();
   const tabs = user?.is_admin ? [...BASE_TABS, ADMIN_TAB] : BASE_TABS;
   const [activeTab, setActiveTab] = useState('inventory');
+  // 다른 탭에서 넘겨준 검색 조건(T-103: 매입 취소가 막혔을 때 연결 매출 보기)
+  const [navFilter, setNavFilter] = useState(null);
+  const navigateTab = (tabId, filter) => {
+    setNavFilter(filter || null);
+    setActiveTab(tabId);
+  };
   const activeTabDef = tabs.find((t) => t.id === activeTab);
   const TabContent = activeTabDef?.Component;
 
@@ -2859,7 +2967,7 @@ export default function Main() {
             type="button"
             className={'main-tab ' + (activeTab === t.id ? 'active' : '')}
             aria-current={activeTab === t.id ? 'page' : undefined}
-            onClick={() => setActiveTab(t.id)}
+            onClick={() => navigateTab(t.id, null)}
           >
             {t.label}
           </button>
@@ -2867,7 +2975,7 @@ export default function Main() {
       </nav>
       <main className="main-content">
         {activeTabDef && <h2 className="main-page-title">{activeTabDef.label}</h2>}
-        {TabContent && <TabContent />}
+        {TabContent && <TabContent key={activeTab + (navFilter ? JSON.stringify(navFilter) : '')} onNavigate={navigateTab} navFilter={navFilter} />}
       </main>
       </div>
     </div>
