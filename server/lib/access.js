@@ -136,7 +136,34 @@ function buildRules(env = process.env) {
     ['R-59', 'POST', '/api/offsets', OWNER, { ui: 'offset.create' }],
     ['R-60', 'POST', '/api/offsets/:id/cancel', OWNER, { ui: 'offset.cancel' }],
     ['R-61', 'GET', '/api/offsets', ALL],
+    // T-402 엑셀 업로드 — 템플릿은 전원, 올리기(미리보기·저장)는 대상별. 입력 직원은 매입·판매·전환·수금(현금)만,
+    //   거래처·지급·상계는 주인만, 품목은 단건(R-04)과 같은 규칙(U-6). 줄마다 단건 라우트 권한·본문 조건을 다시 거친다(lib/excel-upload.js)
+    ['R-62', 'GET', '/api/excel/:kind/template', ALL],
+    ...excelRules(env),
   ];
+}
+
+/** T-402 업로드 대상별 허용 — lib/excel-upload.js 의 KINDS 와 같은 이름 */
+function excelRules(env = process.env) {
+  const kinds = [
+    ['partner', OWNER],
+    ['product', inputExtra('product.personal', env)],
+    ['purchase', WRITE],
+    ['sale', WRITE],
+    ['convert', WRITE],
+    ['payment', WRITE],
+    ['supplier_payment', OWNER],
+    ['offset', OWNER],
+  ];
+  const out = [];
+  let n = 63;
+  for (const [kind, allow] of kinds) {
+    for (const step of ['preview', 'commit']) {
+      out.push([`R-${n}`, 'POST', `/api/excel/${kind}/${step}`, allow, { ui: `excel.${kind}` }]);
+      n += 1;
+    }
+  }
+  return out;
 }
 
 function escapeRe(s) {
