@@ -1805,3 +1805,31 @@ td.main-td-scroll.main-col-source {
 .main-table tbody tr.main-row-aging-warn > td:first-child {
   box-shadow: inset 3px 0 0 var(--c-warning);
 }
+
+/* =========================================================
+ * T-202 일별 원가·이익 표시
+ * ========================================================= */
+.main-col-profit {
+  color: var(--c-success-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-col-profit.main-profit-negative {
+  color: var(--c-danger-text);
+}
+
+.main-profit-pct {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  opacity: 0.85;
+}
+
+.main-cost-missing {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-warning-text);
+  white-space: nowrap;
+}

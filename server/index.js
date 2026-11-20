@@ -762,6 +762,9 @@ app.get('/api/sales', async (req, res) => {
 });
 
 // 일별 매입·매출 집계 (기간 필수, 거래처 선택 시 매입=구입처·매출=판매처 기준)
+// T-202 원가·이익: 원가 = 그날 매출에 배분된 매입(purchase_allocation 수량 × 해당 매입 단가) 합. 조회 계산만(저장값 변경 없음).
+//   배분이 없는 매출(이전 데이터 등)은 원가를 알 수 없어 cost_missing_count 로 세고 이익 계산(costed_sales_amount)에서 뺀다.
+//   환불은 sale.total_amount·배분을 바꾸지 않으므로 매출액과 같은 기준(환불 차감 없음)으로 둔다 — T-103·T-108 결정 뒤 다시 본다.
 app.get('/api/reports/daily-purchase-sales', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
@@ -801,15 +804,44 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
            AND sa.status NOT IN ('cancelled')
            AND ($4::int IS NULL OR sa.partner_id = $4)
          GROUP BY sa.sale_date::date
+       ),
+       alc AS (
+         SELECT pa.sale_id, ROUND(SUM(pa.quantity * pu.unit_price), 2) AS cost
+         FROM purchase_allocation pa
+         JOIN purchase pu ON pu.id = pa.purchase_id AND pu.user_id = pa.user_id
+         WHERE pa.user_id = $1
+           AND pa.sale_id IN (
+             SELECT sa.id FROM sale sa
+             WHERE sa.user_id = $1 AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
+           )
+         GROUP BY pa.sale_id
+       ),
+       c AS (
+         SELECT sa.sale_date::date AS d,
+                COALESCE(SUM(alc.cost), 0)::numeric AS cost_amount,
+                COALESCE(SUM(sa.total_amount) FILTER (WHERE alc.sale_id IS NOT NULL), 0)::numeric AS costed_sales_amount,
+                COUNT(*) FILTER (WHERE alc.sale_id IS NULL)::int AS cost_missing_count
+         FROM sale sa
+         LEFT JOIN alc ON alc.sale_id = sa.id
+         WHERE sa.user_id = $1
+           AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
+           AND sa.status NOT IN ('cancelled')
+           AND ($4::int IS NULL OR sa.partner_id = $4)
+         GROUP BY sa.sale_date::date
        )
        SELECT days.d AS date,
               COALESCE(p.purchase_amount, 0)::numeric AS purchase_amount,
               COALESCE(p.purchase_count, 0)::int AS purchase_count,
               COALESCE(s.sales_amount, 0)::numeric AS sales_amount,
-              COALESCE(s.sales_count, 0)::int AS sales_count
+              COALESCE(s.sales_count, 0)::int AS sales_count,
+              COALESCE(c.cost_amount, 0)::numeric AS cost_amount,
+              COALESCE(c.costed_sales_amount, 0)::numeric AS costed_sales_amount,
+              (COALESCE(c.costed_sales_amount, 0) - COALESCE(c.cost_amount, 0))::numeric AS profit_amount,
+              COALESCE(c.cost_missing_count, 0)::int AS cost_missing_count
        FROM days
        LEFT JOIN p ON p.d = days.d
        LEFT JOIN s ON s.d = days.d
+       LEFT JOIN c ON c.d = days.d
        ORDER BY days.d`,
       [userId, from, to, pid]
     );
@@ -821,6 +853,7 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
 });
 
 // 일별 매입·매출 — 상품 × 거래처(구입처/판매처)별 건수·수량·금액·미수(매출만)
+// T-202: 매출 행에 원가(cost_sum)·이익(profit_sum)·원가 미확인 건수 추가 — 요약 API와 같은 계산(배분 매입 단가 기준, 조회만)
 app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
@@ -846,7 +879,10 @@ app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
                 COUNT(*)::int AS line_count,
                 COALESCE(SUM(pu.quantity), 0)::numeric AS qty_sum,
                 COALESCE(SUM(pu.total_amount), 0)::numeric AS amount_sum,
-                0::numeric AS receivable_sum
+                0::numeric AS receivable_sum,
+                NULL::numeric AS cost_sum,
+                NULL::numeric AS profit_sum,
+                0::int AS cost_missing_count
          FROM purchase pu
          JOIN product pr ON pr.id = pu.product_id
          JOIN account ac ON ac.id = pu.partner_id
@@ -863,10 +899,20 @@ app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
                 COUNT(*)::int,
                 COALESCE(SUM(sa.quantity), 0)::numeric,
                 COALESCE(SUM(sa.total_amount), 0)::numeric,
-                COALESCE(SUM(GREATEST(sa.total_amount - sa.paid_amount, 0)), 0)::numeric
+                COALESCE(SUM(GREATEST(sa.total_amount - sa.paid_amount, 0)), 0)::numeric,
+                COALESCE(SUM(alc.cost), 0)::numeric,
+                (COALESCE(SUM(sa.total_amount) FILTER (WHERE alc.sale_id IS NOT NULL), 0) - COALESCE(SUM(alc.cost), 0))::numeric,
+                COUNT(*) FILTER (WHERE alc.sale_id IS NULL)::int
          FROM sale sa
          JOIN product pr ON pr.id = sa.product_id
          JOIN account ac ON ac.id = sa.partner_id
+         LEFT JOIN LATERAL (
+           SELECT pa.sale_id, ROUND(SUM(pa.quantity * pu2.unit_price), 2) AS cost
+           FROM purchase_allocation pa
+           JOIN purchase pu2 ON pu2.id = pa.purchase_id AND pu2.user_id = pa.user_id
+           WHERE pa.sale_id = sa.id AND pa.user_id = $1
+           GROUP BY pa.sale_id
+         ) alc ON true
          WHERE sa.user_id = $1
            AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
            AND sa.status NOT IN ('cancelled')
