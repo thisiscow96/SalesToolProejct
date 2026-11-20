@@ -1,0 +1,265 @@
+/* 매입·매출 정정(T-103) — 행 메뉴·확인 모달. 색·간격은 styles/tokens.css 토큰만 쓴다 */
+
+.main-col-manage {
+  width: 3.25rem;
+  text-align: center;
+}
+
+/* 취소된 행: 회색 글자 (배지는 main-status--sale-cancelled 계열) */
+.tc-row-cancelled td {
+  color: var(--c-text-3);
+}
+.tc-row-cancelled td.num {
+  text-decoration: line-through;
+}
+.tc-badge-cancelled {
+  display: inline-block;
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  color: var(--c-neutral-text);
+  background: var(--c-neutral-soft);
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+/* ⋯ 메뉴 */
+.tc-menu {
+  position: relative;
+  display: inline-block;
+}
+.tc-menu-btn {
+  min-width: 2rem;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text-2);
+  font-size: var(--fs-16);
+  line-height: 1;
+  cursor: pointer;
+}
+.tc-menu-btn:hover:not(:disabled) {
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+.tc-menu-btn:focus-visible,
+.tc-menu-item:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+.tc-menu-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tc-menu-list {
+  position: fixed;
+  z-index: 60;
+  min-width: 11rem;
+  max-width: 16rem;
+  padding: var(--sp-1);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-md);
+  text-align: left;
+}
+.tc-menu-item {
+  display: block;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text);
+  font-size: var(--fs-14);
+  text-align: left;
+  cursor: pointer;
+}
+.tc-menu-item:hover:not(:disabled) {
+  background: var(--c-surface-2);
+}
+.tc-menu-item--danger:not(:disabled) {
+  color: var(--c-danger-text);
+}
+.tc-menu-item:disabled {
+  color: var(--c-text-3);
+  cursor: not-allowed;
+}
+.tc-menu-tip {
+  margin: var(--sp-1) var(--sp-2) var(--sp-1);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--c-text-2);
+  white-space: normal;
+}
+
+/* 모달 */
+.main-modal.tc-modal {
+  width: min(600px, calc(100vw - 32px));
+  max-width: 600px;
+}
+.tc-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.tc-summary {
+  margin: 0;
+  font-size: var(--fs-14);
+  line-height: 1.5;
+}
+.tc-effect {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  font-size: var(--fs-14);
+}
+.tc-effect-num {
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.tc-effect-num--bad {
+  color: var(--c-danger-text);
+}
+.tc-notes {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+  line-height: 1.5;
+}
+.tc-reason {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.tc-reason legend {
+  margin-bottom: var(--sp-1);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+}
+.tc-reason-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin-bottom: var(--sp-2);
+}
+.tc-reason-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-14);
+}
+.tc-input,
+.tc-grid input,
+.tc-grid select {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-size: var(--fs-14);
+  box-sizing: border-box;
+}
+.tc-grid input:disabled,
+.tc-grid select:disabled {
+  background: var(--c-surface-3);
+  color: var(--c-text-3);
+  cursor: not-allowed;
+}
+.tc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+.tc-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.tc-grid-wide {
+  grid-column: 1 / -1;
+}
+.tc-required {
+  color: var(--c-danger-text);
+  font-weight: var(--fw-regular);
+}
+.tc-lock-note {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--c-info-soft);
+  color: var(--c-info-text);
+  font-size: var(--fs-13);
+}
+.tc-hint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+.tc-btn-danger {
+  background: var(--c-danger) !important;
+  border-color: var(--c-danger) !important;
+}
+
+/* 서버 안내 */
+.tc-alert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.tc-alert-msg,
+.tc-alert-sub {
+  margin: 0;
+}
+.tc-linked-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+  background: var(--c-surface);
+  color: var(--c-text);
+}
+.tc-linked-table caption {
+  text-align: left;
+  font-weight: var(--fw-semibold);
+  padding-bottom: var(--sp-1);
+}
+.tc-linked-table th,
+.tc-linked-table td {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+}
+.tc-linked-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tc-go-sales {
+  align-self: flex-start;
+}
+
+/* 성공 알림 */
+.tc-notice {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--c-success-soft);
+  color: var(--c-success-text);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+}
+
+@media (max-width: 640px) {
+  .tc-grid {
+    grid-template-columns: 1fr;
+  }
+}
