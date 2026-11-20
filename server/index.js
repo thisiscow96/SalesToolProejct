@@ -51,6 +51,7 @@ app.use((req, res, next) => {
 });
 
 // PostgreSQL 연결 설정 — lib/db-config.js (Neon·Supabase 등 무료 Postgres의 SSL·연결 대기 처리 포함)
+// DATE 열은 lib/db-config.js의 전역 파서로 'YYYY-MM-DD' 문자열로 받는다 — 서버 시간대와 상관없이 DB 저장값 그대로 (T-116)
 const pool = new Pool(getPgConfig({ pool: true }));
 pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
 

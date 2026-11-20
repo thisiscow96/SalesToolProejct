@@ -19,6 +19,7 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
+import { toYmd as toYmdKst, kstParts, joinDateAndKstTime, kstNowLocalInput } from '../lib/dates';
 import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
@@ -64,68 +65,32 @@ function DateSearchField({ value, onChange, id }) {
   );
 }
 
-/** 날짜만 yyyy-mm-dd (DB/Date/문자열 모두 처리) */
+/** 날짜만 yyyy-mm-dd — DATE 문자열은 그대로, 시각이 있는 값(timestamptz)은 KST 날짜 (T-116, lib/dates.js) */
 function toYmd(v) {
-  if (v == null || v === '') return '';
-  if (typeof v === 'string') return v.slice(0, 10);
-  if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const d = String(v.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  const s = String(v);
-  return s.length >= 10 ? s.slice(0, 10) : s;
+  return toYmdKst(v);
 }
 
-/** 매입정보 목록 — YYYY-MM-DD HH:mm (매입일 + 등록시각) */
+/** 매입정보 목록 — YYYY-MM-DD HH:mm (매입일 + 등록시각 KST) */
 function formatPurchaseTableDateTime(row) {
-  const datePart = toYmd(row.purchase_date);
-  const ts = row.created_at;
-  if (ts) {
-    const t = new Date(ts);
-    if (!Number.isNaN(t.getTime())) {
-      const dp = datePart || toYmd(t);
-      return `${dp} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
-    }
-  }
-  return `${datePart || today()} 00:00`;
+  return joinDateAndKstTime(row.purchase_date, row.created_at, today());
 }
 
-/** 매출 — YYYY-MM-DD HH:mm */
+/** 매출 — YYYY-MM-DD HH:mm (매출일 + 등록시각 KST) */
 function formatSaleDateTime(row) {
-  const datePart = toYmd(row.sale_date);
-  const ts = row.created_at;
-  if (ts) {
-    const t = new Date(ts);
-    if (!Number.isNaN(t.getTime())) {
-      const dp = datePart || toYmd(t);
-      return `${dp} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
-    }
-  }
-  return `${datePart || today()} 00:00`;
+  return joinDateAndKstTime(row.sale_date, row.created_at, today());
 }
 
-/** 폐기 — YYYY-MM-DD HH:mm */
+/** 폐기 — YYYY-MM-DD HH:mm (폐기일 + 등록시각 KST) */
 function formatDisposalDateTime(row) {
-  const ymd = toYmd(row.disposal_date);
-  const ts = row.created_at;
-  if (ts) {
-    const d = new Date(ts);
-    if (!Number.isNaN(d.getTime())) {
-      return `${ymd || toYmd(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-  }
-  return `${ymd || today()} 00:00`;
+  return joinDateAndKstTime(row.disposal_date, row.created_at, today());
 }
 
-/** 수금 — 수금일시 YYYY-MM-DD HH:mm */
+/** 수금 — 수금일시 YYYY-MM-DD HH:mm (KST) */
 function formatPaymentDateTime(row) {
   const ts = row.paid_at;
   if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return String(ts);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const p = kstParts(ts);
+  return p ? `${p.ymd} ${p.hm}` : String(ts);
 }
 
 function formatProductCreatedYmd(row) {
@@ -185,10 +150,8 @@ function parseMoneyToNumber(s) {
 function formatInventoryDateOnly(row) {
   if (row.last_purchase_date) return toYmd(row.last_purchase_date);
   if (row.last_purchase_created_at) {
-    const d = new Date(row.last_purchase_created_at);
-    if (!Number.isNaN(d.getTime())) {
-      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    }
+    const p = kstParts(row.last_purchase_created_at);
+    if (p) return p.ymd;
   }
   return '—';
 }
@@ -253,10 +216,9 @@ function CellText({ children, className }) {
   );
 }
 
-/** 수금 모달 — datetime-local 용 기본값 (yyyy-mm-ddTHH:mm) */
+/** 수금 모달 — datetime-local 용 기본값 (yyyy-mm-ddTHH:mm, KST — 서버는 시간대 없는 값을 KST로 해석) */
 function defaultCollectDateTime() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return kstNowLocalInput();
 }
 
 /** 열린 모달 개수 — body 스크롤 잠금 (중첩 모달 대응) */

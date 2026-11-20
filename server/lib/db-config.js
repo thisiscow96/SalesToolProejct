@@ -7,6 +7,17 @@
  * - 그 밖에는 NODE_ENV=production 이거나 알려진 관리형 호스트면 SSL 사용
  * 서버리스 DB(Neon)는 쉬다가 깨어날 때 첫 연결이 몇 초 걸리므로 연결 대기 시간을 넉넉히 둔다.
  */
+const { types } = require('pg');
+
+/**
+ * DATE(OID 1082)는 'YYYY-MM-DD' 문자열 그대로 받는다 (T-116).
+ * pg 기본값은 DATE를 "Node 프로세스 시간대의 자정" JS Date로 바꾸고, JSON으로 나갈 때 UTC ISO로 바뀐다.
+ * 그래서 서버 TZ=Asia/Seoul이면 2026-11-20이 "2026-11-19T15:00:00.000Z"(하루 이름)로 나갔다.
+ * 이 파일을 불러오는 서버·마이그레이션·스크립트 모두에 적용된다. timestamptz(1184)는 그대로 둔다.
+ */
+const PG_DATE_OID = 1082;
+types.setTypeParser(PG_DATE_OID, (v) => v);
+
 const MANAGED_HOSTS = /(render\.com|neon\.tech|supabase\.(co|com)|pooler\.|aivencloud\.com|cockroachlabs\.cloud)/i;
 
 function sslFor(hostname, sslMode) {
