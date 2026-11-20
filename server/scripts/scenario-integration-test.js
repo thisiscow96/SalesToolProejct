@@ -772,6 +772,46 @@ async function main() {
     `status=${r.status} ${r.json?.message}`
   );
 
+  // ----- S-024 (T-106) 같은 매출에 부분 환불 2회 — 반품 금액은 화면과 같은 계산(web/src/lib/refund.js)으로 구해 보낸다
+  {
+    const { pathToFileURL } = require('url');
+    const refundLib = await import(pathToFileURL(path.join(PROJECT_ROOT, 'web', 'src', 'lib', 'refund.js')).href);
+    const p24 = await request('POST', '/api/purchases', {
+      partner_id: supplierId,
+      product_id: productId,
+      quantity: 10,
+      unit_price: 50,
+      purchase_date: today,
+      memo: `S-024-${tag}`,
+    });
+    const c24 = await request('POST', '/api/purchases/convert-to-sales', {
+      items: [{ purchase_id: p24.json?.data?.id, partner_id: customerId, quantity: 10, unit_price: 100, sale_date: today, memo: `S-024-${tag}` }],
+    });
+    const sale24 = c24.json?.data?.[0]?.sale_id;
+    await request('POST', '/api/payments', {
+      partner_id: customerId,
+      amount: 1000,
+      paid_at: today,
+      entry_kind: 'receive',
+      allocations: [{ sale_id: sale24, amount: 1000 }],
+    });
+    const amounts = [];
+    for (const q of [5, 5]) {
+      const list = await request('GET', `/api/sales?from_date=${today}&to_date=${today}`);
+      const row = list.json?.data?.find((s) => s.id === sale24);
+      const amt = row ? refundLib.computeAutoRefundAmount(row, q) : 0;
+      amounts.push(amt);
+      await request('POST', `/api/sales/${sale24}/refund`, { quantity: q, refunded_at: today, reason: 'S-024', refund_amount: amt });
+    }
+    const after = await request('GET', `/api/sales?from_date=${today}&to_date=${today}`);
+    const row24 = after.json?.data?.find((s) => s.id === sale24);
+    record(
+      'S-024',
+      amounts[0] === 500 && amounts[1] === 500 && Number(row24?.paid_amount) === 0 && row24?.status === 'refunded',
+      `반품 금액 1차=${amounts[0]} 2차=${amounts[1]} 남은 수금=${row24?.paid_amount} status=${row24?.status}`
+    );
+  }
+
     const failed = rows.filter((x) => !x.ok);
     console.log('\n──────── 요약 ────────');
     console.log(`통과 ${rows.length - failed.length} / ${rows.length}`);

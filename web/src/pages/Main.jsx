@@ -17,6 +17,7 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
+import { computeRefundPossibleQty, computeAutoRefundAmount } from '../lib/refund';
 import './Main.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -357,23 +358,6 @@ function computeCollectedQty(s) {
   const pa = Number(s.paid_amount);
   if (!Number.isFinite(q) || ta <= 0 || !Number.isFinite(pa)) return 0;
   return (pa / ta) * q;
-}
-
-/** 환불 가능 수량 = 총 수량 − 환불된 수량(환불 누적) */
-function computeRefundPossibleQty(s) {
-  const q = Number(s.quantity);
-  const rf = Number(s.refunded_qty || 0);
-  if (!Number.isFinite(q)) return 0;
-  return Math.max(0, q - rf);
-}
-
-/** 반품(환불) 금액 = (환불 요청수량 / 총 수량) × 매출 금액(수금 발생액) */
-function computeAutoRefundAmount(s, requestQty) {
-  const tot = Number(s.quantity);
-  const paid = Number(s.paid_amount);
-  const rq = Number(requestQty);
-  if (!Number.isFinite(tot) || tot <= 0 || !Number.isFinite(rq) || rq <= 0 || !Number.isFinite(paid)) return 0;
-  return Math.round((rq / tot) * paid * 100) / 100;
 }
 
 function buildRefundReasonFromDraft(d) {
@@ -1459,7 +1443,7 @@ function TabSales() {
                     </th>
                     <th className="main-col-qty">환불 요청수량</th>
                     <th className="main-col-amount">매출 금액</th>
-                    <th className="main-col-amount" title="(환불 요청수량 ÷ 총 수량) × 매출 금액">
+                    <th className="main-col-amount" title="(환불 요청수량 ÷ 환불 가능 수량) × 매출 금액(현재 수금액)">
                       반품 금액
                     </th>
                     <th className="main-th-refund-reason">사유</th>
