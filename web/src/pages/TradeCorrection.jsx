@@ -72,11 +72,16 @@ export function purchaseMenuState(row) {
     return { edit: false, cancel: false, editTip: '취소된 매입입니다.', cancelTip: '취소된 매입입니다.' };
   }
   const alloc = Number(row.allocated_qty || 0);
+  // T-201 RULE-07: 지급이 걸린 매입은 취소 불가 — 지급정보에서 지급을 먼저 취소
+  const paid = Number(row.paid_amount || 0);
+  let cancelTip = '';
+  if (alloc > 0) cancelTip = '매출로 전환된 수량이 있어 취소할 수 없습니다. 연결된 매출을 먼저 취소하세요.';
+  else if (paid > 0) cancelTip = '지급 기록이 있어 취소할 수 없습니다 — 지급정보에서 지급을 먼저 취소하세요.';
   return {
     edit: true,
-    cancel: alloc <= 0,
+    cancel: alloc <= 0 && paid <= 0,
     editTip: '',
-    cancelTip: alloc > 0 ? '매출로 전환된 수량이 있어 취소할 수 없습니다. 연결된 매출을 먼저 취소하세요.' : '',
+    cancelTip,
   };
 }
 
@@ -244,6 +249,26 @@ function CorrectionAlert({ error, onGoSales }) {
           )}
         </>
       )}
+      {error.code === 'PURCHASE_HAS_PAYMENT' && Array.isArray(error.detail?.payments) && error.detail.payments.length > 0 && (
+        <table className="tc-linked-table">
+          <caption>걸린 지급 — 지급정보에서 먼저 취소하세요</caption>
+          <thead>
+            <tr><th>지급</th><th>지급일</th><th className="num">이 매입 몫</th></tr>
+          </thead>
+          <tbody>
+            {error.detail.payments.map((x) => (
+              <tr key={x.id}>
+                <td>#{x.id}{x.kind === 'opening' ? ' (기초 정리)' : ''}</td>
+                <td>{ymd(x.paid_at)}</td>
+                <td className="num">{fmt(x.allocated)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {error.code === 'PAID_OVER_TOTAL' && error.detail && (
+        <p className="tc-alert-sub">이미 지급 {fmt(error.detail.paid_amount)} — 매입 금액은 이 금액 이상이어야 합니다. 줄이려면 지급을 먼저 취소하세요.</p>
+      )}
       {error.code === 'INVENTORY_SHORT' && error.detail && (
         <p className="tc-alert-sub">현재 재고 {fmt(error.detail.inventory_qty)} — 폐기정보·매출정보를 확인하세요.</p>
       )}
@@ -376,6 +401,7 @@ export function CancelTradeModal({ kind, row, onClose, onDone, onReload, onGoSal
 // ---------------------------------------------------------------------------
 export function EditPurchaseModal({ row, products, partners, onClose, onDone, onReload, onGoSales }) {
   const alloc = Number(row.allocated_qty || 0);
+  const paidAmt = Number(row.paid_amount || 0); // T-201 지급액 — 매입처 잠금·금액 하한
   const init = {
     quantity: String(Number(row.quantity)),
     unit_price: String(Number(row.unit_price)),
@@ -431,6 +457,9 @@ export function EditPurchaseModal({ row, products, partners, onClose, onDone, on
         {alloc > 0 && (
           <p className="tc-lock-note">매출 반영 {fmt(alloc)} — 수량은 {fmt(alloc)} 이상으로만 바꿀 수 있고, 상품은 바꿀 수 없습니다.</p>
         )}
+        {paidAmt > 0 && (
+          <p className="tc-lock-note">지급 {fmt(paidAmt)} — 매입처는 바꿀 수 없고, 금액(수량×단가)은 {fmt(paidAmt)} 이상으로만 바꿀 수 있습니다.</p>
+        )}
         <div className="tc-grid">
           <label>
             상품
@@ -440,7 +469,7 @@ export function EditPurchaseModal({ row, products, partners, onClose, onDone, on
           </label>
           <label>
             매입 거래처
-            <select value={v.partner_id} onChange={set('partner_id')}>
+            <select value={v.partner_id} onChange={set('partner_id')} disabled={paidAmt > 0} title={paidAmt > 0 ? '지급 기록이 있는 매입은 매입처를 바꿀 수 없습니다.' : undefined}>
               {partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </label>

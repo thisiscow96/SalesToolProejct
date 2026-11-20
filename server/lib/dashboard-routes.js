@@ -15,6 +15,36 @@
  */
 const { AGING_BUCKETS, RECEIVABLE_DUE_CTE, money } = require('./ledger-routes');
 
+/*
+ * T-201 오늘 지급·총 미지급 — 위 SQL 과 같은 매개변수($1 user_id · $2 오늘 · $6 상위 N)
+ *  - 오늘 지급 = 취소 안 된 지급 중 kind='pay'(기초 정리 제외), 지급일시 한국 날짜가 오늘 — 지급정보 목록과 같은 범위 비교
+ *  - 미지급 = 미지급 연령 API(payable-routes PAYABLE_DUE_CTE)와 같은 정의: 취소 안 된 매입 중 total − paid > 0
+ */
+const PAYABLE_SELECT = `,
+  (SELECT json_build_object('amount', COALESCE(SUM(sp.amount), 0), 'count', COUNT(*))
+     FROM supplier_payment sp
+    WHERE sp.user_id = $1 AND sp.status = 'active' AND sp.kind = 'pay'
+      AND sp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND sp.paid_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                 AS pays,
+  (SELECT json_build_object('total', COALESCE(SUM(pu.total_amount - pu.paid_amount), 0),
+                            'purchase_count', COUNT(*),
+                            'partner_count', COUNT(DISTINCT pu.partner_id))
+     FROM purchase pu
+    WHERE pu.user_id = $1 AND pu.status = 'active' AND pu.payment_status IN ('unpaid', 'partial')
+      AND pu.total_amount - pu.paid_amount > 0)                                                 AS payable,
+  (SELECT COALESCE(json_agg(t), '[]'::json) FROM (
+     SELECT pu.partner_id, a.name AS partner_name, a.type AS partner_type,
+            SUM(pu.total_amount - pu.paid_amount) AS total_due, COUNT(*)::int AS purchase_count,
+            MAX(GREATEST($2::date - pu.purchase_date, 0))::int AS oldest_days
+       FROM purchase pu JOIN account a ON a.id = pu.partner_id AND a.user_id = $1
+      WHERE pu.user_id = $1 AND pu.status = 'active' AND pu.payment_status IN ('unpaid', 'partial')
+        AND pu.total_amount - pu.paid_amount > 0
+      GROUP BY pu.partner_id, a.name, a.type
+      ORDER BY total_due DESC, a.name, pu.partner_id
+      LIMIT $6) t)                                                                              AS payable_top,
+  EXISTS (SELECT 1 FROM supplier_payment sp WHERE sp.user_id = $1)                              AS has_supplier_payment`;
+
+
 /**
  * 재고 경과일 기준 — 재고현황 화면(Main.jsx TabReorder)의 T-209 기준 [가정]과 같은 값.
  * 화면 상수와 따로 있으므로 바꿀 때 두 곳을 함께 바꾼다(보고서 "설계 변경 제안" 참고).
@@ -116,7 +146,8 @@ SELECT
        FROM inv
       WHERE aging_days >= $4
       ORDER BY aging_days DESC, quantity DESC, product_name, product_id
-      LIMIT $6) t)                                                                              AS stale_items`;
+      LIMIT $6) t)                                                                              AS stale_items
+  ${PAYABLE_SELECT}`;
 
 const amountCount = (o) => ({ amount: money(o?.amount), count: Number(o?.count || 0) });
 
@@ -138,6 +169,25 @@ function registerDashboardRoutes(app, { pool, getUserId, kstToday }) {
             purchases: amountCount(x.purchases),
             sales: amountCount(x.sales),
             receipts: amountCount(x.receipts),
+            // T-201 오늘 지급(기초 정리 제외)
+            payments: amountCount(x.pays),
+            pay_amount: money(x.pays?.amount),
+            pay_count: Number(x.pays?.count || 0),
+          },
+          // T-201 총 미지급 + 미지급 많은 매입처 상위 5. has_any_payment=false 면 화면이 "기초 정리" 안내를 보인다(U-1)
+          payable: {
+            total: money(x.payable?.total),
+            purchase_count: Number(x.payable?.purchase_count || 0),
+            partner_count: Number(x.payable?.partner_count || 0),
+            has_any_payment: Boolean(x.has_supplier_payment),
+            top: (x.payable_top || []).map((p) => ({
+              partner_id: p.partner_id,
+              partner_name: p.partner_name,
+              partner_type: p.partner_type,
+              total_due: money(p.total_due),
+              purchase_count: p.purchase_count,
+              oldest_days: p.oldest_days,
+            })),
           },
           receivables: {
             basis: 'sale_date',

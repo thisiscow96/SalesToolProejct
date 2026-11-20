@@ -15,10 +15,13 @@ export const PARTNER_TYPE_OPTIONS = [
 ];
 /** 받을 돈(미수) 장부가 있는 유형 — 서버 SALE_PARTNER_TYPES 와 같음. 매입처는 원장 버튼을 숨긴다(T-104 RULE-10) */
 const RECEIVABLE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
+/** 줄 돈(미지급) 장부가 있는 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 (T-201). 둘 다 되는 유형은 원장 버튼 2개 */
+const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
 const VIEW_KEY = 'partners.view';
 function readView() {
   try {
-    return window.localStorage.getItem(VIEW_KEY) === 'aging' ? 'aging' : 'list';
+    const v = window.localStorage.getItem(VIEW_KEY);
+    return v === 'aging' || v === 'payaging' ? v : 'list';
   } catch {
     return 'list';
   }
@@ -230,11 +233,17 @@ export default function TabPartners() {
   const [dueErr, setDueErr] = useState('');
   const [sortByDue, setSortByDue] = useState(false);
   const [ledgerPartner, setLedgerPartner] = useState(null);
+  // T-201: 원장 종류 — 'receivable'(받을 돈) | 'payable'(지급 원장)
+  const [ledgerMode, setLedgerMode] = useState('receivable');
   const [agingFocus, setAgingFocus] = useState(null);
+  const openLedger = (partner, mode) => {
+    setLedgerMode(mode);
+    setLedgerPartner(partner);
+  };
 
   const switchView = (v) => {
     setView(v);
-    if (v !== 'aging') setAgingFocus(null);
+    if (v === 'list') setAgingFocus(null);
     try {
       window.localStorage.setItem(VIEW_KEY, v);
     } catch {
@@ -309,9 +318,14 @@ export default function TabPartners() {
         <button type="button" role="tab" aria-selected={view === 'aging'} onClick={() => switchView('aging')}>
           미수 연령
         </button>
+        <button type="button" role="tab" aria-selected={view === 'payaging'} onClick={() => switchView('payaging')}>
+          미지급 연령
+        </button>
       </div>
       {view === 'aging' ? (
-        <ReceivablesAgingView focusPartnerId={agingFocus} onOpenLedger={setLedgerPartner} />
+        <ReceivablesAgingView focusPartnerId={agingFocus} onOpenLedger={(p) => openLedger(p, 'receivable')} />
+      ) : view === 'payaging' ? (
+        <ReceivablesAgingView mode="payable" focusPartnerId={agingFocus} onOpenLedger={(p) => openLedger(p, 'payable')} />
       ) : (
       <>
       <div className="main-filters">
@@ -387,6 +401,7 @@ export default function TabPartners() {
                     미수{sortByDue ? ' ▾' : ''}
                   </button>
                 </th>
+                <th className="num">미지급</th>
                 <th aria-label="관리" />
               </tr>
             </thead>
@@ -414,6 +429,13 @@ export default function TabPartners() {
                       );
                     })()}
                   </td>
+                  <td data-card="key" data-label="미지급" className="partner-due">
+                    {PAYABLE_TYPES.has(p.type) && Number(p.payable_amount) > 0 ? (
+                      <span className="partner-due-amt">{won(p.payable_amount)}</span>
+                    ) : (
+                      <span className="partner-due-none">—</span>
+                    )}
+                  </td>
                   <td data-card="action">
                     <span className="partner-actions">
                     {RECEIVABLE_TYPES.has(p.type) && (
@@ -421,9 +443,19 @@ export default function TabPartners() {
                         type="button"
                         className="main-btn main-btn--secondary partner-edit-btn"
                         aria-label={`${p.name} 원장`}
-                        onClick={() => setLedgerPartner(p)}
+                        onClick={() => openLedger(p, 'receivable')}
                       >
                         원장
+                      </button>
+                    )}
+                    {PAYABLE_TYPES.has(p.type) && (
+                      <button
+                        type="button"
+                        className="main-btn main-btn--secondary partner-edit-btn"
+                        aria-label={`${p.name} 지급 원장`}
+                        onClick={() => openLedger(p, 'payable')}
+                      >
+                        지급 원장
                       </button>
                     )}
                     <button
@@ -454,11 +486,12 @@ export default function TabPartners() {
       {ledgerPartner && (
         <PartnerLedgerModal
           partner={ledgerPartner}
+          mode={ledgerMode}
           onClose={closeLedger}
           onShowAging={(p) => {
             setLedgerPartner(null);
             setAgingFocus(p.id);
-            switchView('aging');
+            switchView(ledgerMode === 'payable' ? 'payaging' : 'aging');
           }}
         />
       )}
