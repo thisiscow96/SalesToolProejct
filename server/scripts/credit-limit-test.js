@@ -94,8 +94,6 @@ async function main() {
       WHERE table_name = 'account' AND column_name = 'credit_limit'`
   );
   check('M-01 account.credit_limit 열 NUMERIC(14,2) NULL 허용', col.rows[0]?.numeric_precision === 14 && col.rows[0]?.numeric_scale === 2 && col.rows[0]?.is_nullable === 'YES', col.rows[0]);
-  const neg = await pool.query(`UPDATE account SET credit_limit = -1 WHERE false`).then(() => null);
-  void neg;
   let chk = null;
   try {
     await pool.query(`INSERT INTO account (user_id, name, type, credit_limit) SELECT id, 'neg_${tag}', 'customer', -1 FROM "user" WHERE agent_no = $1`, [`t207a_${tag}`]);
