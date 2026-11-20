@@ -46,6 +46,7 @@ const FIELD_LABEL = {
   type: '유형',
   contact: '담당자',
   phone: '전화',
+  email: '이메일',
   location: '위치',
   address: '주소',
   credit_limit: '외상 한도',

@@ -682,7 +682,7 @@ app.get('/api/partners', async (req, res) => {
   try {
     // payable_amount: 매입 가능 유형만 미지급 합(T-201 W-08), 그 밖은 null
     const r = await pool.query(
-      `SELECT a.id, a.name, a.type, a.contact, a.phone, a.location, a.address, a.credit_limit,
+      `SELECT a.id, a.name, a.type, a.contact, a.phone, a.email, a.location, a.address, a.credit_limit,
               (CASE WHEN a.type IN ('supplier', 'wholesaler', 'market_wholesaler', 'same_market')
                     THEN COALESCE((SELECT SUM(pu.total_amount - pu.paid_amount) FROM purchase pu
                                     WHERE pu.user_id = a.user_id AND pu.partner_id = a.id AND pu.status = 'active'
@@ -700,13 +700,13 @@ app.get('/api/partners', async (req, res) => {
 
 // 거래처 등록·수정 (T-102) — 유형은 partner_type enum(001·004)과 같게 유지
 const PARTNER_TYPES = ['supplier', 'customer', 'same_market', 'wholesaler', 'market_wholesaler'];
-const PARTNER_TEXT_LIMITS = { name: 200, contact: 100, phone: 50, location: 200, address: 2000, memo: 2000 };
+const PARTNER_TEXT_LIMITS = { name: 200, contact: 100, phone: 50, email: 255, location: 200, address: 2000, memo: 2000 };
 
 /** 본문에서 거래처 필드를 읽어 검증한다. partial=true(수정)면 본문에 없는 필드는 건드리지 않는다. */
 function readPartnerBody(body, partial) {
   const b = body && typeof body === 'object' ? body : {};
   const out = {};
-  for (const key of ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo']) {
+  for (const key of ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo']) {
     if (!(key in b)) continue;
     const v = b[key] == null ? '' : String(b[key]).trim();
     out[key] = v;
@@ -720,8 +720,10 @@ function readPartnerBody(body, partial) {
   for (const [key, max] of Object.entries(PARTNER_TEXT_LIMITS)) {
     if (out[key] != null && out[key].length > max) return { error: `${key} 값은 ${max}자 이하로 입력하세요.` };
   }
+  // 입금 안내 이메일 (T-214) — 비우면 없음
+  if (out.email && !isValidEmail(out.email)) return { error: '이메일 형식이 올바르지 않습니다.' };
   // 선택 항목은 빈 문자열 대신 NULL 로 저장
-  for (const key of ['contact', 'phone', 'location', 'address', 'memo']) {
+  for (const key of ['contact', 'phone', 'email', 'location', 'address', 'memo']) {
     if (key in out && out[key] === '') out[key] = null;
   }
   // 외상 한도 (T-207) — 비우면 한도 없음(NULL)
@@ -731,7 +733,7 @@ function readPartnerBody(body, partial) {
   return { fields: out };
 }
 
-const PARTNER_RETURNING = 'id, name, type, contact, phone, location, address, memo, credit_limit, created_at, updated_at';
+const PARTNER_RETURNING = 'id, name, type, contact, phone, email, location, address, memo, credit_limit, created_at, updated_at';
 // 외상 한도 (T-207) — 판매·매출 수정 저장 후 미수가 한도를 넘으면 409 CREDIT_LIMIT(확인 후 저장)
 const credit = require('./lib/credit-limit');
 
@@ -764,10 +766,10 @@ app.post('/api/partners', async (req, res) => {
       return res.status(409).json({ ok: false, message: `이미 같은 이름의 거래처가 있습니다: ${dup.name}`, data: { duplicate_id: dup.id } });
     }
     const r = await client.query(
-      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo, credit_limit)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric)
+      `INSERT INTO account (user_id, name, type, contact, phone, location, address, memo, credit_limit, email)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10)
        RETURNING ${PARTNER_RETURNING}`,
-      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null, f.credit_limit ?? null]
+      [userId, f.name, f.type, f.contact ?? null, f.phone ?? null, f.location ?? null, f.address ?? null, f.memo ?? null, f.credit_limit ?? null, f.email ?? null]
     );
     await recordAudit(client, { userId, entityType: 'account', entityId: r.rows[0].id, partnerId: r.rows[0].id, action: 'create', before: null, after: r.rows[0] }); // T-212
     await client.query('COMMIT');
@@ -839,6 +841,8 @@ require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstT
 require('./lib/dashboard-routes').registerDashboardRoutes(app, { pool, getUserId, kstToday });
 // 변경 이력(감사 로그) 화면 (T-212) — lib/audit-log.js
 registerAuditRoutes(app, { pool, getUserId });
+// 미수 입금 안내 메일 (T-214) — lib/payment-reminder-routes.js (메일은 lib/mailer.js, 테스트는 MAIL_DRY_RUN)
+require('./lib/payment-reminder-routes').registerPaymentReminderRoutes(app, { pool, getUserId, kstToday, connectOr503, mailer: { sendMail, configuredProviders } });
 // 중매인 개인 품목·공용 등록 요청 (T-216) — lib/product-request-routes.js
 require('./lib/product-request-routes').registerProductRequestRoutes(app, { pool, getUserIdAndAdmin, connectOr503, generateProductKey });
 // 매입처 지급·지급 원장·미지급 연령 (T-201) — 라우트는 lib/payable-routes.js
