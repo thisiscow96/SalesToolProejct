@@ -34,20 +34,25 @@ const RECEIVABLE_DUE_CTE = `
         WITH due AS (
           SELECT s.id, s.partner_id, s.sale_date, s.product_id, s.quantity,
                  s.total_amount, s.returned_amount, s.paid_amount,
-                 (s.total_amount - s.returned_amount - s.paid_amount) AS due,
+                 (s.total_amount - s.returned_amount - s.paid_amount - s.discount_amount - s.offset_amount) AS due,
                  GREATEST($2::date - s.sale_date, 0)                 AS days
           FROM sale s
           WHERE s.user_id = $1
             AND s.status <> 'cancelled'
             AND s.payment_status IN ('unpaid', 'partial')
-            AND s.total_amount - s.returned_amount - s.paid_amount > 0.005
+            AND s.total_amount - s.returned_amount - s.paid_amount - s.discount_amount - s.offset_amount > 0.005
             AND ($3::int IS NULL OR s.partner_id = $3::int)
         )`;
 
 /** 판매 가능한 거래처 유형(index.js SALE_PARTNER_TYPES와 같음). 그 밖(supplier)은 받을 돈 장부가 없다 — RULE-10 */
 const RECEIVABLE_PARTNER_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
-const KIND_LABEL = { sale: '매출', return: '반품', receipt: '수금', refund_cash: '환불 지급', sale_cancelled: '취소 매출' };
+const KIND_LABEL = {
+  sale: '매출', return: '반품', receipt: '수금', refund_cash: '환불 지급', sale_cancelled: '취소 매출',
+  // T-401 정산 할인·상계
+  discount: '할인', offset: '상계', discount_reversal: '할인 되돌림',
+  discount_cancelled: '취소 할인', offset_cancelled: '취소 상계',
+};
 
 function validationError(res, field, message) {
   return res.status(400).json({ ok: false, code: 'VALIDATION', field, message });
@@ -96,6 +101,17 @@ function describe(e, allocations) {
     }
     case 'refund_cash':
       return e.memo ? `환불 지급 (${e.memo})` : '환불 지급';
+    case 'discount':
+    case 'offset': {
+      const label = e.kind === 'discount' ? '할인' : '상계';
+      const parts = (allocations || []).map((a) => `매출 #${a.sale_id} ${fmt(a.amount)}`);
+      return parts.length ? `${label} (${parts.join(' · ')})` : label;
+    }
+    case 'discount_reversal':
+      return `할인 되돌림 (반품 #${e.ref_id}, 매출 #${e.sale_id})`;
+    case 'discount_cancelled':
+    case 'offset_cancelled':
+      return `취소 ${e.kind === 'discount_cancelled' ? `할인 #${e.ref_id}` : `상계 #${e.offset_id || e.ref_id}`} ${fmt(e.cancelled_amount)} (원장 잔액에 넣지 않음)`;
     default:
       return e.kind;
   }
@@ -159,9 +175,12 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
            (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'return')      AS returns,
            (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'receipt')     AS receipts,
            (SELECT COALESCE(SUM(increase), 0) FROM inr WHERE kind = 'refund_cash') AS refunds,
+           (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'discount')    AS discounts,
+           (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'offset')      AS offsets,
+           (SELECT COALESCE(SUM(increase), 0) FROM inr WHERE kind = 'discount_reversal') AS discount_reversals,
            (SELECT COUNT(*)::int FROM inr)                                         AS n,
            (SELECT COALESCE(SUM(increase - decrease), 0) FROM e)                   AS ledger_balance,
-           (SELECT COALESCE(SUM(GREATEST(total_amount - returned_amount - paid_amount, 0)), 0)
+           (SELECT COALESCE(SUM(GREATEST(total_amount - returned_amount - paid_amount - discount_amount - offset_amount, 0)), 0)
               FROM sale WHERE user_id = $1 AND partner_id = $2 AND status <> 'cancelled') AS sale_based_due,
            -- 돌려줄 돈(013 overpaid_amount: 010 이전 기록의 받은 돈 > 순매출) — 원장에서는 음수 잔액으로 보인다
            (SELECT COALESCE(SUM(overpaid_amount), 0)
@@ -200,11 +219,12 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
       );
 
       // 수금 행의 매출별 배분 내역
-      const receiptIds = rows.rows.filter((r) => r.kind === 'receipt').map((r) => r.ref_id);
+      const receiptIds = rows.rows.filter((r) => ['receipt', 'discount', 'offset'].includes(r.kind)).map((r) => r.ref_id);
       const allocByPayment = new Map();
+      const offsetByPayment = new Map();
       if (receiptIds.length) {
         const al = await db.query(
-          `SELECT pa.payment_id, pa.sale_id, pa.amount
+          `SELECT pa.payment_id, pa.sale_id, pa.amount, p.offset_id
              FROM payment_allocation pa
              JOIN payment p ON p.id = pa.payment_id AND p.user_id = $1
             WHERE pa.payment_id = ANY($2::int[])
@@ -212,13 +232,14 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           [userId, receiptIds]
         );
         for (const a of al.rows) {
+          if (a.offset_id) offsetByPayment.set(a.payment_id, a.offset_id); // T-401 상계 취소 버튼용
           if (!allocByPayment.has(a.payment_id)) allocByPayment.set(a.payment_id, []);
           allocByPayment.get(a.payment_id).push({ sale_id: a.sale_id, amount: Number(a.amount) });
         }
       }
 
       let entries = rows.rows.map((r) => {
-        const allocations = r.kind === 'receipt' ? allocByPayment.get(r.ref_id) || [] : undefined;
+        const allocations = ['receipt', 'discount', 'offset'].includes(r.kind) ? allocByPayment.get(r.ref_id) || [] : undefined;
         const e = {
           date: r.date,
           kind: r.kind,
@@ -239,6 +260,7 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           e.cash_refund_amount = money(r.cash_refund_amount);
         }
         if (allocations) e.allocations = allocations;
+        if (r.kind === 'offset') e.offset_id = offsetByPayment.get(r.ref_id) || null;
         e.description = describe({ ...e, product_name: r.product_name }, allocations);
         return e;
       });
@@ -253,6 +275,35 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
               AND ($3::date IS NULL OR s.sale_date >= $3::date) AND ($4::date IS NULL OR s.sale_date <= $4::date)`,
           [userId, partnerId, fromP, toP]
         );
+        // T-401: 취소한 할인·상계도 금액 0 행으로
+        const cp = await db.query(
+          `SELECT p.id, p.entry_kind, p.offset_id, to_char((p.paid_at AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD') AS date, p.amount, p.memo, p.paid_at,
+                  p.cancel_reason, p.cancelled_at
+             FROM payment p
+            WHERE p.user_id = $1 AND p.partner_id = $2 AND p.status = 'cancelled' AND p.entry_kind IN ('discount', 'offset')
+              AND ($3::date IS NULL OR (p.paid_at AT TIME ZONE 'Asia/Seoul')::date >= $3::date)
+              AND ($4::date IS NULL OR (p.paid_at AT TIME ZONE 'Asia/Seoul')::date <= $4::date)`,
+          [userId, partnerId, fromP, toP]
+        );
+        const cancelledPay = cp.rows.map((r) => {
+          const e = {
+            date: r.date,
+            kind: `${r.entry_kind}_cancelled`,
+            kind_label: KIND_LABEL[`${r.entry_kind}_cancelled`],
+            ref_id: r.id,
+            sale_id: null,
+            cancelled_amount: money(r.amount),
+            cancel_reason: r.cancel_reason,
+            offset_id: r.offset_id || null,
+            increase: 0,
+            decrease: 0,
+            balance: 0,
+            memo: r.memo,
+            _order: [r.date, 3, new Date(r.paid_at || 0).getTime(), r.id],
+          };
+          e.description = describe(e);
+          return e;
+        });
         const cancelled = c.rows.map((r) => {
           const e = {
             date: r.date,
@@ -280,10 +331,10 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           }
           return 0;
         };
-        entries = [...entries, ...cancelled].sort(cmp);
+        entries = [...entries, ...cancelled, ...cancelledPay].sort(cmp);
         let prev = money(s.opening);
         for (const e of entries) {
-          if (e.kind === 'sale_cancelled') e.balance = prev;
+          if (e.kind.endsWith('_cancelled')) e.balance = prev;
           else prev = e.balance;
         }
       }
@@ -300,7 +351,10 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
           to: toP,
           opening_balance: money(s.opening),
           closing_balance: money(s.closing),
-          totals: { sales: money(s.sales), returns: money(s.returns), receipts: money(s.receipts), refunds: money(s.refunds) },
+          totals: {
+            sales: money(s.sales), returns: money(s.returns), receipts: money(s.receipts), refunds: money(s.refunds),
+            discounts: money(s.discounts), offsets: money(s.offsets), discount_reversals: money(s.discount_reversals), // T-401
+          },
           entries,
           // 외상 한도·사용률 (T-207) — 사용 금액 = 매출별 미수 합(receivables_by_partner 와 같은 정의, 기간과 무관한 지금 값)
           credit: creditSummary(creditLimit, saleBasedDue),

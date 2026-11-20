@@ -123,6 +123,22 @@ SELECT
     WHERE py.user_id = $1 AND py.entry_kind = 'receive'
       AND py.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
       AND py.paid_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                 AS receipts,
+  -- T-401 오늘 매출 할인·매입 할인·상계 (현금이 아니라 위 수금·지급에는 들어가지 않는다)
+  (SELECT json_build_object('amount', COALESCE(SUM(py.amount), 0), 'count', COUNT(*))
+     FROM payment py
+    WHERE py.user_id = $1 AND py.entry_kind = 'discount' AND py.status = 'active'
+      AND py.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND py.paid_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                 AS discounts,
+  (SELECT json_build_object('amount', COALESCE(SUM(sp.amount), 0), 'count', COUNT(*))
+     FROM supplier_payment sp
+    WHERE sp.user_id = $1 AND sp.kind = 'discount' AND sp.status = 'active'
+      AND sp.paid_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND sp.paid_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                 AS pay_discounts,
+  (SELECT json_build_object('amount', COALESCE(SUM(so.amount), 0), 'count', COUNT(*))
+     FROM settlement_offset so
+    WHERE so.user_id = $1 AND so.status = 'active'
+      AND so.offset_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Seoul')
+      AND so.offset_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                AS offsets,
   (SELECT json_build_object(
             'total_due', COALESCE(SUM(total_due), 0),
             'd0_30',     COALESCE(SUM(d0_30), 0),
@@ -177,6 +193,10 @@ function registerDashboardRoutes(app, { pool, getUserId, kstToday }) {
             payments: amountCount(x.pays),
             pay_amount: money(x.pays?.amount),
             pay_count: Number(x.pays?.count || 0),
+            // T-401 현금이 아닌 정리(할인·상계) — 0이면 화면이 숨긴다
+            discounts: amountCount(x.discounts),
+            pay_discounts: amountCount(x.pay_discounts),
+            offsets: amountCount(x.offsets),
           },
           // T-201 총 미지급 + 미지급 많은 매입처 상위 5. has_any_payment=false 면 화면이 "기초 정리" 안내를 보인다(U-1)
           payable: {

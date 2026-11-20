@@ -141,3 +141,39 @@
     white-space: normal;
   }
 }
+
+/* ---------- T-401 지급 구분(현금 지급 / 매입 할인) ---------- */
+.sp-kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.sp-kind-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.sp-kind-opt input {
+  margin: 0;
+  width: auto;
+  min-height: 0;
+  display: inline-block;
+}
+.sp-kind-opt.is-on {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-modal-form .sp-kind .sp-kind-opt {
+  flex-direction: row;
+  align-items: center;
+}

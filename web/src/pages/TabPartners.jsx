@@ -9,11 +9,12 @@ import './TabPartners.css';
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
 export const PARTNER_TYPE_OPTIONS = [
-  { value: 'supplier', label: '매입처', hint: '매입에서 선택' },
+  // T-401 RQ-08: 도매시장법인(청과)을 알아보게 — 저장 값은 그대로 supplier (enum 추가 없음, 설계 3.10)
+  { value: 'supplier', label: '매입처 (도매시장법인·청과)', hint: '경매 낙찰분을 사 오는 곳 — 예: ○○청과 · 매입에서 선택' },
   { value: 'customer', label: '판매처', hint: '매출에서 선택' },
-  { value: 'same_market', label: '같은 시장', hint: '매입·매출 모두' },
-  { value: 'wholesaler', label: '도매상', hint: '매입·매출 모두' },
-  { value: 'market_wholesaler', label: '시장도매인', hint: '매입·매출 모두' },
+  { value: 'same_market', label: '같은 시장', hint: '같은 시장 중매인 — 매입·매출 모두 · 상계 가능' },
+  { value: 'wholesaler', label: '도매상', hint: '매입·매출 모두 · 상계 가능' },
+  { value: 'market_wholesaler', label: '시장도매인', hint: '매입·매출 모두 · 상계 가능' },
 ];
 /** 받을 돈(미수) 장부가 있는 유형 — 서버 SALE_PARTNER_TYPES 와 같음. 매입처는 원장 버튼을 숨긴다(T-104 RULE-10) */
 const RECEIVABLE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);

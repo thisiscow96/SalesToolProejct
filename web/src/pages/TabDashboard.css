@@ -473,3 +473,10 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* T-401 할인·상계 한 줄 (현금 아님) */
+.dash-kpi-note {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}

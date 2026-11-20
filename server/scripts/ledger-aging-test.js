@@ -323,12 +323,14 @@ async function main() {
     const S9 = await sell(K, 10, 100, ago(20));
     await receive(K, 1000, ago(19), [{ sale_id: S9, amount: 1000 }]);
     // 옛 코드 모양: 환불금 0, 반품 3개, 받은 돈 그대로 → 013 백필 결과와 같은 값으로 직접 만든다
+    // 지금 정의를 기억했다가 그대로 다시 건다 (T-401: 023 이 정의에 할인·상계를 더함 — 013 정의로 되돌려 놓지 않게)
+    const conDef = (await pool.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname = 'sale_paid_not_over_net' AND conrelid = 'sale'::regclass`)).rows[0].d;
     await pool.query(`ALTER TABLE sale DROP CONSTRAINT sale_paid_not_over_net`);
     await pool.query(
       `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, credit_amount, return_amount, reason, refunded_at)
        SELECT user_id, id, 3, 0, 300, 300, '옛 반품(환불금 없음)', $2::date FROM sale WHERE id = $1`, [S9, ago(18)]);
     await pool.query(`UPDATE sale SET returned_amount = 300, overpaid_amount = 300, payment_status = 'paid' WHERE id = $1`, [S9]);
-    await pool.query(`ALTER TABLE sale ADD CONSTRAINT sale_paid_not_over_net CHECK (paid_amount <= total_amount - returned_amount + overpaid_amount)`);
+    await pool.query(`ALTER TABLE sale ADD CONSTRAINT sale_paid_not_over_net ${conDef}`);
     const pm = await request('PATCH', `/api/sales/${S9}`, { reason: '메모 고침', changes: { memo: '초과 수금 메모' } }, A);
     check('R-01 받은 돈 > 순매출 매출 메모 수정 → 200 (예전 500)', pm.status === 200 && pm.json?.data?.memo === '초과 수금 메모', pm);
     L = (await ledger(A, K.id)).json.data;

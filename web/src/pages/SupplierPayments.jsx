@@ -43,6 +43,10 @@ const dateTimeText = (ts) => {
 };
 const firstDayOfMonthKst = () => `${kstTodayYmd().slice(0, 7)}-01`;
 
+/** 지급 종류 표시 (T-401: 매입 할인·상계 추가) */
+const KIND_TEXT = { pay: '지급', opening: '기초 정리', discount: '매입 할인', offset: '상계' };
+const KIND_CLASS = { pay: 'main-status--entry-receive', opening: 'main-status--pay-partial', discount: 'main-status--entry-discount', offset: 'main-status--entry-offset' };
+
 /** 매입 목록의 지급 상태 배지 (매출의 수금 배지와 같은 색) */
 export function PurchasePayBadge({ row }) {
   if (row.status === 'cancelled' || !row.payment_status) return <span className="sp-muted">—</span>;
@@ -118,6 +122,8 @@ export function SupplierPaymentModal({ partners, initial, onClose, onDone }) {
   const [alloc, setAlloc] = useState({}); // purchase_id → 금액 문자열
   const [paidAt, setPaidAt] = useState(kstNowLocalInput());
   const [method, setMethod] = useState('transfer');
+  // T-401 구분: pay(현금 지급) | discount(매입 할인 — 매입처가 깎아 준 금액, 지급 방법 없음)
+  const [kind, setKind] = useState(initial?.kind === 'discount' ? 'discount' : 'pay');
   const [memo, setMemo] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -180,11 +186,13 @@ export function SupplierPaymentModal({ partners, initial, onClose, onDone }) {
         partner_id: Number(partnerId),
         amount: centsStr(amountC),
         paid_at: paidAt,
-        method,
+        ...(kind === 'discount' ? { kind: 'discount' } : { method }),
         memo: memo.trim() || undefined,
         allocations,
       });
-      onDone(`${d.partner_name}에 ${won(d.amount)}원을 지급했습니다 — 미지급 ${won(d.partner_payable_after)}원 남음.`);
+      onDone(kind === 'discount'
+        ? `${d.partner_name} 매입 할인 ${won(d.amount)}원을 기록했습니다 — 미지급 ${won(d.partner_payable_after)}원 남음.`
+        : `${d.partner_name}에 ${won(d.amount)}원을 지급했습니다 — 미지급 ${won(d.partner_payable_after)}원 남음.`);
     } catch (er) {
       setError(er);
     } finally {
@@ -195,19 +203,28 @@ export function SupplierPaymentModal({ partners, initial, onClose, onDone }) {
   let hint = '';
   if (!partnerId) hint = '매입처를 고르세요.';
   else if (!rowsLoading && rows.length === 0) hint = '이 매입처에 지급할 매입이 없습니다.';
-  else if (!amountOk) hint = '지급액을 넣으면 오래된 매입부터 채웁니다.';
+  else if (!amountOk) hint = kind === 'discount' ? '할인액을 넣으면 오래된 매입부터 채웁니다.' : '지급액을 넣으면 오래된 매입부터 채웁니다.';
   else if (amountC > totalDue) hint = `지급액이 미지급 합계(${won(fromCents(totalDue))}원)보다 많습니다. 선급금은 아직 기록할 수 없습니다.`;
   else if (overRow) hint = `매입 #${overRow.id}에 남은 미지급보다 많이 넣었습니다.`;
   else if (sumC !== amountC) hint = `배분 합 ${won(fromCents(sumC))}원 / 지급액 ${won(fromCents(amountC))}원 — 같아야 저장할 수 있습니다.`;
 
   return (
-    <SpModal title="지급 등록" onClose={onClose} formId="sp-pay-form" saveLabel="지급 저장" submitting={submitting} saveDisabled={!canSave} wide>
+    <SpModal title={kind === 'discount' ? '매입 할인 등록' : '지급 등록'} onClose={onClose} formId="sp-pay-form" saveLabel={kind === 'discount' ? '할인 저장' : '지급 저장'} submitting={submitting} saveDisabled={!canSave} wide>
       <form id="sp-pay-form" className="main-modal-form sp-form" onSubmit={submit}>
         {error && (
           <div className="main-alert-banner" role="alert">
             {errorText(error)}
           </div>
         )}
+        <div className="sp-kind" role="radiogroup" aria-label="구분">
+          {[['pay', '현금 지급'], ['discount', '매입 할인']].map(([k, label]) => (
+            <label key={k} className={`sp-kind-opt${kind === k ? ' is-on' : ''}`}>
+              <input type="radio" name="sp-kind" value={k} checked={kind === k} onChange={() => setKind(k)} />
+              {label}
+            </label>
+          ))}
+          {kind === 'discount' && <small className="tc-hint">매입처가 깎아 준 금액만 미지급에서 뺍니다. 현금 지급 합계·원가에는 들어가지 않습니다.</small>}
+        </div>
         <div className="tc-grid sp-grid">
           <label>
             매입처
@@ -222,23 +239,25 @@ export function SupplierPaymentModal({ partners, initial, onClose, onDone }) {
             </select>
           </label>
           <label>
-            지급액
+            {kind === 'discount' ? '할인액' : '지급액'}
             <input type="text" inputMode="decimal" value={amount} onChange={(e) => changeAmount(e.target.value)} placeholder="0" aria-describedby="sp-pay-hint" />
           </label>
           <label>
             지급일시
             <input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} required />
           </label>
-          <label>
-            방법
-            <select value={method} onChange={(e) => setMethod(e.target.value)}>
-              {PAY_METHOD_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {kind !== 'discount' && (
+            <label>
+              방법
+              <select value={method} onChange={(e) => setMethod(e.target.value)}>
+                {PAY_METHOD_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="tc-grid-wide">
             메모
             <input type="text" maxLength={500} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="예: 10월분" />
@@ -350,7 +369,7 @@ function CancelPaymentModal({ row, onClose, onDone }) {
         )}
         <p className="tc-summary">
           <strong>
-            {row.kind === 'opening' ? '기초 정리' : '지급'} #{row.id}
+            {KIND_TEXT[row.kind] || '지급'} #{row.id}
           </strong>{' '}
           · {row.partner_name} · {won(row.amount)}원 · {dateTimeText(row.paid_at)} 을(를) 취소합니다.
         </p>
@@ -608,7 +627,7 @@ export default function TabSupplierPayments() {
                         )}
                       </td>
                       <td data-card="key" data-label="구분">
-                        <span className={`main-status ${row.kind === 'opening' ? 'main-status--pay-partial' : 'main-status--entry-receive'}`}>{row.kind === 'opening' ? '기초 정리' : '지급'}</span>
+                        <span className={`main-status ${KIND_CLASS[row.kind] || 'main-status--entry-receive'}`}>{KIND_TEXT[row.kind] || '지급'}</span>
                       </td>
                       <td data-card="title" data-label="매입처" className="main-col-partner">
                         {row.partner_name}
@@ -627,7 +646,8 @@ export default function TabSupplierPayments() {
                         {cancelled && row.cancel_reason ? <span className="sp-muted"> · 취소: {row.cancel_reason}</span> : null}
                       </td>
                       <td data-card="action" className="main-col-manage">
-                        {!cancelled && can('supplier_payment.cancel') && (
+                        {!cancelled && row.kind === 'offset' && <span className="sp-muted" title="상계는 거래처 원장에서 수금 쪽과 함께 취소합니다">원장에서 상계 취소</span>}
+                        {!cancelled && row.kind !== 'offset' && can('supplier_payment.cancel') && (
                           <button type="button" className="main-btn main-btn--secondary sp-cancel-btn" onClick={() => setModal({ type: 'cancel', row })} aria-label={`지급 #${row.id} 취소`}>
                             취소
                           </button>

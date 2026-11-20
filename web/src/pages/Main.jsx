@@ -4,6 +4,7 @@ import {
   fetchPurchases,
   fetchSales,
   fetchPayments,
+  cancelPayment,
   fetchProducts,
   fetchPartners,
   fetchLastPurchasePrice,
@@ -339,6 +340,9 @@ function buildDisposalReasonFromDraft(d) {
   }
   return '';
 }
+
+/** 수금 종류 표시 (T-401: 정산 할인·상계 추가) */
+const ENTRY_KIND_LABEL = { receive: '수금', refund: '환불', discount: '할인', offset: '상계' };
 
 /** 수금 반영 수량(비율): 총 수량 × (수금액/매출금액) */
 function computeCollectedQty(s) {
@@ -1344,6 +1348,8 @@ function TabSales({ navFilter } = {}) {
   const [loadingUnpaid, setLoadingUnpaid] = useState(false);
   const [collectSaleSelected, setCollectSaleSelected] = useState({});
   const [collectAlloc, setCollectAlloc] = useState({});
+  // T-401 구분: receive(현금 수금) | discount(정산 할인 — 현금 아님, 주인만)
+  const [collectKind, setCollectKind] = useState('receive');
   const [saleErr, setSaleErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
   /** false: 최초·기본은 수금 완료 매출만 목록 */
@@ -1412,6 +1418,8 @@ function TabSales({ navFilter } = {}) {
 
   const openCollect = async () => {
     setSaleErr('');
+    setCollectKind('receive');
+    setCollectKind('receive');
     setCollectPartner(partnerId || '');
     setCollectDateTime(defaultCollectDateTime());
     setCollectAlloc({});
@@ -1452,7 +1460,7 @@ function TabSales({ navFilter } = {}) {
       })
       .filter((a) => a.amount > 0);
     if (allocations.length === 0) {
-      setSaleErr('체크한 매출에 수금 금액을 입력하세요.');
+      setSaleErr(`체크한 매출에 ${collectKind === 'discount' ? '할인' : '수금'} 금액을 입력하세요.`);
       return;
     }
     const invalid = allocations.find((a) => a.amount > a.max_due + 1e-9 || a.amount > a.max_total + 1e-9);
@@ -1473,8 +1481,8 @@ function TabSales({ navFilter } = {}) {
       partner_id: parseInt(collectPartner, 10),
       amount: paySum,
       paid_at: paidAtPayload,
-      entry_kind: 'receive',
-      allocations,
+      entry_kind: collectKind === 'discount' ? 'discount' : 'receive',
+      allocations: allocations.map(({ sale_id, amount }) => ({ sale_id, amount })),
     })
       .then(() => {
         setShowCollect(false);
@@ -1618,7 +1626,7 @@ function TabSales({ navFilter } = {}) {
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
       <Modal
         open={showCollect}
-        title="수금 등록 (미수 매출 배분)"
+        title={collectKind === 'discount' ? '정산 할인 등록 (미수 매출 배분)' : '수금 등록 (미수 매출 배분)'}
         wide
         fill
         modalClassName="main-modal--collect"
@@ -1635,6 +1643,36 @@ function TabSales({ navFilter } = {}) {
           {saleErr && (
             <div className="main-alert-banner" role="alert">
               {saleErr}
+            </div>
+          )}
+          {can('payment.discount') && (
+            <div className="main-collect-kind" role="radiogroup" aria-label="구분">
+              <span className="main-collect-kind-label">구분</span>
+              {[['receive', '현금 수금'], ['discount', '정산 할인']].map(([k, label]) => (
+                <label key={k} className={'main-collect-kind-opt' + (collectKind === k ? ' is-on' : '')}>
+                  <input type="radio" name="collect-kind" value={k} checked={collectKind === k} onChange={() => setCollectKind(k)} />
+                  {label}
+                </label>
+              ))}
+              {collectKind === 'discount' && (
+                <>
+                  <small className="main-modal-hint">깎아 준 금액만 미수에서 뺍니다. 현금 수금 합계에는 들어가지 않습니다.</small>
+                  <button
+                    type="button"
+                    className="main-btn main-btn--ghost main-btn--sm"
+                    disabled={unpaidForPartner.length === 0}
+                    onClick={() => {
+                      const next = {};
+                      unpaidForPartner.forEach((s) => {
+                        if (collectSaleSelected[s.id]) next[s.id] = String(computeUnpaidAmount(s));
+                      });
+                      setCollectAlloc(next);
+                    }}
+                  >
+                    남은 미수 할인 처리
+                  </button>
+                </>
+              )}
             </div>
           )}
           <div className="main-modal-fields">
@@ -1943,7 +1981,9 @@ function TabSales({ navFilter } = {}) {
                             <>
                               {formatKoNumber(preview.returnAmount)}
                               <small className="main-refund-split">
-                                미수 차감 {formatKoNumber(preview.creditAmount)} · 환불 {formatKoNumber(preview.refundAmount)}
+                                미수 차감 {formatKoNumber(preview.creditAmount)}
+                                {preview.discountReversal > 0 ? ` · 할인 되돌림 ${formatKoNumber(preview.discountReversal)}` : ''} · 환불 {formatKoNumber(preview.refundAmount)}
+                                {preview.blockedByOffset ? ' · 상계로 정리된 매출 — 상계 취소 후 반품' : ''}
                               </small>
                             </>
                           ) : (
@@ -2097,6 +2137,26 @@ function TabPayments() {
   // T-211 목록 검색·페이지(서버 limit/offset)
   const paged = usePagedList('payments');
   const { list, loading, err } = paged;
+  // T-401 매출 할인 취소(주인만) — { row } 이면 사유 입력 창
+  const [cancelRow, setCancelRow] = useState(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelErr, setCancelErr] = useState('');
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const submitCancel = async (e) => {
+    e.preventDefault();
+    if (!cancelReason.trim()) { setCancelErr('취소 사유를 입력하세요.'); return; }
+    setCancelBusy(true);
+    setCancelErr('');
+    try {
+      await cancelPayment(cancelRow.id, { reason: cancelReason.trim(), expected_updated_at: cancelRow.updated_at || undefined });
+      setCancelRow(null);
+      paged.reload();
+    } catch (er) {
+      setCancelErr(er.message);
+    } finally {
+      setCancelBusy(false);
+    }
+  };
   const [searchText, setSearchText] = useState('');
   const [partners, setPartners] = useState([]);
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
@@ -2128,6 +2188,29 @@ function TabPayments() {
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
         <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('payments', fetchPayments)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
+      <Modal
+        open={!!cancelRow}
+        title="매출 할인 취소"
+        onClose={() => setCancelRow(null)}
+        formId="form-discount-cancel"
+        saveLabel="취소 실행"
+        saveLabel="취소 실행"
+        submitting={cancelBusy}
+        saveDisabled={!cancelReason.trim()}
+      >
+        <form id="form-discount-cancel" className="main-modal-form" onSubmit={submitCancel}>
+          {cancelErr && <div className="main-alert-banner" role="alert">{cancelErr}</div>}
+          {cancelRow && (
+            <p className="main-modal-hint">
+              {cancelRow.partner_name} · 할인 {formatKoNumber(cancelRow.amount)}원을 취소합니다. 지우지 않고 「취소」로 남기며, 그 금액만큼 미수가 다시 늘어납니다.
+            </p>
+          )}
+          <label className="main-modal-field-select-wide">
+            취소 사유
+            <input type="text" maxLength={200} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="예: 금액 오입력" required />
+          </label>
+        </form>
+      </Modal>
       <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
@@ -2139,16 +2222,23 @@ function TabPayments() {
                 <th className="main-col-partner">거래처</th>
                 <th className="main-col-amount">금액</th>
                 <th className="main-col-memo">비고</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
                   <td data-card="sub" data-label="수금일" className="main-col-datetime">{formatPaymentDateTime(row)}</td>
-                  <td data-card="key" data-label="구분"><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</span></td>
+                  <td data-card="key" data-label="구분"><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{ENTRY_KIND_LABEL[row.entry_kind || 'receive'] || '수금'}</span>{row.status === 'cancelled' && <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소됨'}>취소</span>}</td>
                   <td data-card="title" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText><StaffEntryBadge row={row} /></td>
                   <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(row.amount)}</td>
                   <td data-card="key" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
+                  <td data-card="action" className="main-col-manage">
+                    {row.entry_kind === 'discount' && row.status !== 'cancelled' && can('payment.discount_cancel') && (
+                      <button type="button" className="main-btn main-btn--secondary" onClick={() => { setCancelRow(row); setCancelReason(''); setCancelErr(''); }} aria-label={`할인 #${row.id} 취소`}>할인 취소</button>
+                    )}
+                    {row.entry_kind === 'offset' && row.status !== 'cancelled' && <span className="main-modal-hint" title="상계는 거래처 원장에서 지급 쪽과 함께 취소합니다">원장에서 상계 취소</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

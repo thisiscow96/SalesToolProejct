@@ -358,3 +358,23 @@ export async function fetchDashboard() {
 }
 
 export { getUser, getToken, API_BASE };
+
+// ---------- T-401 정산 할인 취소 · 상계 ----------
+async function settleReq(method, path, body, failMsg) {
+  const res = await apiFetch(`${API_BASE}${path}`, {
+    method,
+    headers: authHeaders(),
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.message || failMsg), { status: res.status, code: data.code || null, body: data });
+  return data.data;
+}
+/** 매출 할인(entry_kind=discount) 취소 — 주인만 */
+export const cancelPayment = (id, body) => settleReq('POST', `/payments/${encodeURIComponent(id)}/cancel`, body, '할인 취소 실패');
+/** 상계 등록 { partner_id, amount, memo? } — 주인만 */
+export const createOffset = (body) => settleReq('POST', '/offsets', body, '상계 등록 실패');
+/** 상계 취소 { reason } — 수금 쪽·지급 쪽을 함께 취소 */
+export const cancelOffset = (id, body) => settleReq('POST', `/offsets/${encodeURIComponent(id)}/cancel`, body, '상계 취소 실패');
+/** 상계 목록 { partner_id?, from_date?, to_date? } */
+export const fetchOffsets = (params = {}) => settleReq('GET', `/offsets?${new URLSearchParams(params).toString()}`, null, '상계 목록 조회 실패');

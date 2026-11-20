@@ -49,6 +49,8 @@ const KIND_LABEL = {
   purchase: '매입',
   payment: '지급',
   opening: '기초 정리',
+  discount: '매입 할인', // T-401
+  offset: '상계',
   purchase_cancelled: '취소 매입',
   payment_cancelled: '취소 지급',
 };
@@ -164,7 +166,9 @@ function readBodyCommon(body) {
   const partnerId = parseId(b.partner_id);
   if (!partnerId) throw vErr('partner_id', '매입처를 선택하세요.');
   const kind = b.kind == null || b.kind === '' ? 'pay' : String(b.kind);
-  if (!['pay', 'opening'].includes(kind)) throw vErr('kind', '지급 종류가 올바르지 않습니다.');
+  // T-401 P-01: discount(지급 할인) 추가. offset 은 상계 등록(/api/offsets)에서만
+  if (kind === 'offset') throw vErr('kind', '상계는 상계 등록에서 하세요.');
+  if (!['pay', 'opening', 'discount'].includes(kind)) throw vErr('kind', '지급 종류가 올바르지 않습니다.');
   let memo = b.memo == null ? null : String(b.memo).trim();
   if (memo === '') memo = null;
   if (memo && memo.length > MEMO_MAX) throw vErr('memo', `메모는 ${MEMO_MAX}자 이내로 입력하세요.`);
@@ -200,9 +204,15 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
           if (!d || Number.isNaN(d.getTime())) throw vErr('paid_at', '지급일시 형식이 올바르지 않습니다.');
           input.paidAt = d;
         }
-        const method = b.method == null || b.method === '' ? DEFAULT_PAY_METHOD : String(b.method);
-        if (!PAY_METHODS.includes(method)) throw vErr('method', '지급 방법이 올바르지 않습니다.');
-        input.method = method;
+        if (kind === 'discount') {
+          // T-401 P-03: 할인은 현금이 아니라 지급 방법이 없다 — 보내면 조용히 버리지 않고 400
+          if (b.method != null && b.method !== '') throw vErr('method', '할인에는 지급 방법이 없습니다.');
+          input.method = null;
+        } else {
+          const method = b.method == null || b.method === '' ? DEFAULT_PAY_METHOD : String(b.method);
+          if (!PAY_METHODS.includes(method)) throw vErr('method', '지급 방법이 올바르지 않습니다.');
+          input.method = method;
+        }
         if (b.allocations != null && !Array.isArray(b.allocations)) throw vErr('allocations', '배분 형식이 올바르지 않습니다.');
         const allocs = Array.isArray(b.allocations) ? b.allocations : [];
         if (allocs.length) {
@@ -318,7 +328,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
         if (!al.rows.length) throw payError(400, 'NOTHING_TO_PAY', '이 매입처에 지급할 매입이 없습니다.', { max_amount: 0 });
         if (al.rows[0].overpay) {
           const maxAmt = al.rows[0].total_due;
-          throw payError(400, 'OVERPAY', `지급액이 미지급 합계(${fmt(maxAmt)})보다 많습니다. 선급금은 아직 기록할 수 없습니다.`, {
+          throw payError(400, 'OVERPAY', input.kind === 'discount' ? `할인액이 미지급 합계(${fmt(maxAmt)})보다 많습니다.` : `지급액이 미지급 합계(${fmt(maxAmt)})보다 많습니다. 선급금은 아직 기록할 수 없습니다.`, {
             field: 'amount',
             max_amount: money(maxAmt),
           });
@@ -405,7 +415,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
     try {
       // 지급일시는 timestamptz — 날짜 필터는 한국 날짜 기준 범위 비교(수금 목록과 같음, D-05)
       const r = await pool.query(
-        `SELECT sp.id, sp.paid_at, sp.created_at, sp.amount, sp.kind, sp.method, sp.memo, sp.status,
+        `SELECT sp.id, sp.paid_at, sp.created_at, sp.amount, sp.kind, sp.method, sp.memo, sp.status, sp.offset_id,
                 sp.cancelled_at, sp.cancel_reason, sp.updated_at, sp.partner_id, a.name AS partner_name,
                 COALESCE((
                   SELECT json_agg(json_build_object(
@@ -457,13 +467,15 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
     try {
       await client.query('BEGIN');
       const sr = await client.query(
-        `SELECT id, partner_id, status, (EXTRACT(EPOCH FROM updated_at) * 1000)::float8 AS updated_epoch_ms
+        `SELECT id, partner_id, status, kind, offset_id, (EXTRACT(EPOCH FROM updated_at) * 1000)::float8 AS updated_epoch_ms
            FROM supplier_payment WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [id, userId]
       );
       const sp = sr.rows[0];
       if (!sp) throw payError(404, 'NOT_FOUND', '지급을 찾을 수 없습니다.');
       if (sp.status === 'cancelled') throw payError(409, 'ALREADY_CANCELLED', '이미 취소된 지급입니다.');
+      // T-401 P-05: 상계 지급 쪽만 취소하면 미수·미지급이 어긋난다 — 상계 취소에서 함께
+      if (sp.kind === 'offset') throw payError(409, 'USE_OFFSET_CANCEL', '상계 취소에서 함께 취소하세요.', { offset_id: sp.offset_id });
       const expected = req.body?.expected_updated_at;
       if (expected != null && expected !== '') {
         const exp = Date.parse(String(expected));
@@ -568,10 +580,13 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
              (SELECT COALESCE(SUM(increase - decrease), 0) FROM e WHERE $4::date IS NULL OR entry_date <= $4::date)      AS closing,
              (SELECT COALESCE(SUM(increase), 0) FROM inr WHERE kind = 'purchase') AS purchases,
              (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'payment')  AS payments,
+             (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'payment' AND pay_kind = 'pay')      AS cash_payments,
+             (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'payment' AND pay_kind = 'discount') AS discounts,
+             (SELECT COALESCE(SUM(decrease), 0) FROM inr WHERE kind = 'payment' AND pay_kind = 'offset')   AS offsets,
              (SELECT COUNT(*)::int FROM inr)                                      AS n,
              (SELECT COALESCE(SUM(increase - decrease), 0) FROM e)                AS ledger_balance,
              (SELECT COALESCE(SUM(total_amount - paid_amount), 0)
-                FROM purchase WHERE user_id = $1 AND partner_id = $2 AND status = 'active') AS purchase_based_due`,
+                FROM purchase WHERE user_id = $1 AND payee_partner_id = $2 AND status = 'active') AS purchase_based_due`,
           [userId, partnerId, fromP, toP]
         );
         const s = sum.rows[0];
@@ -639,7 +654,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
           const e = {
             date: r.date,
             kind: r.kind,
-            kind_label: r.kind === 'payment' && r.pay_kind === 'opening' ? KIND_LABEL.opening : KIND_LABEL[r.kind],
+            kind_label: r.kind === 'payment' && ['opening', 'discount', 'offset'].includes(r.pay_kind) ? KIND_LABEL[r.pay_kind] : KIND_LABEL[r.kind],
             ref_id: r.ref_id,
             product_name: r.product_name,
             quantity: num(r.quantity),
@@ -657,7 +672,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
             e.method = r.method;
             e.method_label = r.method ? METHOD_LABEL[r.method] || r.method : null;
             e.allocations = allocBy.get(r.ref_id) || [];
-            const head = r.pay_kind === 'opening' ? '기초 정리' : `지급${e.method_label ? `(${e.method_label})` : ''}`;
+            const head = ['opening', 'discount', 'offset'].includes(r.pay_kind) ? KIND_LABEL[r.pay_kind] : `지급${e.method_label ? `(${e.method_label})` : ''}`;
             const t = allocText(e.allocations);
             e.description = t ? `${head} 매입 ${t}` : head;
           }
@@ -704,7 +719,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
               decrease: 0,
               balance: 0,
               memo: r.memo,
-              description: `취소 ${r.kind === 'opening' ? '기초 정리' : '지급'} #${r.id} ${fmt(r.amount)} (잔액에 넣지 않음${r.cancel_reason ? ` — ${r.cancel_reason}` : ''})`,
+              description: `취소 ${KIND_LABEL[r.kind] || '지급'} #${r.id} ${fmt(r.amount)} (잔액에 넣지 않음${r.cancel_reason ? ` — ${r.cancel_reason}` : ''})`,
               _order: [r.date, 2, new Date(r.paid_at || 0).getTime(), r.id],
             })),
           ];
@@ -733,7 +748,11 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
             to: toP,
             opening_balance: money(s.opening),
             closing_balance: money(s.closing),
-            totals: { purchases: money(s.purchases), payments: money(s.payments) },
+            totals: {
+              purchases: money(s.purchases), payments: money(s.payments),
+              // T-401: payments(기존, 기초 정리 포함 전부)는 그대로 두고 현금 지급·매입 할인·상계를 따로
+              cash_payments: money(s.cash_payments), discounts: money(s.discounts), offsets: money(s.offsets),
+            },
             entries,
             // 검증식(설계 2.3): 원장 잔액 = 매입별 미지급 합. 0이 아니면 DB 직접 수정 등 — 관리자 확인
             check: {
