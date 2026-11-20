@@ -45,9 +45,17 @@ function hmac(secret, data) {
 }
 
 /** 토큰 발급 */
-function signToken(secret, { userId, agentNo }, ttlSec, nowSec = Math.floor(Date.now() / 1000)) {
+// 직원 토큰(T-213): sub = 주인 id 그대로(데이터 주인), act = 직원 id, cv = 발급 때의 직원 credentials_changed_at(ms 문자열).
+// 역할·상태는 넣지 않고 요청마다 DB에서 읽는다. cv 가 지금 값과 다르면(비밀번호 변경·재설정) 그 토큰은 무효.
+// 주인 토큰은 act·cv 가 없어 예전 모양 그대로다(T-213 RULE-21).
+function signToken(secret, { userId, agentNo, staffId, credVersion }, ttlSec, nowSec = Math.floor(Date.now() / 1000)) {
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64url(JSON.stringify({ sub: String(userId), agent_no: String(agentNo), iat: nowSec, exp: nowSec + ttlSec }));
+  const body = { sub: String(userId), agent_no: String(agentNo), iat: nowSec, exp: nowSec + ttlSec };
+  if (staffId != null) {
+    body.act = String(staffId);
+    body.cv = String(credVersion ?? '');
+  }
+  const payload = b64url(JSON.stringify(body));
   const data = `${header}.${payload}`;
   return `${data}.${hmac(secret, data)}`;
 }
