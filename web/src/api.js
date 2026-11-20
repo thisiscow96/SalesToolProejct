@@ -104,6 +104,24 @@ export async function fetchPurchases(params = {}) {
   return data.data;
 }
 
+/** 매입 등록 모달 — 같은 상품(+거래처)의 최근 매입 단가 (T-210). 기록이 없으면 null */
+export async function fetchLastPurchasePrice(productId, partnerId) {
+  const q = new URLSearchParams({ product_id: String(productId) });
+  if (partnerId) q.set('partner_id', String(partnerId));
+  const res = await apiFetch(`${API_BASE}/purchases/last-price?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return data.data;
+}
+
+/** 매입 등록 모달 — 최근 매입한 거래처 순서 [{ partner_id, last_date, cnt }] (T-210) */
+export async function fetchRecentPurchasePartners() {
+  const res = await apiFetch(`${API_BASE}/purchases/recent-partners`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return data.data;
+}
+
 export async function fetchSales(params = {}) {
   const q = new URLSearchParams(params).toString();
   const res = await apiFetch(`${API_BASE}/sales?${q}`, { headers: authHeaders() });
