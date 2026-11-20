@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_BASE, getToken, fetchPartners } from '../api';
 import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
+import { can } from '../lib/staffAccess';
 import './FifoSale.css';
 
 const SALE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
@@ -50,6 +51,7 @@ export const createFifoSale = (body) => fifoRequest('POST', '/sales', body).then
 
 /** 재고현황 행의 판매 버튼 — 판매 가능 0 이면 비활성 + 이유 */
 export function FifoSellButton({ row, onClick }) {
+  if (!can('sale.create')) return null; // T-213 조회 직원은 판매 버튼 없음
   const sellable = Number(row.sellable_qty || 0);
   const unlinked = Number(row.unlinked_qty || 0);
   const disabled = !(sellable > 0);

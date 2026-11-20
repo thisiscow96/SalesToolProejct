@@ -18,10 +18,16 @@
  * 재사용하는 기존 기록(이중 기록 없음):
  *   trade_correction(010) 매입·매출 수정·취소 / supplier_payment(014) 지급 취소 / product_request(016) 품목 요청·승인·반려
  *   audit_log(019) 거래처 등록·수정, 로그인 성공
+ *
+ * T-213 직원(021):
+ *   - audit_log.actor_staff_id: 직원 로그인·직원 비밀번호 설정의 실제 행위자. 직원 관리(entity_type 'staff')는 주인이 한 일이라 NULL
+ *   - 직원이 등록한 매입·매출·수금은 원천 행(created_by_staff_id)에서 읽어 kind 'staff_entry' 로 보여 준다(이중 기록 없음)
+ *   - 응답 행에 actor('self'|'staff'|'admin')·actor_name(직원 이름, 삭제된 직원은 "(삭제됨)")
+ *   - 필터 actor=owner|staff|<직원 id>
  */
 const { parseListOptions, runList } = require('./list-query');
 
-const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login'];
+const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login', 'staff', 'staff_entry'];
 const SKIP_FIELDS = new Set(['id', 'user_id', 'created_at', 'updated_at']);
 
 function same(a, b) {
@@ -64,7 +70,8 @@ function isPool(db) {
 /**
  * 감사 기록 한 줄.
  * @param db  pg Pool(트랜잭션 밖) 또는 BEGIN 한 client(트랜잭션 안)
- * @param r   { userId, entityType:'account'|'auth', entityId, action:'create'|'update'|'login', partnerId, before, after, note }
+ * @param r   { userId, entityType:'account'|'auth'|'staff', entityId, action, partnerId, before, after, note, actorStaffId }
+ *            actorStaffId: 직원이 한 일이면 직원 id(T-213). 없으면 열 자체를 쓰지 않는다(021 전 DB 에서도 기록되게)
  * @returns  true(기록) | false(바뀐 값 없음·실패)
  */
 async function recordAudit(db, r) {
@@ -77,13 +84,15 @@ async function recordAudit(db, r) {
     before = r.before ? pick(r.before, fields) : null;
     after = pick(r.after, fields);
   }
-  const sql = `INSERT INTO audit_log (user_id, entity_type, entity_id, action, partner_id, changed_fields, before_data, after_data, note)
-               VALUES ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, $8::jsonb, $9)`;
+  const withActor = r.actorStaffId != null;
+  const sql = `INSERT INTO audit_log (user_id, entity_type, entity_id, action, partner_id, changed_fields, before_data, after_data, note${withActor ? ', actor_staff_id' : ''})
+               VALUES ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, $8::jsonb, $9${withActor ? ', $10' : ''})`;
   const params = [
     r.userId, r.entityType, r.entityId ?? null, r.action, r.partnerId ?? null, fields,
     before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null,
     r.note ? String(r.note).slice(0, 200) : null,
   ];
+  if (withActor) params.push(r.actorStaffId);
   if (isPool(db)) {
     try {
       await db.query(sql, params);
@@ -124,7 +133,7 @@ const UNION_SQL = `
          COALESCE(pp.name, sp.name) AS target_label,
          COALESCE(pu.partner_id, s.partner_id) AS partner_id,
          'self'::text AS actor, tc.reason::text AS reason,
-         tc.changed_fields, tc.before_data, tc.after_data
+         tc.changed_fields, tc.before_data, tc.after_data, NULL::int AS actor_staff_id
     FROM trade_correction tc
     LEFT JOIN purchase pu ON tc.target_type = 'purchase' AND pu.id = tc.target_id AND pu.user_id = tc.user_id
     LEFT JOIN product pp ON pp.id = pu.product_id
@@ -137,33 +146,54 @@ const UNION_SQL = `
          spay.partner_id, 'self', spay.cancel_reason::text,
          ARRAY['status']::text[],
          jsonb_build_object('status', 'active', 'amount', spay.amount, 'paid_at', spay.paid_at),
-         jsonb_build_object('status', 'cancelled')
+         jsonb_build_object('status', 'cancelled'), NULL::int
     FROM supplier_payment spay
    WHERE spay.user_id = $1 AND spay.status = 'cancelled' AND spay.cancelled_at IS NOT NULL
   UNION ALL
   SELECT 'product_request', pr.id::bigint, 'product_request', pr.created_at, 'product', pr.product_id,
          prod.name, NULL::int, 'self', pr.note,
-         ARRAY['status']::text[], NULL::jsonb, jsonb_build_object('status', 'pending')
+         ARRAY['status']::text[], NULL::jsonb, jsonb_build_object('status', 'pending'), NULL::int
     FROM product_request pr
     LEFT JOIN product prod ON prod.id = pr.product_id
    WHERE pr.user_id = $1
   UNION ALL
   SELECT 'product_request_review', pr.id::bigint, 'product_request', pr.reviewed_at, 'product', pr.product_id,
          prod.name, NULL::int, CASE WHEN pr.reviewed_by = $1 THEN 'self' ELSE 'admin' END, pr.reject_reason,
-         ARRAY['status']::text[], jsonb_build_object('status', 'pending'), jsonb_build_object('status', pr.status)
+         ARRAY['status']::text[], jsonb_build_object('status', 'pending'), jsonb_build_object('status', pr.status), NULL::int
     FROM product_request pr
     LEFT JOIN product prod ON prod.id = pr.product_id
    WHERE (pr.user_id = $1 OR pr.reviewed_by = $1) AND pr.reviewed_at IS NOT NULL AND pr.status IN ('approved', 'rejected')
   UNION ALL
-  SELECT 'audit_log', al.id, CASE WHEN al.entity_type = 'auth' THEN 'login' ELSE 'partner' END, al.created_at,
+  SELECT 'audit_log', al.id,
+         CASE WHEN al.entity_type = 'auth' THEN 'login' WHEN al.entity_type = 'staff' THEN 'staff' ELSE 'partner' END, al.created_at,
          al.entity_type::text, al.entity_id,
-         CASE WHEN al.entity_type = 'auth' THEN '로그인' ELSE COALESCE(acc.name, al.after_data->>'name') END,
-         al.partner_id, 'self',
-         CASE WHEN al.action = 'create' THEN '등록' WHEN al.action = 'update' THEN '수정' ELSE al.note END,
-         al.changed_fields, al.before_data, al.after_data
+         CASE WHEN al.entity_type = 'auth' THEN '로그인'
+              WHEN al.entity_type = 'staff' THEN COALESCE(st.name, al.after_data->>'name', al.before_data->>'name')
+              ELSE COALESCE(acc.name, al.after_data->>'name') END,
+         al.partner_id, CASE WHEN al.actor_staff_id IS NULL THEN 'self' ELSE 'staff' END,
+         CASE WHEN al.entity_type = 'staff' THEN al.note
+              WHEN al.action = 'create' THEN '등록' WHEN al.action = 'update' THEN '수정' ELSE al.note END,
+         al.changed_fields, al.before_data, al.after_data, al.actor_staff_id
     FROM audit_log al
     LEFT JOIN account acc ON acc.id = al.partner_id AND acc.user_id = al.user_id
-   WHERE al.user_id = $1`;
+    LEFT JOIN staff_account st ON al.entity_type = 'staff' AND st.id = al.entity_id AND st.owner_user_id = al.user_id
+   WHERE al.user_id = $1
+  UNION ALL
+  SELECT 'purchase', pu.id::bigint, 'staff_entry', pu.created_at, 'purchase', pu.id, pp.name, pu.partner_id, 'staff', '매입 등록',
+         ARRAY['total_amount']::text[], NULL::jsonb, jsonb_build_object('total_amount', pu.total_amount, 'quantity', pu.quantity), pu.created_by_staff_id
+    FROM purchase pu LEFT JOIN product pp ON pp.id = pu.product_id
+   WHERE pu.user_id = $1 AND pu.created_by_staff_id IS NOT NULL
+  UNION ALL
+  SELECT 'sale', s.id::bigint, 'staff_entry', s.created_at, 'sale', s.id, sp.name, s.partner_id, 'staff', '매출 등록',
+         ARRAY['total_amount']::text[], NULL::jsonb, jsonb_build_object('total_amount', s.total_amount, 'quantity', s.quantity), s.created_by_staff_id
+    FROM sale s LEFT JOIN product sp ON sp.id = s.product_id
+   WHERE s.user_id = $1 AND s.created_by_staff_id IS NOT NULL
+  UNION ALL
+  SELECT 'payment', py.id::bigint, 'staff_entry', py.created_at, 'payment', py.id,
+         '수금 ' || to_char(py.amount, 'FM999,999,999,990') || '원', py.partner_id, 'staff', '수금 등록',
+         ARRAY['amount']::text[], NULL::jsonb, jsonb_build_object('amount', py.amount), py.created_by_staff_id
+    FROM payment py
+   WHERE py.user_id = $1 AND py.created_by_staff_id IS NOT NULL`;
 
 /** 화면에 내보내는 모양: 바뀐 열마다 전·후 값 (정정의 _row 같은 내부 값은 뺀다) */
 function toChanges(row) {
@@ -200,8 +230,19 @@ function registerAuditRoutes(app, { pool, getUserId }) {
       partnerId = Number(s);
     }
 
+    const actorQ = String(q.actor || '').trim();
+    if (actorQ && actorQ !== 'owner' && actorQ !== 'staff' && !/^\d{1,9}$/.test(actorQ)) {
+      return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'actor', message: '행위자 조건이 올바르지 않습니다(owner|staff|직원 번호).' });
+    }
+
     const params = [userId];
     const where = [];
+    if (actorQ === 'owner') where.push('h.actor_staff_id IS NULL');
+    else if (actorQ === 'staff') where.push('h.actor_staff_id IS NOT NULL');
+    else if (actorQ) {
+      params.push(Number(actorQ));
+      where.push(`h.actor_staff_id = $${params.length}`);
+    }
     if (from) {
       params.push(from);
       where.push(`h.occurred_at >= ($${params.length}::date)::timestamp AT TIME ZONE 'Asia/Seoul'`);
@@ -218,9 +259,11 @@ function registerAuditRoutes(app, { pool, getUserId }) {
       params.push(partnerId);
       where.push(`h.partner_id = $${params.length}`);
     }
-    const base = `SELECT h.*, a.name AS partner_name
+    const base = `SELECT h.*, a.name AS partner_name,
+                         CASE WHEN st.id IS NULL THEN NULL WHEN st.status = 'deleted' THEN st.name || '(삭제됨)' ELSE st.name END AS actor_name
                     FROM (${UNION_SQL}) h
                     LEFT JOIN account a ON a.id = h.partner_id AND a.user_id = $1
+                    LEFT JOIN staff_account st ON st.id = h.actor_staff_id AND st.owner_user_id = $1
                    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
     try {
       const out = await runList(pool, base, params, ' ORDER BY h.occurred_at DESC, h.source, h.source_id DESC', opts);
@@ -235,6 +278,8 @@ function registerAuditRoutes(app, { pool, getUserId }) {
         partner_id: r.partner_id,
         partner_name: r.partner_name,
         actor: r.actor,
+        actor_staff_id: r.actor_staff_id,
+        actor_name: r.actor_name,
         reason: r.reason,
         changes: toChanges(r),
       }));

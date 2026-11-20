@@ -19,6 +19,7 @@ import {
   PAYMENT_STATUS_LABEL,
 } from '../lib/payablesApi';
 import { won } from './PartnerLedger';
+import { can } from '../lib/staffAccess';
 import './SupplierPayments.css';
 
 /** 매입 가능한 거래처 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 */
@@ -533,6 +534,7 @@ export default function TabSupplierPayments() {
         <button type="button" className="main-btn main-btn--secondary" onClick={() => load()}>
           검색
         </button>
+        {can('supplier_payment.create') && (
         <button
           type="button"
           className="main-btn"
@@ -543,6 +545,8 @@ export default function TabSupplierPayments() {
         >
           지급 등록
         </button>
+        )}
+        {can('supplier_payment.create') && (
         <button
           type="button"
           className="main-btn main-btn--secondary"
@@ -554,6 +558,7 @@ export default function TabSupplierPayments() {
         >
           기초 정리
         </button>
+        )}
         <button
           type="button"
           className="main-btn main-btn--secondary"
@@ -622,7 +627,7 @@ export default function TabSupplierPayments() {
                         {cancelled && row.cancel_reason ? <span className="sp-muted"> · 취소: {row.cancel_reason}</span> : null}
                       </td>
                       <td data-card="action" className="main-col-manage">
-                        {!cancelled && (
+                        {!cancelled && can('supplier_payment.cancel') && (
                           <button type="button" className="main-btn main-btn--secondary sp-cancel-btn" onClick={() => setModal({ type: 'cancel', row })} aria-label={`지급 #${row.id} 취소`}>
                             취소
                           </button>

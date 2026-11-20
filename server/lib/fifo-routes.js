@@ -462,10 +462,10 @@ function registerFifoRoutes(app, deps) {
         // ⑤ 매출 1건 + 배분 N행 + 이동 N행 + 재고 감소
         const ins = await client.query(
           `INSERT INTO sale (user_id, partner_id, product_id, quantity, unit_price, total_amount, sale_date,
-                             payment_status, paid_amount, status, memo, entry_mode)
-           VALUES ($1,$2,$3,$4::numeric,$5::numeric,$6::numeric,$7::date,'unpaid',0,'active',$8,'fifo')
+                             payment_status, paid_amount, status, memo, entry_mode, created_by_staff_id)
+           VALUES ($1,$2,$3,$4::numeric,$5::numeric,$6::numeric,$7::date,'unpaid',0,'active',$8,'fifo',$9)
            RETURNING id`,
-          [userId, partnerId, it.productId, n.qty, n.price, n.total, saleDate, memo]
+          [userId, partnerId, it.productId, n.qty, n.price, n.total, saleDate, memo, (req.auth && req.auth.staffId) || null] // T-213 입력자
         );
         const saleId = ins.rows[0].id;
         for (const lot of pick.rows) {

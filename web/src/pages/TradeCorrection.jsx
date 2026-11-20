@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE, getToken, fetchInventory } from '../api';
 import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
+import { can } from '../lib/staffAccess';
 import './TradeCorrection.css';
 
 const CANCEL_REASONS = ['오입력', '중복 입력', '거래 취소'];
@@ -101,7 +102,12 @@ export function saleMenuState(row) {
 // ---------------------------------------------------------------------------
 // 행 메뉴 (⋯)
 // ---------------------------------------------------------------------------
-export function RowActionMenu({ label, state, onEdit, onCancel }) {
+export function RowActionMenu(props) {
+  // T-213: 정정(수정·취소)은 주인만 — 직원에게는 메뉴 자체를 보이지 않는다
+  if (!can('purchase.update') && !can('sale.update')) return null;
+  return <RowActionMenuInner {...props} />;
+}
+function RowActionMenuInner({ label, state, onEdit, onCancel }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
   const ref = useRef(null);

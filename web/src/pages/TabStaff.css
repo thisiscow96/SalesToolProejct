@@ -1,0 +1,179 @@
+/* T-213 직원 관리 탭 + 머리글 직원 표시 + 입력자 배지 */
+.staff-intro p {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-14);
+  color: var(--c-text-2);
+  line-height: var(--lh-base);
+}
+.staff-count {
+  margin: 0;
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--fs-14);
+  color: var(--c-text-2);
+}
+.staff-name {
+  font-weight: var(--fw-semibold);
+}
+.staff-table code {
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.staff-role-select {
+  min-height: 36px;
+  font-size: var(--fs-14);
+}
+.staff-badge {
+  display: inline-block;
+  padding: 2px var(--sp-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.staff-badge--active { color: var(--c-success-text); background: var(--c-success-soft); }
+.staff-badge--invited { color: var(--c-info-text); background: var(--c-info-soft); }
+.staff-badge--suspended { color: var(--c-warning-text); background: var(--c-warning-soft); }
+.staff-badge--deleted { color: var(--c-neutral-text); background: var(--c-neutral-soft); }
+.staff-sub {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+.staff-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--sp-2);
+}
+.staff-table .main-col-manage {
+  white-space: nowrap;
+  width: 1%;
+}
+.staff-danger-text {
+  color: var(--c-danger-text);
+}
+.main-modal-btn.staff-danger {
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+}
+.staff-warn {
+  margin: 0;
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+  color: var(--c-text-2);
+}
+.staff-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.staff-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.staff-form input[type='text'],
+.staff-form input[type='email'] {
+  min-height: 44px;
+  font-size: var(--fs-16);
+}
+.staff-choice {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+.staff-choice legend {
+  margin-bottom: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+.staff-radio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.staff-radio.on {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+.staff-radio.off {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.staff-radio input {
+  grid-row: span 2;
+  margin-top: 3px;
+}
+.staff-radio-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+}
+.staff-radio-help {
+  font-size: var(--fs-12);
+  line-height: var(--lh-base);
+  color: var(--c-text-3);
+}
+
+/* 머리글: 직원이면 "홍길동 (입력 전용) · ○○상회" */
+.main-user-role {
+  margin-left: var(--sp-1);
+  padding: 1px var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.main-user-owner {
+  color: var(--c-text-3);
+  font-size: var(--fs-13);
+}
+/* 목록 입력자 배지(직원 입력일 때만) */
+.staff-entry-badge {
+  display: inline-block;
+  margin-left: var(--sp-1);
+  padding: 0 6px;
+  font-size: var(--fs-12);
+  color: var(--c-info-text);
+  background: var(--c-info-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.staff-only-notice {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--c-text-3);
+}
+
+@media (max-width: 767px) {
+  /* 휴대폰 카드: 관리 버튼은 이름 옆이 아니라 카드 맨 아래 한 줄 전체로 (이름이 세로로 찢어지지 않게) */
+  .main-table.main-table--cards.staff-table > tbody > tr > td[data-card][data-card='action'] { /* mobile.css 보다 우선 */
+    order: 99;
+    flex: 1 1 100%;
+    margin-left: 0;
+    white-space: normal;
+    width: auto;
+  }
+  .staff-actions {
+    flex-wrap: wrap;
+  }
+  .staff-choice {
+    grid-template-columns: 1fr;
+  }
+  .staff-actions .main-btn {
+    flex: 1 1 calc(50% - var(--sp-2));
+    min-height: 44px;
+  }
+  .main-user-owner {
+    display: none;
+  }
+}

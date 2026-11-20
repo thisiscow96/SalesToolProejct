@@ -18,6 +18,8 @@ export const HISTORY_KIND_OPTIONS = [
   { value: 'partner', label: '거래처 등록·수정' },
   { value: 'product_request', label: '품목 공용 요청' },
   { value: 'login', label: '로그인' },
+  { value: 'staff_entry', label: '직원 입력' }, // T-213
+  { value: 'staff', label: '직원 관리' }, // T-213
 ];
 const KIND_LABEL = Object.fromEntries(HISTORY_KIND_OPTIONS.filter((o) => o.value).map((o) => [o.value, o.label]));
 const KIND_CLASS = {
@@ -27,6 +29,8 @@ const KIND_CLASS = {
   partner: 'main-status--entry-receive',
   product_request: 'main-status--entry-receive',
   login: 'ah-badge-muted',
+  staff_entry: 'main-status--entry-receive',
+  staff: 'ah-badge-muted',
 };
 
 const FIELD_LABEL = {
@@ -50,7 +54,16 @@ const FIELD_LABEL = {
   location: '위치',
   address: '주소',
   credit_limit: '외상 한도',
+  // T-213 직원 관리
+  login_id: '직원 ID',
+  role: '역할',
+  must_change_password: '비밀번호 변경 필요',
+  credentials_changed: '비밀번호 바뀜',
+  password_reset: '비밀번호 재설정',
+  invite_sent: '초대 코드 발송',
 };
+const ROLE_TEXT = { input: '입력 전용', view: '조회 전용' };
+const STAFF_STATUS_TEXT = { invited: '초대 중', active: '사용 중', suspended: '정지', deleted: '삭제됨' };
 const MONEY_FIELDS = new Set(['unit_price', 'total_amount', 'amount', 'credit_limit']);
 const STATUS_LABEL = {
   active: '정상',
@@ -63,7 +76,7 @@ const STATUS_LABEL = {
   paid: '수금 완료',
   refunded: '반품',
 };
-const TARGET_LABEL = { purchase: '매입', sale: '매출', supplier_payment: '지급', product: '품목', account: '거래처', auth: '' };
+const TARGET_LABEL = { purchase: '매입', sale: '매출', supplier_payment: '지급', product: '품목', account: '거래처', auth: '', payment: '수금', staff: '직원' };
 
 const firstDayOfMonthKst = () => `${kstTodayYmd().slice(0, 7)}-01`;
 const dateTimeText = (ts) => {
@@ -73,7 +86,9 @@ const dateTimeText = (ts) => {
 
 function valueText(field, v, partnerName) {
   if (v == null || v === '') return '(없음)';
-  if (field === 'status') return STATUS_LABEL[v] || String(v);
+  if (field === 'status') return STATUS_LABEL[v] || STAFF_STATUS_TEXT[v] || String(v);
+  if (field === 'role') return ROLE_TEXT[v] || String(v);
+  if (typeof v === 'boolean') return v ? '예' : '아니오';
   if (field === 'type') return partnerTypeLabel(v);
   if (field === 'partner_id') return partnerName(v) || `#${v}`;
   if (field === 'product_id') return `#${v}`;
@@ -94,12 +109,18 @@ function targetText(row) {
 
 function actorText(row) {
   if (row.actor === 'admin') return '관리자';
+  // T-213: 직원이 한 일(직원 로그인·직원 입력·직원 비밀번호 설정)은 직원 이름
+  if (row.actor === 'staff') return row.actor_name ? `직원 ${row.actor_name}` : '직원';
   return '본인';
 }
 
 /** 바뀐 내용: "단가 1,000원 → 1,200원" 줄 목록. 등록이면 값만 */
 function ChangeList({ row, partnerName }) {
   if (row.kind === 'login') return <span className="ah-muted">로그인 성공</span>;
+  if (row.kind === 'staff_entry') {
+    const a = row.changes?.[0]?.after;
+    return <span>{row.reason}{a != null ? ` ${Number(a).toLocaleString('ko-KR')}원` : ''}</span>;
+  }
   if (!row.changes?.length) return <span className="ah-muted">—</span>;
   // 거래처 '등록'은 전 값이 없으므로 새 값만, 수정은 (없음) → 값
   const isCreate = row.source === 'audit_log' && row.reason === '등록';

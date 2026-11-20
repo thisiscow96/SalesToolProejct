@@ -80,6 +80,12 @@ const EXPOSE_DEV_CODE = process.env.EXPOSE_DEV_CODE ? process.env.EXPOSE_DEV_COD
 
 app.use(express.json());
 
+// T-213 권한 미들웨어 — 모든 /api 요청을 라우트 권한 표(lib/access.js)로 먼저 검사한다(직원 기본 거부).
+// 본문 조건(credit_confirmed·entry_kind)을 보려면 express.json 다음이어야 한다. multipart(파일 전송)는 본문을 읽기 전에 401/404.
+const access = require('./lib/access');
+const authorize = access.createAuthorize({ resolveAuth: (req) => getAuthUser(req) });
+app.use(authorize);
+
 // Salesforce 파일 전송 테스트 경로 (T-114, D 리뷰 R-02)
 // 예전에는 로그인 확인 전에 최대 2GB 를 서버 메모리에 받아, 누구나 큰 파일을 보내 무료 인스턴스를 멈출 수 있었다.
 // - 기본은 꺼짐: ENABLE_SF_UPLOAD=true 일 때만 경로를 연다(업무 화면에서 쓰지 않는 테스트 기능)
@@ -230,26 +236,69 @@ async function getSalesforceAccessToken() {
 // 로그인 사용자 확인 (T-101) — Authorization: Bearer <토큰> 만 믿는다.
 // 예전에는 X-Agent-No 헤더(중매인 번호)만으로 사용자를 정해, 번호만 알면 남의 매입·매출·미수를 볼 수 있었다.
 // 토큰 서명·만료를 확인한 뒤, 계정이 지금도 활성인지·관리자인지는 DB에서 다시 읽는다(비활성화 즉시 반영).
+// T-213 직원: 토큰 sub = 주인 id(데이터 주인), act = 직원 id. 역할·상태는 요청마다 DB에서 읽는다(역할 변경·정지 즉시 반영).
+//   결과 auth = { userId(주인), role: owner|input|view, staffId, staffName, ownerName, agentNo, isAdmin, mustChangePassword }
+//   직원은 isAdmin 이 언제나 false(RULE-19). 주인이 비활성이면 직원도 null(RULE-18). cv 가 바뀌었으면(비밀번호 변경) null(RULE-17)
 async function getAuthUser(req) {
   const v = authToken.verifyToken(AUTH.secret, authToken.bearerFrom(req));
   if (!v.ok) return null;
+  const p = v.payload;
   try {
-    const r = await pool.query('SELECT id, is_admin FROM "user" WHERE id = $1 AND status = $2', [v.payload.sub, 'active']);
+    if (p.act == null) {
+      const r = await pool.query('SELECT id, is_admin, name, agent_no FROM "user" WHERE id = $1 AND status = $2', [p.sub, 'active']);
+      const row = r.rows[0];
+      return row
+        ? { userId: row.id, isAdmin: !!row.is_admin, role: 'owner', staffId: null, staffName: null, ownerName: row.name, agentNo: row.agent_no, mustChangePassword: false }
+        : null;
+    }
+    if (!/^\d{1,9}$/.test(String(p.act))) return null;
+    const r = await pool.query(
+      `SELECT u.id AS owner_id, u.name AS owner_name, u.agent_no,
+              s.id AS staff_id, s.name AS staff_name, s.role, s.status, s.must_change_password,
+              (EXTRACT(EPOCH FROM s.credentials_changed_at) * 1000)::bigint::text AS cv
+         FROM "user" u
+         JOIN staff_account s ON s.id = $2 AND s.owner_user_id = u.id
+        WHERE u.id = $1 AND u.status = 'active'`,
+      [p.sub, p.act]
+    );
     const row = r.rows[0];
-    return row ? { userId: row.id, isAdmin: !!row.is_admin } : null;
+    if (!row || row.status !== 'active' || String(p.cv) !== row.cv) return null;
+    return {
+      userId: row.owner_id,
+      isAdmin: false,
+      role: row.role,
+      staffId: row.staff_id,
+      staffName: row.staff_name,
+      ownerName: row.owner_name,
+      agentNo: row.agent_no,
+      mustChangePassword: !!row.must_change_password,
+    };
   } catch (err) {
     console.error('getAuthUser error:', err.message);
     return null;
   }
 }
 
-async function getUserId(req) {
+// 라우트가 부르는 두 함수는 미들웨어(lib/access.js)가 이미 확인한 req.auth 를 그대로 쓴다(요청당 DB 조회 1회).
+// req.auth 가 없는데 직원 토큰이면 거부한다 — 미들웨어를 거치지 않은 길로 직원이 주인 권한을 얻지 못하게(기본 거부)
+async function resolveRouteAuth(req) {
+  if (req.auth) return req.auth;
   const auth = await getAuthUser(req);
+  return auth && auth.role === 'owner' ? auth : null;
+}
+
+async function getUserId(req) {
+  const auth = await resolveRouteAuth(req);
   return auth ? auth.userId : null;
 }
 
 async function getUserIdAndAdmin(req) {
-  return getAuthUser(req);
+  return resolveRouteAuth(req);
+}
+
+/** 이 요청을 한 직원 id — 주인이면 null. 데이터 주인(user_id)이 아니라 기록 칸(created_by_staff_id)에만 쓴다(T-213 K-3) */
+function staffIdOf(req) {
+  return req.auth && req.auth.staffId ? req.auth.staffId : null;
 }
 
 // 서버 상태 확인 (DB 없이도 동작)
@@ -490,6 +539,10 @@ app.post('/api/auth/login', async (req, res) => {
   if (!agent_no || password === undefined) {
     return res.status(400).json({ ok: false, message: '중매인 번호와 비밀번호를 입력하세요.' });
   }
+  // T-213: 본문에 login_id 가 있으면 직원 로그인(lib/staff-routes.js). 없으면 아래 주인 로그인 그대로(RULE-21)
+  if (req.body.login_id !== undefined && req.body.login_id !== null && String(req.body.login_id).trim() !== '') {
+    return staffRoutes.staffLogin(req, res);
+  }
   // 시도 제한 키: 중매인 번호(대소문자 구분 없이, 길이 제한) — 계정 존재와 무관하게 센다 (T-114, R-03)
   const throttleKey = String(agent_no).trim().toLowerCase().slice(0, 64);
   const lockedMs = loginThrottle.lockedFor(throttleKey);
@@ -523,7 +576,7 @@ app.post('/api/auth/login', async (req, res) => {
       ok: true,
       token,
       expires_in: AUTH_TTL_SEC,
-      user: { id: row.id, user_key: row.user_key, name: row.name, agent_no: row.agent_no, is_admin: !!row.is_admin },
+      user: { id: row.id, user_key: row.user_key, name: row.name, agent_no: row.agent_no, is_admin: !!row.is_admin, staff: null },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -544,6 +597,13 @@ app.get('/api/capabilities', (req, res) => {
     /** 매입·매출 정정(T-103) 라우트 포함 */
     tradeCorrection: true,
   });
+});
+
+// ---------- 직원 계정·권한 (T-213) — lib/staff-routes.js ----------
+// GET /api/me · POST /api/me/password · /api/staff* · POST /api/auth/staff/setup-password, 직원 로그인(staffLogin)
+const staffRoutes = require('./lib/staff-routes').registerStaffRoutes(app, {
+  pool, connectOr503, recordAudit, authToken, AUTH, AUTH_TTL_SEC, loginThrottle, loginLockMessage,
+  DUMMY_PASSWORD_HASH, passwordProblem, isValidEmail, sendMail, configuredProviders, EXPOSE_DEV_CODE, allowedUi: access.allowedUi,
 });
 
 // ---------- 메인 화면용 API (Authorization: Bearer <로그인 토큰> 필수, 토큰의 사용자 데이터만 조회) ----------
@@ -929,6 +989,28 @@ app.get('/api/inventory', async (req, res) => {
   }
 });
 
+// ---------- T-213 입력자(직원) 칸 — 매입·매출·수금 목록 공통 ----------
+// 응답 행에 created_by_staff_id, created_by_name(직원 이름, 주인이 넣었으면 NULL, 삭제된 직원은 "이름(삭제됨)")
+// 쿼리 created_by=staff(직원 입력만) | created_by=<직원 id>. 없으면 예전과 같은 행
+const CREATED_BY_NAME = `CASE WHEN cs.id IS NULL THEN NULL WHEN cs.status = 'deleted' THEN cs.name || '(삭제됨)' ELSE cs.name END AS created_by_name`;
+/** @returns null(조건 없음) | 'staff' | 숫자 | false(400 응답을 이미 보냄) */
+function readCreatedBy(query, res) {
+  const raw = String(query.created_by ?? '').trim();
+  if (!raw) return null;
+  if (raw === 'staff') return 'staff';
+  if (/^d{1,9}$/.test(raw) && Number(raw) > 0) return Number(raw);
+  res.status(400).json({ ok: false, code: 'VALIDATION', field: 'created_by', message: '입력자 조건이 올바르지 않습니다(staff 또는 직원 번호).' });
+  return false;
+}
+function createdByClause(createdBy, params, alias) {
+  if (createdBy === 'staff') return ` AND ${alias}.created_by_staff_id IS NOT NULL`;
+  if (typeof createdBy === 'number') {
+    params.push(createdBy);
+    return ` AND ${alias}.created_by_staff_id = $${params.length}`;
+  }
+  return '';
+}
+
 // 매입정보 (중매인 번호 기준, 기간·제품별 검색)
 app.get('/api/purchases', async (req, res) => {
   const userId = await getUserId(req);
@@ -938,6 +1020,8 @@ app.get('/api/purchases', async (req, res) => {
   const to = req.query.to_date || today;
   const productId = req.query.product_id ? parseInt(req.query.product_id, 10) : null;
   const unpaidOnly = req.query.unpaid_only === '1' || req.query.unpaid_only === 'true';
+  const createdBy = readCreatedBy(req.query, res); // T-213 입력자 필터
+  if (createdBy === false) return undefined;
   const partnerFilter = req.query.partner_id ? parsePositiveIdParam(req.query.partner_id) : null;
   if (req.query.partner_id && !partnerFilter) {
     return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'partner_id', message: '거래처 번호가 올바르지 않습니다.' });
@@ -951,10 +1035,12 @@ app.get('/api/purchases', async (req, res) => {
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0)::numeric AS allocated_qty,
-             (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty
+             (pu.quantity - COALESCE((SELECT SUM(pa.quantity) FROM purchase_allocation pa WHERE pa.purchase_id = pu.id), 0))::numeric AS remaining_qty,
+             pu.created_by_staff_id, ${CREATED_BY_NAME}
              FROM purchase pu
              JOIN product p ON p.id = pu.product_id
              JOIN account pt ON pt.id = pu.partner_id
+             LEFT JOIN staff_account cs ON cs.id = pu.created_by_staff_id AND cs.owner_user_id = pu.user_id
              WHERE pu.user_id = $1`;
     const params = [userId];
     // T-201: unpaid_only=1 이면 미지급·일부 지급(취소 제외)만 전체 기간(매출 unpaid_only 와 같음) — 지급 등록 모달용
@@ -972,6 +1058,7 @@ app.get('/api/purchases', async (req, res) => {
       params.push(productId);
       q += ` AND pu.product_id = $${params.length}`;
     }
+    q += createdByClause(createdBy, params, 'pu');
     q += searchClause(opts, params, ['p.name', 'pu.memo', 'pu.source_name', 'pt.name']);
     const orderBy = unpaidOnly ? ' ORDER BY pu.purchase_date, pu.id' : ' ORDER BY pu.purchase_date DESC, pu.id DESC';
     res.json(await runList(pool, q, params, orderBy, opts));
@@ -1084,6 +1171,8 @@ app.get('/api/sales', async (req, res) => {
   const unpaidOnly = req.query.unpaid_only === '1' || req.query.unpaid_only === 'true';
   const paidOnly = req.query.paid_only === '1' || req.query.paid_only === 'true';
   const refundableOnly = req.query.refundable_only === '1' || req.query.refundable_only === 'true';
+  const createdBy = readCreatedBy(req.query, res); // T-213 입력자 필터
+  if (createdBy === false) return undefined;
   const opts = parseListOptions(req.query); // T-211: q(품목·메모·거래처), limit·offset
   if (opts.error) return res.status(400).json(opts.error);
   try {
@@ -1093,10 +1182,12 @@ app.get('/api/sales', async (req, res) => {
              (SELECT COUNT(*)::int FROM purchase_allocation pa WHERE pa.sale_id = s.id) AS allocation_count,
              GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
-             COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
+             COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty,
+             s.created_by_staff_id, ${CREATED_BY_NAME}
              FROM sale s
              JOIN product p ON p.id = s.product_id
              JOIN account pt ON pt.id = s.partner_id
+             LEFT JOIN staff_account cs ON cs.id = s.created_by_staff_id AND cs.owner_user_id = s.user_id
              WHERE s.user_id = $1`;
     const params = [userId];
     if (unpaidOnly) {
@@ -1117,6 +1208,7 @@ app.get('/api/sales', async (req, res) => {
       if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
     }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND s.partner_id = $${params.length}`; }
+    q += createdByClause(createdBy, params, 's');
     q += searchClause(opts, params, ['p.name', 's.memo', 'pt.name']);
     res.json(await runList(pool, q, params, ' ORDER BY s.sale_date DESC, s.id DESC', opts));
   } catch (err) {
@@ -1375,12 +1467,16 @@ app.get('/api/payments', async (req, res) => {
   const from = req.query.from_date || '';
   const to = req.query.to_date || '';
   const partnerId = req.query.partner_id ? parseInt(req.query.partner_id, 10) : null;
+  const createdBy = readCreatedBy(req.query, res); // T-213 입력자 필터
+  if (createdBy === false) return undefined;
   const opts = parseListOptions(req.query); // T-211: q(메모·거래처), limit·offset
   if (opts.error) return res.status(400).json(opts.error);
   try {
-    let q = `SELECT py.id, py.paid_at, py.created_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name
+    let q = `SELECT py.id, py.paid_at, py.created_at, py.amount, py.entry_kind, py.memo, pt.name AS partner_name,
+             py.created_by_staff_id, ${CREATED_BY_NAME}
              FROM payment py
              JOIN account pt ON pt.id = py.partner_id
+             LEFT JOIN staff_account cs ON cs.id = py.created_by_staff_id AND cs.owner_user_id = py.user_id
              WHERE py.user_id = $1`;
     const params = [userId];
     // 수금일시는 timestamptz — 날짜 필터는 DB 세션 시간대(Neon 기본 UTC)와 상관없이 한국 날짜 기준 (D-05)
@@ -1388,6 +1484,7 @@ app.get('/api/payments', async (req, res) => {
     if (from) { params.push(from); q += ` AND py.paid_at >= ($${params.length}::date::timestamp AT TIME ZONE 'Asia/Seoul')`; }
     if (to) { params.push(to); q += ` AND py.paid_at < (($${params.length}::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')`; }
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND py.partner_id = $${params.length}`; }
+    q += createdByClause(createdBy, params, 'py');
     q += searchClause(opts, params, ['py.memo', 'pt.name']);
     res.json(await runList(pool, q, params, ' ORDER BY py.paid_at DESC, py.id DESC', opts));
   } catch (err) {
@@ -1535,10 +1632,10 @@ app.post('/api/purchases', async (req, res) => {
     }
     const src = source_name != null && String(source_name).trim() ? String(source_name).trim().slice(0, 200) : null;
     const ins = await client.query(
-      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name, payment_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $6::numeric <= 0 THEN 'paid'::payment_status ELSE 'unpaid'::payment_status END)
+      `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, source_name, payment_status, created_by_staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $6::numeric <= 0 THEN 'paid'::payment_status ELSE 'unpaid'::payment_status END, $10)
        RETURNING id`,
-      [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src]
+      [userId, pid, prid, n.qty, n.price, n.total, String(purchase_date).slice(0, 10), memo?.trim() || null, src, staffIdOf(req)]
     );
     const purchaseId = ins.rows[0].id;
     await upsertInventoryDelta(client, userId, prid, n.qty);
@@ -1633,10 +1730,10 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       await upsertInventoryDelta(client, userId, p.product_id, `-${n.qty}`);
 
       const saleIns = await client.query(
-        `INSERT INTO sale (user_id, partner_id, product_id, quantity, unit_price, total_amount, sale_date, payment_status, paid_amount, status, memo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid',0,'active',$8)
+        `INSERT INTO sale (user_id, partner_id, product_id, quantity, unit_price, total_amount, sale_date, payment_status, paid_amount, status, memo, created_by_staff_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid',0,'active',$8,$9)
          RETURNING id`,
-        [userId, custId, p.product_id, n.qty, n.price, n.total, String(saleDate).slice(0, 10), smemo]
+        [userId, custId, p.product_id, n.qty, n.price, n.total, String(saleDate).slice(0, 10), smemo, staffIdOf(req)]
       );
       const saleId = saleIns.rows[0].id;
       await client.query(
@@ -1724,8 +1821,8 @@ app.post('/api/payments', async (req, res) => {
       return res.status(400).json({ ok: false, message: '거래처를 찾을 수 없습니다.' });
     }
     const payIns = await client.query(
-      `INSERT INTO payment (user_id, partner_id, amount, paid_at, entry_kind, memo) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [userId, pid, amt, paidAt, kind, memo?.trim() || null]
+      `INSERT INTO payment (user_id, partner_id, amount, paid_at, entry_kind, memo, created_by_staff_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [userId, pid, amt, paidAt, kind, memo?.trim() || null, staffIdOf(req)]
     );
     const paymentId = payIns.rows[0].id;
     if (kind === 'receive') {
@@ -2866,8 +2963,10 @@ app.get('/api/disposals', async (req, res) => {
   }
 });
 
+// T-213: 라우트 점검 테스트가 서버를 띄우지 않고 라우트 목록을 읽을 수 있게 app 을 내보낸다(node index.js 로 실행할 때만 listen)
+module.exports = { app, pool };
 const host = process.env.HOST || '0.0.0.0';
-app.listen(port, host, () => {
+if (require.main === module) app.listen(port, host, () => {
   console.log(`Server listening on http://${host}:${port}`);
   console.log('  Health: GET /health   Capabilities: GET /api/capabilities (최신 빌드 확인용)');
   const hasDb = process.env.DATABASE_URL || (process.env.PG_HOST && process.env.PG_PASSWORD);
