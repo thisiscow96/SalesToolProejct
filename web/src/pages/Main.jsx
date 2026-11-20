@@ -46,6 +46,7 @@ import TabStaff from './TabStaff'; // T-213 직원 관리
 import { can, isStaff, ROLE_LABEL } from '../lib/staffAccess'; // T-213 역할별 버튼
 import './Main.css';
 import '../styles/mobile.css';
+import ExcelUploadBar from '../components/ExcelUpload'; // T-402
 
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 오늘 날짜 yyyy-mm-dd (로컬) */
@@ -883,6 +884,7 @@ function TabPurchases({ onNavigate } = {}) {
           {actionErr}
         </div>
       )}
+      <ExcelUploadBar kinds={['purchase', 'product']} onDone={load} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="pur-from" /> ~{' '}
@@ -1652,6 +1654,7 @@ function TabSales({ navFilter } = {}) {
   return (
     <>
       <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
+      <ExcelUploadBar kinds={['sale', 'convert']} onDone={load} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="sale-from" /> ~{' '}
@@ -2230,6 +2233,7 @@ function TabPayments() {
   }, []);
   return (
     <>
+      <ExcelUploadBar kinds={['payment', 'offset']} onDone={() => paged.reload()} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="pay-from" /> ~{' '}

@@ -103,7 +103,8 @@ async function main() {
       { status: t.status, sheets, head, exRows });
     if (outDir) {
       fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, `엑셀템플릿_${kind}.xlsx`), t.buf);
+      const m = /filename\*=UTF-8''([^;]+)/i.exec(t.disp || '');
+      fs.writeFileSync(path.join(outDir, m ? decodeURIComponent(m[1]) : `엑셀템플릿_${kind}.xlsx`), t.buf);
     }
   }
   check('TPL-권한 조회 직원도 템플릿은 내려받음', (await template('purchase', SV)).status === 200);

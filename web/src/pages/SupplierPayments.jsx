@@ -21,6 +21,7 @@ import {
 import { won } from './PartnerLedger';
 import { can } from '../lib/staffAccess';
 import './SupplierPayments.css';
+import ExcelUploadBar from '../components/ExcelUpload'; // T-402
 
 /** 매입 가능한 거래처 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 */
 export const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
@@ -528,6 +529,7 @@ export default function TabSupplierPayments() {
           {notice}
         </div>
       )}
+      <ExcelUploadBar kinds={['supplier_payment']} onDone={() => load()} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} aria-label="시작일" /> ~{' '}

@@ -858,10 +858,12 @@ function registerExcelRoutes(app, deps) {
             out = { line: row.line, ok: false, summary: mapped.summary, amount: mapped.amount ?? null, message: msg, code: r.body && r.body.code };
           }
         } catch (err) {
-          if (err instanceof RowError) out = { line: row.line, ok: false, message: err.message };
+          // 이름 찾기·형식 오류 줄도 무엇을 쓴 줄인지 보이게 앞 열 값 몇 개를 요약으로
+          const raw = def.columns.slice(0, 5).map((c) => textOf(row.vals[c.key])).filter(Boolean).join(' · ').slice(0, 120);
+          if (err instanceof RowError) out = { line: row.line, ok: false, summary: raw || undefined, message: err.message };
           else {
             console.error('excel row error:', err);
-            out = { line: row.line, ok: false, message: '이 줄을 처리하는 중 오류가 났습니다.' };
+            out = { line: row.line, ok: false, summary: raw || undefined, message: '이 줄을 처리하는 중 오류가 났습니다.' };
           }
         }
         // eslint-disable-next-line no-await-in-loop
