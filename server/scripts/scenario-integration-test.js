@@ -384,10 +384,11 @@ function getPoolConfig() {
 }
 
 function request(method, pathname, body, opts = {}) {
-  const { skipAgent = false, agentNo = AGENT, extraHeaders = {} } = opts;
+  // skipAgent: 토큰 없이 호출 · token: 다른 토큰으로 호출(위조·변조 시험) — T-101부터 X-Agent-No 는 인증에 쓰이지 않는다
+  const { skipAgent = false, token = TOKEN, extraHeaders = {} } = opts;
   return new Promise((resolve, reject) => {
     const headers = { 'Content-Type': 'application/json', ...extraHeaders };
-    if (!skipAgent) headers['X-Agent-No'] = agentNo;
+    if (!skipAgent && token) headers.Authorization = `Bearer ${token}`;
     const httpOpts = { hostname: HOST, port: PORT, path: pathname, method, headers };
     const req = http.request(httpOpts, (res) => {
       let data = '';
@@ -406,6 +407,18 @@ function request(method, pathname, body, opts = {}) {
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
+}
+
+/** 로그인 토큰 (T-101) — 보호 API는 Authorization: Bearer <토큰> 만 받는다. 비밀번호는 seed-admin 의 로컬 샘플 값이 기본 */
+let TOKEN = null;
+async function login() {
+  const pw = process.env.SMOKE_PASSWORD || 'sample';
+  const r = await request('POST', '/api/auth/login', { agent_no: AGENT, password: pw }, { skipAgent: true });
+  if (r.status !== 200 || !r.json?.token) {
+    throw new Error(`로그인 실패 status=${r.status} ${r.json?.message || ''} (SMOKE_PASSWORD 확인, npm run seed-admin)`);
+  }
+  TOKEN = r.json.token;
+  return r.json;
 }
 
 function requestNoAuth(method, pathname) {
@@ -484,9 +497,30 @@ async function main() {
   r = await requestNoAuth('GET', '/api/partners');
   record('S-002', r.status === 401, `status=${r.status} msg=${r.json?.message}`);
 
-  // ----- S-003
-  r = await request('GET', '/api/partners', null, { agentNo: 'NO_SUCH_AGENT_99999' });
+  // ----- 로그인 → 토큰
+  const loginRes = await login();
+
+  // ----- S-003 (토큰 없이 X-Agent-No 헤더만 — 예전 방식으로 남의 번호를 넣은 호출)
+  r = await request('GET', '/api/partners', null, { skipAgent: true, extraHeaders: { 'X-Agent-No': AGENT } });
   record('S-003', r.status === 401, `status=${r.status}`);
+
+  // ----- S-022 (서명 위조 — 서명 부분을 바꾼 토큰)
+  {
+    const [h, p] = TOKEN.split('.');
+    r = await request('GET', '/api/partners', null, { token: `${h}.${p}.${'A'.repeat(43)}` });
+    record('S-022', r.status === 401, `status=${r.status}`);
+  }
+
+  // ----- S-023 (내용 변조 — 사용자 ID·만료를 바꾸고 서명은 그대로)
+  {
+    const [h, p, sig] = TOKEN.split('.');
+    const payload = JSON.parse(Buffer.from(p.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    payload.sub = String(Number(payload.sub) + 1);
+    payload.exp = payload.exp + 86400 * 365;
+    const p2 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    r = await request('GET', '/api/partners', null, { token: `${h}.${p2}.${sig}` });
+    record('S-023', r.status === 401 && !!loginRes.token, `status=${r.status}`);
+  }
 
   // ----- S-004
   r = await request('GET', '/api/partners');
@@ -737,6 +771,46 @@ async function main() {
     r.status === 400,
     `status=${r.status} ${r.json?.message}`
   );
+
+  // ----- S-024 (T-106) 같은 매출에 부분 환불 2회 — 반품 금액은 화면과 같은 계산(web/src/lib/refund.js)으로 구해 보낸다
+  {
+    const { pathToFileURL } = require('url');
+    const refundLib = await import(pathToFileURL(path.join(PROJECT_ROOT, 'web', 'src', 'lib', 'refund.js')).href);
+    const p24 = await request('POST', '/api/purchases', {
+      partner_id: supplierId,
+      product_id: productId,
+      quantity: 10,
+      unit_price: 50,
+      purchase_date: today,
+      memo: `S-024-${tag}`,
+    });
+    const c24 = await request('POST', '/api/purchases/convert-to-sales', {
+      items: [{ purchase_id: p24.json?.data?.id, partner_id: customerId, quantity: 10, unit_price: 100, sale_date: today, memo: `S-024-${tag}` }],
+    });
+    const sale24 = c24.json?.data?.[0]?.sale_id;
+    await request('POST', '/api/payments', {
+      partner_id: customerId,
+      amount: 1000,
+      paid_at: today,
+      entry_kind: 'receive',
+      allocations: [{ sale_id: sale24, amount: 1000 }],
+    });
+    const amounts = [];
+    for (const q of [5, 5]) {
+      const list = await request('GET', `/api/sales?from_date=${today}&to_date=${today}`);
+      const row = list.json?.data?.find((s) => s.id === sale24);
+      const amt = row ? refundLib.computeAutoRefundAmount(row, q) : 0;
+      amounts.push(amt);
+      await request('POST', `/api/sales/${sale24}/refund`, { quantity: q, refunded_at: today, reason: 'S-024', refund_amount: amt });
+    }
+    const after = await request('GET', `/api/sales?from_date=${today}&to_date=${today}`);
+    const row24 = after.json?.data?.find((s) => s.id === sale24);
+    record(
+      'S-024',
+      amounts[0] === 500 && amounts[1] === 500 && Number(row24?.paid_amount) === 0 && row24?.status === 'refunded',
+      `반품 금액 1차=${amounts[0]} 2차=${amounts[1]} 남은 수금=${row24?.paid_amount} status=${row24?.status}`
+    );
+  }
 
     const failed = rows.filter((x) => !x.ok);
     console.log('\n──────── 요약 ────────');

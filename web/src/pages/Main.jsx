@@ -17,6 +17,7 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
+import { computeRefundPossibleQty, computeAutoRefundAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
 import './Main.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -359,23 +360,6 @@ function computeCollectedQty(s) {
   return (pa / ta) * q;
 }
 
-/** 환불 가능 수량 = 총 수량 − 환불된 수량(환불 누적) */
-function computeRefundPossibleQty(s) {
-  const q = Number(s.quantity);
-  const rf = Number(s.refunded_qty || 0);
-  if (!Number.isFinite(q)) return 0;
-  return Math.max(0, q - rf);
-}
-
-/** 반품(환불) 금액 = (환불 요청수량 / 총 수량) × 매출 금액(수금 발생액) */
-function computeAutoRefundAmount(s, requestQty) {
-  const tot = Number(s.quantity);
-  const paid = Number(s.paid_amount);
-  const rq = Number(requestQty);
-  if (!Number.isFinite(tot) || tot <= 0 || !Number.isFinite(rq) || rq <= 0 || !Number.isFinite(paid)) return 0;
-  return Math.round((rq / tot) * paid * 100) / 100;
-}
-
 function buildRefundReasonFromDraft(d) {
   const c = d.reasonCode || REFUND_REASON_CUSTOMER;
   if (c === REFUND_REASON_CUSTOMER) return '고객변심';
@@ -691,6 +675,8 @@ function TabPurchases() {
         onClose={() => {
           setShowForm(false);
           setActionErr('');
+          // 취소·바깥 클릭으로 닫으면 입력표를 비운다(다른 모달과 같게, T-109). 저장 실패 시에는 모달이 닫히지 않으므로 입력이 남는다.
+          setPurchaseRows([newPurchaseRow()]);
         }}
         formId="form-purchase-modal"
         submitting={submitting}
@@ -1009,9 +995,8 @@ function TabSales() {
   }, [refundableSales, refundPartnerSearch]);
 
   const newRefundDraft = (s) => {
-    const maxQ = computeRefundPossibleQty(s);
     return {
-      quantity: String(maxQ > 0 ? maxQ : ''),
+      quantity: defaultRefundQty(s),
       reasonCode: REFUND_REASON_CUSTOMER,
       reasonOther: '',
     };
@@ -1140,18 +1125,13 @@ function TabSales() {
     try {
       for (const s of rows) {
         const d = refundDraft[s.id] || newRefundDraft(s);
-        const qtyStr = String(d.quantity ?? '').trim();
-        if (qtyStr.length < 3) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량은 최소 3자리로 입력하세요. (예: 0.001, 10.5)`);
-        }
-        const qty = Number(d.quantity);
+        // 수량은 형식(글자 수)이 아니라 범위로 검증 — 기본값(환불 가능 수량)을 그대로 저장할 수 있어야 한다 (T-107)
         const maxQ = computeRefundPossibleQty(s);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량을 입력하세요.`);
+        const qtyErr = validateRefundQty(d.quantity, maxQ, formatKoNumber(maxQ));
+        if (qtyErr) {
+          throw new Error(`매출 #${s.id}: ${qtyErr}`);
         }
-        if (qty > maxQ + 1e-9) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량이 환불 가능 수량(${formatKoNumber(maxQ)})을 초과합니다.`);
-        }
+        const qty = Number(String(d.quantity).trim().replace(/,/g, ''));
         const rc = d.reasonCode || REFUND_REASON_CUSTOMER;
         if (rc === REFUND_REASON_CUSTOM && !String(d.reasonOther ?? '').trim()) {
           throw new Error(`매출 #${s.id}: 직접 기입 사유를 입력하세요.`);
@@ -1459,7 +1439,7 @@ function TabSales() {
                     </th>
                     <th className="main-col-qty">환불 요청수량</th>
                     <th className="main-col-amount">매출 금액</th>
-                    <th className="main-col-amount" title="(환불 요청수량 ÷ 총 수량) × 매출 금액">
+                    <th className="main-col-amount" title="(환불 요청수량 ÷ 환불 가능 수량) × 매출 금액(현재 수금액)">
                       반품 금액
                     </th>
                     <th className="main-th-refund-reason">사유</th>
