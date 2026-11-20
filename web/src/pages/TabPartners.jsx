@@ -6,6 +6,7 @@ import CardMoreToggle from '../components/CardMoreToggle';
 import '../components/CreditLimitWarning.css';
 import { can } from '../lib/staffAccess';
 import './TabPartners.css';
+import ExcelUploadBar from '../components/ExcelUpload'; // T-402
 
 /** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
 export const PARTNER_TYPE_OPTIONS = [
@@ -442,6 +443,7 @@ export default function TabPartners() {
         <ReceivablesAgingView mode="payable" focusPartnerId={agingFocus} onOpenLedger={(p) => openLedger(p, 'payable')} />
       ) : (
       <>
+      <ExcelUploadBar kinds={['partner']} onDone={() => { load(); loadDue(); }} />
       <div className="main-filters">
         <label>
           검색

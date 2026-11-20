@@ -20,6 +20,7 @@ export const HISTORY_KIND_OPTIONS = [
   { value: 'login', label: '로그인' },
   { value: 'staff_entry', label: '직원 입력' }, // T-213
   { value: 'staff', label: '직원 관리' }, // T-213
+  { value: 'excel_upload', label: '엑셀 업로드' }, // T-402
 ];
 const KIND_LABEL = Object.fromEntries(HISTORY_KIND_OPTIONS.filter((o) => o.value).map((o) => [o.value, o.label]));
 const KIND_CLASS = {
@@ -31,6 +32,7 @@ const KIND_CLASS = {
   login: 'ah-badge-muted',
   staff_entry: 'main-status--entry-receive',
   staff: 'ah-badge-muted',
+  excel_upload: 'main-status--entry-receive',
 };
 
 const FIELD_LABEL = {
@@ -76,7 +78,7 @@ const STATUS_LABEL = {
   paid: '수금 완료',
   refunded: '반품',
 };
-const TARGET_LABEL = { purchase: '매입', sale: '매출', supplier_payment: '지급', product: '품목', account: '거래처', auth: '', payment: '수금', staff: '직원' };
+const TARGET_LABEL = { purchase: '매입', sale: '매출', supplier_payment: '지급', product: '품목', account: '거래처', auth: '', payment: '수금', staff: '직원', upload: '엑셀 업로드' }; // T-402 upload
 
 const firstDayOfMonthKst = () => `${kstTodayYmd().slice(0, 7)}-01`;
 const dateTimeText = (ts) => {
@@ -117,6 +119,7 @@ function actorText(row) {
 /** 바뀐 내용: "단가 1,000원 → 1,200원" 줄 목록. 등록이면 값만 */
 function ChangeList({ row, partnerName }) {
   if (row.kind === 'login') return <span className="ah-muted">로그인 성공</span>;
+  if (row.kind === 'excel_upload') { const fn = row.changes?.find((c) => c.field === 'file_name')?.after; return <span>{row.reason}{fn ? ` · ${fn}` : ''}</span>; } // T-402
   if (row.kind === 'staff_entry') {
     const a = row.changes?.[0]?.after;
     return <span>{row.reason}{a != null ? ` ${Number(a).toLocaleString('ko-KR')}원` : ''}</span>;

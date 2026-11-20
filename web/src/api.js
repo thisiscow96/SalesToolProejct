@@ -378,3 +378,45 @@ export const createOffset = (body) => settleReq('POST', '/offsets', body, '상�
 export const cancelOffset = (id, body) => settleReq('POST', `/offsets/${encodeURIComponent(id)}/cancel`, body, '상계 취소 실패');
 /** 상계 목록 { partner_id?, from_date?, to_date? } */
 export const fetchOffsets = (params = {}) => settleReq('GET', `/offsets?${new URLSearchParams(params).toString()}`, null, '상계 목록 조회 실패');
+
+// ---- T-402 엑셀 업로드 + 템플릿 ----
+/** 템플릿(.xlsx) 내려받기 — 파일 이름은 서버가 정한 한국어 이름 */
+export async function downloadExcelTemplate(kind) {
+  const token = getToken();
+  const res = await apiFetch(`${API_BASE}/excel/${encodeURIComponent(kind)}/template`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || '템플릿을 내려받지 못했습니다.');
+  }
+  const blob = await res.blob();
+  const disp = res.headers.get('content-disposition') || '';
+  const m = disp.match(/filename\*=UTF-8''([^;]+)/i);
+  const name = m ? decodeURIComponent(m[1]) : `template_${kind}.xlsx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 엑셀 올리기 — step: 'preview'(검증만) | 'commit'(오류 0일 때 전부 저장). 응답 본문 그대로(오류 응답도 rows 를 담아 돌려줌) */
+export async function uploadExcel(kind, step, file) {
+  const token = getToken();
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const res = await apiFetch(`${API_BASE}/excel/${encodeURIComponent(kind)}/${step}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && !Array.isArray(data.rows)) {
+    throw Object.assign(new Error(data.message || '엑셀을 올리지 못했습니다.'), { status: res.status, code: data.code || null, body: data });
+  }
+  return { status: res.status, ...data };
+}
