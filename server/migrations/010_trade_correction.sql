@@ -95,8 +95,10 @@ SET credit_amount = GREATEST(0, ROUND(r.quantity * s.unit_price, 2) - COALESCE(r
 FROM sale s
 WHERE s.id = r.sale_id AND r.credit_amount IS NULL;
 
-ALTER TABLE refund ALTER COLUMN credit_amount SET DEFAULT 0;
-ALTER TABLE refund ALTER COLUMN credit_amount SET NOT NULL;
+-- credit_amount 에는 일부러 DEFAULT·NOT NULL 을 걸지 않는다.
+--   새 코드는 항상 값을 넣는다. 010 적용 뒤 새 코드 배포 전까지 옛 코드(42f5919 이전)가 만든 반품은 NULL 로 남고,
+--   새 코드 배포 직후 아래 "따라잡기 백필"(이 파일 백필 두 문장 + 상태 재계산과 같은 SQL)을 한 번 더 실행하면 반영된다.
+--   (DEFAULT 0 이면 옛 코드가 만든 반품이 '이미 반영됨'처럼 보여 반품액이 빠진다 — 2026-11-20 로컬 재현으로 확인)
 
 -- 미수 상태(파생값)를 새 식으로 다시 계산 — 반품이 있는 매출만 (돈 금액은 그대로)
 UPDATE sale SET payment_status =
