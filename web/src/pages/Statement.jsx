@@ -68,7 +68,8 @@ function buildShareText(d) {
       (it) => `${ymd(it.sale_date)} ${it.product_name} ${qtyUnit(it.quantity, it.unit)} × ${won(it.unit_price)} = ${won(it.total_amount)}원`,
     ),
     '',
-    `합계 ${won(d.totals.total_amount)}원 · 수금 ${won(d.totals.paid_amount)}원 · 미수 ${won(d.totals.unpaid_amount)}원`,
+    // 미수 = 합계 − 반품 − 수금 (서버와 같은 식, T-219 R-07)
+    `합계 ${won(d.totals.total_amount)}원${Number(d.totals.returned_amount) > 0 ? ` · 반품 ${won(d.totals.returned_amount)}원` : ''} · 수금 ${won(d.totals.paid_amount)}원 · 미수 ${won(d.totals.unpaid_amount)}원`,
   ];
   return lines.join('\n');
 }
@@ -228,6 +229,13 @@ export default function Statement() {
                   <td className="num">{won(data.totals.total_amount)}</td>
                   <td className="stmt-col-status" />
                 </tr>
+                {Number(data.totals.returned_amount) > 0 && (
+                  <tr>
+                    <th scope="row" colSpan={4}>반품액</th>
+                    <td className="num">−{won(data.totals.returned_amount)}</td>
+                    <td className="stmt-col-status" />
+                  </tr>
+                )}
                 <tr>
                   <th scope="row" colSpan={4}>수금액</th>
                   <td className="num">{won(data.totals.paid_amount)}</td>

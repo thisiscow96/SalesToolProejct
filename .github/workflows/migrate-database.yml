@@ -34,5 +34,7 @@ jobs:
         working-directory: server
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # 선택: 풀러가 아닌 직접 연결 주소 — 있으면 migrate 가 먼저 쓴다 (T-219 R-04, 배포 문서 7절)
+          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
           NODE_ENV: production
         run: npm run migrate

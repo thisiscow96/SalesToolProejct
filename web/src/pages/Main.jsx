@@ -1218,8 +1218,9 @@ function TabSales({ navFilter } = {}) {
   const unpaidForPartner = unpaidSales.filter(
     (s) => String(s.partner_id) === String(collectPartner)
       && s.payment_status !== 'paid'
-      && s.status !== 'refunded'
-      && s.status !== 'cancelled',
+      && s.status !== 'cancelled'
+      // 미수는 금액으로 판단(T-219 R-06): 전량 반품이어도 이전 기록에 미수가 남았으면 받을 수 있게
+      && computeUnpaidAmount(s) > 0,
   );
 
   const allocSum = unpaidForPartner.reduce((acc, s) => {

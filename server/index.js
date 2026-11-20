@@ -1001,7 +1001,7 @@ app.get('/api/sales', async (req, res) => {
   try {
     let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.status, s.memo,
-             s.returned_amount, s.cancelled_at, s.cancel_reason, s.updated_at,
+             s.returned_amount, s.overpaid_amount, s.cancelled_at, s.cancel_reason, s.updated_at,
              GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
              COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty
@@ -1011,7 +1011,8 @@ app.get('/api/sales', async (req, res) => {
              WHERE s.user_id = $1`;
     const params = [userId];
     if (unpaidOnly) {
-      q += ` AND s.payment_status IN ('unpaid', 'partial') AND s.status NOT IN ('refunded', 'cancelled')`;
+      // 미수는 상태가 아니라 금액으로 판단한다(T-219 R-06·F-3): 전량 반품(refunded)인데 미수가 남은 이전 기록도 보이고 받을 수 있게
+      q += ` AND s.payment_status IN ('unpaid', 'partial') AND s.status <> 'cancelled' AND s.total_amount - s.returned_amount - s.paid_amount > 0.005`;
     } else if (refundableOnly) {
       // 반품 규칙 B(T-108): 외상(수금 0원) 매출도 반품할 수 있다 — 반품 금액은 미수에서 먼저 빠진다 (U3: 예전엔 수금 있는 매출만)
       q += ` AND s.status NOT IN ('refunded', 'cancelled')`;
@@ -1039,7 +1040,8 @@ app.get('/api/sales', async (req, res) => {
 // 거래명세서 (T-105) — 한 거래처·기간의 매출을 명세서 형태로 돌려준다.
 // 쿼리: partner_id(필수), from_date·to_date(또는 from·to, 하루만이면 date). 기간이 없으면 오늘 하루.
 // 본인(토큰 사용자) 거래처만 — 남의 거래처·없는 거래처는 같은 403(존재 여부를 알려 주지 않음).
-// 환불·미수는 저장된 값(sale.paid_amount, refund 합계)을 그대로 보여 준다. 계산 규칙은 바꾸지 않는다(T-108 대기).
+// 미수 = 총액 − 반품액 − 수금 (반품 규칙 B, 원장·거래처 탭과 같은 식 — T-219 R-07). 반품액 = 현금 환불 + 미수 차감.
+// 항목의 refunded_amount 는 현금으로 돌려준 돈(참고), returned_amount 는 매출에서 뺀 반품액.
 app.get('/api/sales/statement', async (req, res) => {
   const userId = await getUserId(req);
   if (!userId) return res.status(401).json({ ok: false, message: '로그인이 필요합니다.' });
@@ -1066,7 +1068,8 @@ app.get('/api/sales/statement', async (req, res) => {
     const items = await pool.query(
       // sale_date 는 문자열(YYYY-MM-DD)로 — DATE 를 JS Date 로 받으면 서버 시간대(KST)에서 JSON(UTC)으로 바뀌며 하루 앞당겨 보인다
       `SELECT s.id, s.sale_date::text AS sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
-              s.paid_amount, s.payment_status, s.status, s.memo,
+              s.paid_amount, s.payment_status, s.status, s.memo, s.returned_amount,
+              GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
               p.name AS product_name, p.unit,
               COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_qty,
               COALESCE((SELECT SUM(r.refund_amount) FROM refund r WHERE r.sale_id = s.id), 0)::numeric AS refunded_amount
@@ -1082,7 +1085,8 @@ app.get('/api/sales/statement', async (req, res) => {
       `SELECT COUNT(*)::int AS count,
               COALESCE(SUM(s.total_amount), 0)::numeric AS total_amount,
               COALESCE(SUM(s.paid_amount), 0)::numeric AS paid_amount,
-              COALESCE(SUM(s.total_amount - s.paid_amount), 0)::numeric AS unpaid_amount
+              COALESCE(SUM(s.returned_amount), 0)::numeric AS returned_amount,
+              COALESCE(SUM(GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)), 0)::numeric AS unpaid_amount
        FROM sale s
        WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
          AND s.status <> 'cancelled'`,
@@ -1636,8 +1640,9 @@ app.post('/api/payments', async (req, res) => {
         const sale = s.rows[0];
         if (!sale || sale.partner_id !== pid) throw badRequest(`매출 ${sid} 는 선택한 거래처와 맞지 않습니다.`);
         // 수금은 미수 매출에만, 남은 미수까지만 배분한다 (매뉴얼 4.2 · D-02) — 화면(Main.jsx)·DB CHECK(009·010)와 같은 규칙
-        if (sale.status === 'refunded' || sale.status === 'cancelled') {
-          throw badRequest(`매출 ${sid} 는 환불·취소된 매출이라 수금을 배분할 수 없습니다.`);
+        // 취소 매출만 막는다. 전량 반품(refunded)이라도 미수가 남았으면 받을 수 있다(T-219 R-06) — 미수 0이면 아래 금액 검사가 막는다
+        if (sale.status === 'cancelled') {
+          throw badRequest(`매출 ${sid} 는 취소된 매출이라 수금을 배분할 수 없습니다.`);
         }
         // 남은 미수 = 총액 − 반품액 − 받은 돈 (반품 규칙 B, T-108)
         const dueCents = Math.round(Number(sale.total_amount) * 100)
@@ -1656,6 +1661,7 @@ app.post('/api/payments', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('POST payments error:', err);
+    if (!err.statusCode && sendDataNeedsFix(res, err)) return;
     res.status(err.statusCode || 500).json({ ok: false, message: err.message || '수금 등록에 실패했습니다.' });
   } finally {
     client.release();
@@ -1718,6 +1724,16 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
         await client.query('ROLLBACK').catch(() => {});
         return res.status(400).json({ ok: false, message: `반품 금액은 남은 매출액(${(netCents / 100).toLocaleString('ko-KR')})을 넘을 수 없습니다.` });
       }
+      // F-3(T104-U-5 A안, T-219 R-06): 남은 수량을 모두 반품하면 남은 순매출 전부가 반품액이다.
+      // 일부만 빼면 물건은 다 돌아왔는데 미수가 남아 "환불" 매출에 받을 돈이 생긴다 — 그런 손해 청구는 반품이 아니라 별도 매출로 처리
+      if (qty >= maxQty - 1e-9 && vCents !== netCents) {
+        await client.query('ROLLBACK').catch(() => {});
+        return res.status(400).json({
+          ok: false,
+          code: 'FULL_RETURN_AMOUNT',
+          message: `남은 수량을 모두 반품하면 반품 금액은 남은 매출액(${(netCents / 100).toLocaleString('ko-KR')}) 전부여야 합니다. 일부만 빼려면 수량을 줄이세요.`,
+        });
+      }
     } else if (qty >= maxQty - 1e-9) {
       vCents = netCents; // 남은 수량 전부 반품 → 남은 순매출 전부
     } else {
@@ -1732,9 +1748,10 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
     const c = cust.rows[0];
     await upsertInventoryDelta(client, userId, sale.product_id, qty);
     const refIns = await client.query(
-      `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, credit_amount, reason, refunded_at, memo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [userId, saleId, qty, (cashCents / 100).toFixed(2), (creditCents / 100).toFixed(2), reason?.trim() || null, rAt, memo?.trim() || null]
+      `INSERT INTO refund (user_id, sale_id, quantity, refund_amount, credit_amount, return_amount, reason, refunded_at, memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      // return_amount = 반품액 V(원장 반품 행) — 현금 환불에는 이전 기록의 초과 수금 반환분이 더해질 수 있다(T-219 R-02)
+      [userId, saleId, qty, (cashCents / 100).toFixed(2), (creditCents / 100).toFixed(2), (vCents / 100).toFixed(2), reason?.trim() || null, rAt, memo?.trim() || null]
     );
     const refundId = refIns.rows[0].id;
     await insertTransfer(client, {
@@ -1754,7 +1771,9 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
     });
     // 반품액만큼 순매출을 줄이고, 넘친 돈(현금 환불)만큼 받은 돈을 줄인다 — CHECK sale_paid_not_over_net(010)과 같은 규칙
     await client.query(
-      `UPDATE sale SET returned_amount = returned_amount + $1::numeric, paid_amount = paid_amount - $2::numeric, updated_at = NOW()
+      // 초과분을 돌려주면 "돌려줄 돈"(overpaid_amount, 013)은 0이 된다 — 반품 뒤 받은 돈 ≤ 순매출
+      `UPDATE sale SET returned_amount = returned_amount + $1::numeric, paid_amount = paid_amount - $2::numeric,
+              overpaid_amount = 0, updated_at = NOW()
        WHERE id = $3`,
       [(vCents / 100).toFixed(2), (cashCents / 100).toFixed(2), saleId] // paid − cash ≥ 0: cash ≤ (V − credit) + 초과분 ≤ paid
     );
@@ -1784,6 +1803,7 @@ app.post('/api/sales/:saleId/refund', async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('refund error:', err);
+    if (sendDataNeedsFix(res, err)) return;
     const code = err.code === 'NEGATIVE_INVENTORY' ? 400 : 500;
     res.status(code).json({ ok: false, message: err.message || '환불 처리에 실패했습니다.' });
   } finally {
@@ -1804,6 +1824,22 @@ function corrError(httpStatus, code, message, detail) {
   return Object.assign(new Error(message), { httpStatus, corrCode: code, detail: detail ?? undefined });
 }
 
+/**
+ * DB CHECK 위반(23514) — 이전 기록이 지금 규칙과 맞지 않을 때. 500 대신 409 로 이유를 알려 준다 (T-118 D-1, T-219 R-01)
+ * 013 이후에는 받은 돈 > 순매출 매출도 고칠 수 있어 보통 생기지 않는다. 생기면 관리자가 확인 SQL 로 정리한다.
+ */
+function sendDataNeedsFix(res, err) {
+  if (!err || err.code !== '23514') return false;
+  console.error('[data-needs-fix]', err.constraint || '', err.message);
+  res.status(409).json({
+    ok: false,
+    code: 'DATA_NEEDS_FIX',
+    message: '이전 기록이 지금 규칙과 맞지 않아 처리할 수 없습니다. 관리자에게 정리를 요청하세요.',
+    detail: err.constraint ? { constraint: err.constraint } : undefined,
+  });
+  return true;
+}
+
 function sendCorrError(res, err, fallbackMessage) {
   if (err && err.httpStatus) {
     const body = { ok: false, code: err.corrCode, message: err.message };
@@ -1813,6 +1849,7 @@ function sendCorrError(res, err, fallbackMessage) {
   if (err && err.code === 'NEGATIVE_INVENTORY') {
     return res.status(409).json({ ok: false, code: 'INVENTORY_SHORT', message: '재고가 부족해 되돌릴 수 없습니다.' });
   }
+  if (sendDataNeedsFix(res, err)) return undefined;
   console.error(fallbackMessage, err);
   // 500 은 DB 오류 문구를 그대로 내보내지 않는다
   return res.status(500).json({ ok: false, message: fallbackMessage });
@@ -1890,7 +1927,7 @@ const PURCHASE_ROW_SQL = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchas
   JOIN account pt ON pt.id = pu.partner_id`;
 
 const SALE_ROW_SQL = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
-       s.payment_status, s.paid_amount, s.status, s.memo, s.returned_amount,
+       s.payment_status, s.paid_amount, s.status, s.memo, s.returned_amount, s.overpaid_amount,
        s.cancelled_at, s.cancel_reason, s.updated_at,
        GREATEST(s.total_amount - s.returned_amount - s.paid_amount, 0)::numeric AS unpaid_amount,
        p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
