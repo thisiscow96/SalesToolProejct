@@ -666,3 +666,29 @@
     order: 8;
   }
 }
+
+@media (max-width: 767px) {
+  /* T-220: 미수 연령 — 펼친 거래처 줄의 고정(sticky) 이름 칸이 줄 배경과 달라 회색 조각이 보이던 것 */
+  .aging-table tr.aging-row.is-open > td:first-child,
+  .aging-table tr.aging-detail-row > td:first-child {
+    background: var(--c-surface-2);
+  }
+}
+
+@media (max-width: 767px) {
+  /* T-220: 위 고정 칸 규칙(.aging-table td:first-child)이 펼친 매출 표(.aging-sales)의 첫 칸에도 걸리던 것을 되돌린다 */
+  .aging-table .aging-sales th:first-child,
+  .aging-table .aging-sales td:first-child {
+    position: static;
+    min-width: 0;
+    background: none;
+  }
+
+  /* 펼친 매출 표는 화면 폭 안에서 따로 가로 스크롤 — 바깥 표를 끝까지 밀지 않아도 상품·남은 미수가 보인다 */
+  .aging-table .aging-detail {
+    position: sticky;
+    left: var(--sp-4);
+    max-width: calc(100vw - 4.5rem);
+    overflow-x: auto;
+  }
+}

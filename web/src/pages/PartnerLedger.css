@@ -410,8 +410,25 @@
     border-radius: 0;
   }
 
+  /* T-220: 요약 6칸은 3열 2줄로(2열 3줄이던 것) — 거래 줄이 첫 화면에 더 보이게 */
   .ledger-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-3);
+  }
+
+  .ledger-summary > div {
+    padding: var(--sp-2);
+  }
+
+  .ledger-summary dt {
+    font-size: var(--fs-12);
+  }
+
+  .ledger-summary dd {
+    margin-top: 2px;
+    font-size: var(--fs-14);
+    overflow-wrap: anywhere;
   }
 
   .ledger-table thead {
@@ -423,13 +440,16 @@
     display: block;
   }
 
+  /* 거래 한 줄 = 카드: 날짜·구분 / 내용 / 금액(+ 또는 −)·잔액.
+     늘어남·줄어듦은 같은 자리(amt)에 — 매출·반품·수금 금액이 모두 왼쪽 같은 위치에 선다 */
   .ledger-table tr.ledger-row {
     display: grid;
-    grid-template-columns: auto auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      'date kind kind'
-      'desc desc desc'
-      'inc dec bal';
+      'date kind'
+      'desc desc'
+      'amt bal';
+    align-items: center;
     gap: 2px var(--sp-2);
     padding: var(--sp-2) var(--sp-3);
     border-bottom: 1px solid var(--c-border);
@@ -439,6 +459,22 @@
     height: auto;
     padding: 0;
     border: 0;
+    background: none;
+  }
+
+  /* 빈 칸(기초 잔액의 날짜·구분·금액, 매출의 줄어듦 등)은 카드에서 자리를 차지하지 않게 */
+  .ledger-table tr.ledger-row td:empty {
+    display: none;
+  }
+
+  .ledger-table tr.ledger-row--opening {
+    grid-template-areas: 'desc bal';
+    background: var(--c-surface-2);
+  }
+
+  .ledger-table tr.ledger-row--opening .ledger-desc {
+    font-size: var(--fs-13);
+    color: var(--c-text-2);
   }
 
   .ledger-table .ledger-date {
@@ -455,14 +491,15 @@
     font-size: var(--fs-13);
   }
 
-  .main-table.ledger-table td.ledger-inc {
-    grid-area: inc;
+  .main-table.ledger-table td.ledger-inc,
+  .main-table.ledger-table td.ledger-dec {
+    grid-area: amt;
     text-align: left;
+    font-weight: var(--fw-semibold);
   }
 
   .main-table.ledger-table td.ledger-dec {
-    grid-area: dec;
-    text-align: left;
+    color: var(--c-success-text);
   }
 
   .ledger-table .ledger-inc:not(:empty)::before {
