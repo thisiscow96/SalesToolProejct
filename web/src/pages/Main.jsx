@@ -24,6 +24,7 @@ import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, de
 import { downloadListCsv } from '../lib/csvLists';
 import TabPartners, { PartnerFormModal } from './TabPartners';
 import TabDashboard from './TabDashboard';
+import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
 import {
   RowActionMenu,
@@ -497,6 +498,9 @@ function TabPurchases({ onNavigate } = {}) {
   const [recentPartners, setRecentPartners] = useState([]);
   // T-210: 행별 최근 단가 조회 순번 — 상품·거래처를 빠르게 바꿀 때 늦게 온 이전 응답을 버린다
   const priceReqSeq = useRef({});
+  // T-201 지급: 미지급만 보기, 지급 등록 모달 { partnerId?, purchaseIds? } | null
+  const [unpaidOnly, setUnpaidOnly] = useState(false);
+  const [payModal, setPayModal] = useState(null);
 
   const loadRecentPartners = () => {
     fetchRecentPurchasePartners().then(setRecentPartners).catch(() => setRecentPartners([]));
@@ -556,6 +560,7 @@ function TabPurchases({ onNavigate } = {}) {
       to_date: sanitizeYmd(toDate, today()),
     };
     if (productId) params.product_id = productId;
+    if (unpaidOnly) params.unpaid_only = 1; // T-201: 기간과 상관없이 미지급·일부 매입 전체
     fetchPurchases(params)
       .then(setList)
       .catch((e) => setErr(e.message))
@@ -787,6 +792,24 @@ function TabPurchases({ onNavigate } = {}) {
           매입 등록
         </button>
         <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>
+        <label className="ledger-check" title="기간과 상관없이 아직 다 주지 않은 매입만">
+          <input type="checkbox" checked={unpaidOnly} onChange={(e) => setUnpaidOnly(e.target.checked)} /> 미지급만
+        </label>
+        <button
+          type="button"
+          className="main-btn main-btn--secondary"
+          onClick={() => {
+            setActionErr('');
+            // T-201: 체크한 매입이 있으면 그 매입처·그 매입만 채운 상태로 연다(첫 번째 매입의 매입처 기준)
+            const picked = list.filter((r) => selected[r.id] && r.status !== 'cancelled' && Number(r.unpaid_amount) > 0);
+            const pid = picked[0]?.partner_id;
+            const ids = picked.filter((r) => r.partner_id === pid).map((r) => r.id);
+            if (picked.length > ids.length) setActionErr('지급 등록은 매입처 한 곳씩 합니다 — 첫 번째 매입처의 매입만 채웠습니다.');
+            setPayModal(pid ? { partnerId: pid, purchaseIds: ids } : {});
+          }}
+        >
+          지급 등록
+        </button>
         <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('purchases', list)} disabled={loading || list.length === 0} title="지금 화면에 보이는 목록(마지막 검색 결과)을 저장합니다">엑셀(CSV) 다운로드</button>
       </div>
       <Modal
@@ -1072,6 +1095,8 @@ function TabPurchases({ onNavigate } = {}) {
                 <th className="main-col-qty">잔여</th>
                 <th className="main-col-unit-price">단가</th>
                 <th className="main-col-amount">총액</th>
+                <th>지급</th>
+                <th className="main-col-amount">미지급액</th>
                 <th className="main-col-manage">관리</th>
               </tr>
             </thead>
@@ -1101,6 +1126,8 @@ function TabPurchases({ onNavigate } = {}) {
                   <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
                   <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
                   <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                  <td data-card="key" data-label="지급"><PurchasePayBadge row={row} /></td>
+                  <td data-card="key" data-label="미지급액" className="num main-col-amount">{row.status === 'cancelled' ? '—' : formatKoNumber(row.unpaid_amount ?? 0)}</td>
                   <td data-card="action" className="main-col-manage">
                     <RowActionMenu
                       label={`매입 #${row.id}`}
@@ -1135,6 +1162,20 @@ function TabPurchases({ onNavigate } = {}) {
           onDone={onCorrectionDone}
           onReload={load}
           onGoSales={goLinkedSales}
+        />
+      )}
+      {payModal && (
+        <SupplierPaymentModal
+          partners={partners}
+          initial={payModal}
+          onClose={() => setPayModal(null)}
+          onDone={(msg) => {
+            setPayModal(null);
+            setSelected({});
+            setCorrectionNotice(msg);
+            fetchPartners().then(setPartners).catch(() => {});
+            load();
+          }}
         />
       )}
       <PartnerFormModal
@@ -2936,6 +2977,7 @@ const BASE_TABS = [
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
+  { id: 'supplier-payments', label: '지급정보', Component: TabSupplierPayments }, // T-201
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
   { id: 'partners', label: '거래처', Component: TabPartners },
 ];

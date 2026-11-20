@@ -38,6 +38,8 @@ function timePart(ts) {
 const trimOrEmpty = (v) => (v == null ? '' : String(v).trim());
 
 const PAY_STATUS = { paid: '완료', partial: '일부' };
+const PURCHASE_PAY_STATUS = { paid: '완료', partial: '일부', unpaid: '미지급' };
+const PAY_METHOD = { cash: '현금', transfer: '계좌이체', bill: '어음', other: '기타' };
 const SALE_STATUS = { refunded: '전액환불', cancelled: '취소' };
 
 const LISTS = {
@@ -66,6 +68,9 @@ const LISTS = {
       { header: '잔여', type: 'number', value: (r) => (r.remaining_qty != null ? r.remaining_qty : r.quantity) },
       { header: '단가', type: 'number', value: (r) => r.unit_price },
       { header: '총액', type: 'number', value: (r) => r.total_amount },
+      // T-201 지급 — 취소 매입은 빈칸
+      { header: '지급', value: (r) => (r.status === 'cancelled' ? '' : PURCHASE_PAY_STATUS[r.payment_status] || '') },
+      { header: '미지급액', type: 'number', value: (r) => (r.status === 'cancelled' ? '' : Number(r.unpaid_amount) || 0) },
     ],
   },
   sales: {
@@ -92,6 +97,22 @@ const LISTS = {
       { header: '거래처', value: (r) => r.partner_name },
       { header: '금액', type: 'number', value: (r) => r.amount },
       { header: '비고', value: (r) => r.memo || '' },
+    ],
+  },
+  /** T-201 지급정보 — 지급일시(KST)·배분 요약. 취소 지급은 상태 열에 '취소' */
+  supplierPayments: {
+    name: '지급정보',
+    columns: [
+      { header: '지급일', value: (r) => { const d = validDate(r.paid_at); return d ? todayYmd(d) : ''; } },
+      { header: '시각', value: (r) => timePart(r.paid_at) },
+      { header: '구분', value: (r) => (r.kind === 'opening' ? '기초 정리' : '지급') },
+      { header: '매입처', value: (r) => r.partner_name },
+      { header: '금액', type: 'number', value: (r) => r.amount },
+      { header: '방법', value: (r) => PAY_METHOD[r.method] || '' },
+      { header: '배분', value: (r) => (r.allocations || []).map((a) => `#${a.purchase_id} ${a.amount}`).join(' / ') },
+      { header: '비고', value: (r) => r.memo || '' },
+      { header: '상태', value: (r) => (r.status === 'cancelled' ? '취소' : '정상') },
+      { header: '취소 사유', value: (r) => r.cancel_reason || '' },
     ],
   },
   disposals: {

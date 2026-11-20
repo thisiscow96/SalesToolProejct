@@ -122,6 +122,7 @@ export default function TabDashboard({ onNavigate }) {
         <TodayCard label="오늘 매입" amount={today.purchases.amount} count={today.purchases.count} unit="건" actionLabel="매입정보" onOpen={() => go('purchases')} />
         <TodayCard label="오늘 매출" amount={today.sales.amount} count={today.sales.count} unit="건" actionLabel="매출정보" onOpen={() => go('sales')} />
         <TodayCard label="오늘 수금" amount={today.receipts.amount} count={today.receipts.count} unit="건" actionLabel="수금정보" onOpen={() => go('payments')} />
+        {today.payments && <TodayCard label="오늘 지급" amount={today.payments.amount} count={today.payments.count} unit="건" actionLabel="지급정보" onOpen={() => go('supplier-payments')} />}
       </div>
 
       <section className="dash-card dash-recv" aria-labelledby="dash-recv-title">
