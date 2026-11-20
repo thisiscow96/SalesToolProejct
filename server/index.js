@@ -833,6 +833,8 @@ require('./lib/ledger-routes').registerLedgerRoutes(app, { pool, getUserId, kstT
 require('./lib/dashboard-routes').registerDashboardRoutes(app, { pool, getUserId, kstToday });
 // 변경 이력(감사 로그) 화면 (T-212) — lib/audit-log.js
 registerAuditRoutes(app, { pool, getUserId });
+// 월 정산 보고서 (T-215) — lib/monthly-report-routes.js
+require('./lib/monthly-report-routes').registerMonthlyReportRoutes(app, { pool, getUserId, kstToday });
 // 중매인 개인 품목·공용 등록 요청 (T-216) — lib/product-request-routes.js
 require('./lib/product-request-routes').registerProductRequestRoutes(app, { pool, getUserIdAndAdmin, connectOr503, generateProductKey });
 // 매입처 지급·지급 원장·미지급 연령 (T-201) — 라우트는 lib/payable-routes.js

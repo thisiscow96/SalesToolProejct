@@ -1,0 +1,448 @@
+/* 월 정산 보고서 (T-215) — 색·간격·글자는 tokens.css 변수만. 인쇄는 흰 종이·검정 글자(거래명세서 T-105와 같은 규칙) */
+
+.mr-filters {
+  align-items: center;
+}
+
+.mr-step {
+  min-width: 44px;
+  font-size: var(--fs-20);
+  line-height: 1;
+}
+
+.mr-month input {
+  min-height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+}
+
+.mr-filters-gap {
+  flex: 1 1 auto;
+}
+
+.mr-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mr-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.mr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.mr-title {
+  margin: 0;
+  font-size: var(--fs-24);
+  font-weight: var(--fw-bold);
+  color: var(--c-text);
+}
+
+.mr-sub {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+
+/* 핵심 숫자 4칸 */
+.mr-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.mr-kpi {
+  padding: var(--sp-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.mr-kpi h3 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+
+.mr-kpi h3 small {
+  margin-left: var(--sp-1);
+  color: var(--c-accent-text);
+  font-size: var(--fs-13);
+}
+
+.mr-kpi-num {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-24);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mr-kpi-num span {
+  margin-left: 2px;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+}
+
+.mr-kpi-note {
+  margin-left: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+/* 증감 */
+.mr-delta {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mr-delta--good { color: var(--c-success-text); }
+.mr-delta--bad { color: var(--c-danger-text); }
+.mr-delta--none { color: var(--c-text-2); font-weight: var(--fw-medium); }
+.mr-delta-pct { font-weight: var(--fw-medium); }
+
+/* 블록 */
+.mr-block {
+  padding: var(--sp-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  min-width: 0;
+}
+
+.mr-block-title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+  color: var(--c-text);
+}
+
+.mr-block-title small {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-3);
+}
+
+.mr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-14);
+}
+
+.mr-table th,
+.mr-table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.mr-table thead th {
+  background: var(--c-surface-2);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--c-text-2);
+}
+
+.mr-table tbody th {
+  font-weight: var(--fw-medium);
+  color: var(--c-text);
+}
+
+.mr-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mr-row--strong th,
+.mr-row--strong td[data-k='cur'] {
+  font-weight: var(--fw-bold);
+}
+
+.mr-row--strong {
+  background: var(--c-accent-soft);
+}
+
+.mr-row-sub {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-regular);
+  color: var(--c-text-3);
+}
+
+.mr-col-count {
+  color: var(--c-text-2);
+}
+
+.mr-m-label {
+  display: none;
+}
+
+.mr-note {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.mr-note--warn {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+  font-size: var(--fs-13);
+}
+
+.mr-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--c-neutral-soft);
+  color: var(--c-text-2);
+  font-size: var(--fs-13);
+}
+
+/* 상위 거래처 */
+.mr-tops {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+.mr-rank {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: rank;
+}
+
+.mr-rank li {
+  counter-increment: rank;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.mr-rank li:last-child {
+  border-bottom: 0;
+}
+
+.mr-rank-name {
+  min-width: 0;
+  font-weight: var(--fw-semibold);
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+
+.mr-rank-name::before {
+  content: counter(rank) '. ';
+  color: var(--c-text-3);
+}
+
+.mr-rank small {
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-regular);
+  color: var(--c-text-3);
+}
+
+.mr-rank-num {
+  text-align: right;
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mr-foot {
+  font-size: var(--fs-12);
+  color: var(--c-text-3);
+}
+
+.mr-foot p {
+  margin: 0 0 var(--sp-1);
+}
+
+.mr-print-page .mr-sheet {
+  margin-top: var(--sp-2);
+}
+
+/* 태블릿 */
+@media screen and (max-width: 1023px) {
+  .mr-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 휴대폰(T-206 규칙): 표는 행 하나가 카드 한 줄 — 이름·이번 달 금액이 위, 전월·증감은 작은 줄. 터치 48px, 가로 넘침 없음 */
+@media screen and (max-width: 767px) {
+  /* 1줄: ‹ [월] ›  2줄: 인쇄 · CSV (mobile.css 의 main-filters 2칸 격자를 4칸으로 바꾼다) */
+  .main-filters.mr-filters {
+    grid-template-columns: 48px 1fr 1fr 48px;
+  }
+
+  .mr-filters > * {
+    order: 0 !important;
+  }
+
+  .mr-step {
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .main-filters > .mr-month {
+    grid-column: span 2;
+    min-width: 0;
+  }
+
+  .main-filters > .main-btn:not(.mr-step) {
+    grid-column: span 2;
+  }
+
+  .mr-month input {
+    width: 100%;
+    min-height: 48px;
+    font-size: var(--fs-16);
+  }
+
+  .mr-filters-gap {
+    display: none;
+  }
+
+  .mr-filters > .main-btn:not(.mr-step) {
+    flex: 1 1 40%;
+    min-height: 48px;
+  }
+
+  .mr-kpi {
+    padding: var(--sp-3);
+  }
+
+  .mr-kpi-num {
+    font-size: var(--fs-20);
+  }
+
+  .mr-block {
+    padding: var(--sp-3);
+  }
+
+  .mr-table thead {
+    display: none;
+  }
+
+  .mr-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--sp-2);
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .mr-table th,
+  .mr-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  .mr-table [data-k='label'] { grid-column: 1; grid-row: 1; }
+  .mr-table [data-k='cur'] { grid-column: 2; grid-row: 1; font-size: var(--fs-16); font-weight: var(--fw-semibold); }
+  .mr-table [data-k='count'] { display: none; }
+  .mr-table [data-k='prev'],
+  .mr-table [data-k='open'] { grid-column: 1; grid-row: 2; text-align: left; font-size: var(--fs-12); color: var(--c-text-3); }
+  .mr-table [data-k='diff'] { grid-column: 2; grid-row: 2; }
+
+  .mr-row--strong {
+    margin: 0 calc(-1 * var(--sp-3));
+    padding-left: var(--sp-3) !important;
+    padding-right: var(--sp-3) !important;
+  }
+
+  .mr-m-label {
+    display: inline;
+  }
+
+  .mr-table--bal [data-k='cur'] .mr-m-label {
+    display: none;
+  }
+
+  .mr-tops {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  .mr-sheet {
+    gap: 4mm;
+    color: #000;
+  }
+
+  .mr-kpis {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3mm;
+  }
+
+  .mr-kpi,
+  .mr-block {
+    border: 1px solid #999;
+    box-shadow: none;
+    background: #fff;
+    padding: 3mm;
+    break-inside: avoid;
+  }
+
+  .mr-tops {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mr-table thead th,
+  .mr-row--strong {
+    background: #f0f0f0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .mr-title,
+  .mr-kpi-num,
+  .mr-table th,
+  .mr-table td,
+  .mr-rank-name,
+  .mr-rank-num {
+    color: #000 !important;
+  }
+
+  .mr-kpi-num {
+    font-size: 16pt;
+  }
+
+  .mr-table {
+    font-size: 9.5pt;
+  }
+}
