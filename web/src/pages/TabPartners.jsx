@@ -15,11 +15,12 @@ export const PARTNER_TYPE_OPTIONS = [
   { value: 'same_market', label: '같은 시장', hint: '같은 시장 중매인 — 매입·매출 모두 · 상계 가능' },
   { value: 'wholesaler', label: '도매상', hint: '매입·매출 모두 · 상계 가능' },
   { value: 'market_wholesaler', label: '시장도매인', hint: '매입·매출 모두 · 상계 가능' },
+  { value: 'producer', label: '생산자(출하주·농가)', hint: '실제 재배 농가 — 매입의 생산자·산지, 직접 입금 대상' },
 ];
 /** 받을 돈(미수) 장부가 있는 유형 — 서버 SALE_PARTNER_TYPES 와 같음. 매입처는 원장 버튼을 숨긴다(T-104 RULE-10) */
 const RECEIVABLE_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 /** 줄 돈(미지급) 장부가 있는 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 (T-201). 둘 다 되는 유형은 원장 버튼 2개 */
-const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
 const VIEW_KEY = 'partners.view';
 function readView() {
   try {
@@ -60,8 +61,11 @@ async function sendPartner(method, url, body) {
 export const createPartner = (body) => sendPartner('POST', `${API_BASE}/partners`, body);
 export const updatePartner = (id, body) => sendPartner('PUT', `${API_BASE}/partners/${encodeURIComponent(id)}`, body);
 
-const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', email: '', location: '', address: '', memo: '', credit_limit: '' };
-const FIELDS = ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo', 'credit_limit'];
+const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', email: '', location: '', address: '', memo: '', credit_limit: '',
+  origin_region: '', bank_name: '', bank_account: '', bank_holder: '' };
+const FIELDS = ['name', 'type', 'contact', 'phone', 'email', 'location', 'address', 'memo', 'credit_limit',
+  'origin_region', 'bank_name', 'bank_account', 'bank_holder']; // T-401 10장 산지·입금 계좌
+const BANK_FIELDS = ['bank_name', 'bank_account', 'bank_holder'];
 const EMAIL_RE = /^[^s@]+@[^s@]+.[^s@]+$/; // T-214 입금 안내 받는 주소
 
 /* ── 외상 한도 (T-207) — 서버는 NUMERIC 문자열("10000.00")로 준다. 입력은 콤마 허용, 비우면 한도 없음 ── */
@@ -133,6 +137,15 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
       return;
     }
     const limitText = String(form.credit_limit ?? '').replace(/,/g, '').trim();
+    const bankFilled = BANK_FIELDS.filter((k) => String(form[k] ?? '').trim());
+    if (bankFilled.length && bankFilled.length !== 3) {
+      setErr('입금 계좌는 은행·계좌번호·예금주를 모두 넣거나 모두 비우세요.');
+      return;
+    }
+    if (String(form.bank_account ?? '').trim() && !/^[0-9-]{4,50}$/.test(String(form.bank_account).trim())) {
+      setErr('계좌번호는 숫자와 하이픈(-)만 4~50자로 입력하세요.');
+      return;
+    }
     if (limitText !== '' && !LIMIT_RE.test(limitText)) {
       setErr('외상 한도는 0 이상의 금액으로 입력하세요(비우면 한도 없음).');
       return;
@@ -151,6 +164,8 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
           if (form[k].trim() !== before.trim()) body[k] = form[k];
         }
       }
+      // T-401 PR-01: 계좌는 세 칸을 함께 보낸다(서버가 셋 다 있거나 셋 다 없게 검사)
+      if (BANK_FIELDS.some((k) => k in body)) BANK_FIELDS.forEach((k) => { body[k] = form[k]; });
       if (Object.keys(body).length === 0) {
         onClose();
         return;
@@ -263,6 +278,27 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
                   </span>
                 </label>
               )}
+              {form.type === 'producer' && (
+                <label>
+                  산지(시·군)
+                  <input type="text" maxLength={100} autoComplete="off" placeholder="예: 해남군" value={form.origin_region} onChange={set('origin_region')} />
+                </label>
+              )}
+              <fieldset className="partner-field-full partner-bank">
+                <legend>입금 계좌(선택 — 셋 다 넣거나 모두 비움)</legend>
+                <label>
+                  은행
+                  <input type="text" maxLength={50} autoComplete="off" placeholder="예: 농협" value={form.bank_name} onChange={set('bank_name')} />
+                </label>
+                <label>
+                  계좌번호
+                  <input type="text" inputMode="numeric" maxLength={50} autoComplete="off" placeholder="숫자·하이픈" value={form.bank_account} onChange={set('bank_account')} />
+                </label>
+                <label>
+                  예금주
+                  <input type="text" maxLength={100} autoComplete="off" value={form.bank_holder} onChange={set('bank_holder')} />
+                </label>
+              </fieldset>
               <label className="partner-field-full">
                 메모
                 <textarea rows={3} maxLength={2000} value={form.memo} onChange={set('memo')} />

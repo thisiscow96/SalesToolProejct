@@ -99,9 +99,13 @@ async function pickFifoLots(client, { userId, productId, quantity, saleDate, par
             p.unit_price::text AS unit_price, p.take::text AS take,
             ROUND(p.take * p.unit_price, 2)::text AS cost,
             NULLIF(BTRIM(acc.name::text), '') AS partner_name,
-            NULLIF(BTRIM(p.source_name::text), '') AS source_name
+            NULLIF(BTRIM(p.source_name::text), '') AS source_name,
+            -- T-401 PR-07 생산자·산지(조회만)
+            pr0.name AS producer_name, pu0.origin_region
      FROM p
      LEFT JOIN account acc ON acc.id = p.partner_id AND acc.user_id = $1
+     LEFT JOIN purchase pu0 ON pu0.id = p.purchase_id
+     LEFT JOIN account pr0 ON pr0.id = pu0.producer_id AND pr0.user_id = $1
      ORDER BY p.purchase_date, p.purchase_id`,
     [userId, productId, String(quantity), saleDate, partnerId, sourceName]
   );
@@ -366,6 +370,8 @@ function registerFifoRoutes(app, deps) {
               purchase_date: x.purchase_date,
               partner_name: x.partner_name,
               source_name: x.source_name,
+              producer_name: x.producer_name || null, // T-401 PR-07
+              origin_region: x.origin_region || null,
               quantity: Number(x.take),
               unit_cost: Number(x.unit_price),
               cost: Number(x.cost),

@@ -29,19 +29,19 @@ const PAYABLE_SELECT = `,
       AND sp.paid_at <  (($2::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul'))                 AS pays,
   (SELECT json_build_object('total', COALESCE(SUM(pu.total_amount - pu.paid_amount), 0),
                             'purchase_count', COUNT(*),
-                            'partner_count', COUNT(DISTINCT pu.partner_id))
+                            'partner_count', COUNT(DISTINCT pu.payee_partner_id))
      FROM purchase pu
     WHERE pu.user_id = $1 AND pu.status = 'active' AND pu.payment_status IN ('unpaid', 'partial')
       AND pu.total_amount - pu.paid_amount > 0)                                                 AS payable,
   (SELECT COALESCE(json_agg(t), '[]'::json) FROM (
-     SELECT pu.partner_id, a.name AS partner_name, a.type AS partner_type,
+     SELECT pu.payee_partner_id AS partner_id, a.name AS partner_name, a.type AS partner_type, -- T-401 PR-05 지급 대상 기준
             SUM(pu.total_amount - pu.paid_amount) AS total_due, COUNT(*)::int AS purchase_count,
             MAX(GREATEST($2::date - pu.purchase_date, 0))::int AS oldest_days
-       FROM purchase pu JOIN account a ON a.id = pu.partner_id AND a.user_id = $1
+       FROM purchase pu JOIN account a ON a.id = pu.payee_partner_id AND a.user_id = $1
       WHERE pu.user_id = $1 AND pu.status = 'active' AND pu.payment_status IN ('unpaid', 'partial')
         AND pu.total_amount - pu.paid_amount > 0
-      GROUP BY pu.partner_id, a.name, a.type
-      ORDER BY total_due DESC, a.name, pu.partner_id
+      GROUP BY pu.payee_partner_id, a.name, a.type
+      ORDER BY total_due DESC, a.name, pu.payee_partner_id
       LIMIT $6) t)                                                                              AS payable_top,
   EXISTS (SELECT 1 FROM supplier_payment sp WHERE sp.user_id = $1)                              AS has_supplier_payment`;
 

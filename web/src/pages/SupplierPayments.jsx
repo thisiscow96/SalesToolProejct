@@ -23,7 +23,7 @@ import { can } from '../lib/staffAccess';
 import './SupplierPayments.css';
 
 /** 매입 가능한 거래처 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 */
-export const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+export const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
 
 const toCents = (v) => {
   const n = Number(String(v ?? '').replace(/,/g, ''));
@@ -264,6 +264,11 @@ export function SupplierPaymentModal({ partners, initial, onClose, onDone }) {
           </label>
         </div>
 
+        {partner?.bank_account && (
+          <p className="tc-hint sp-bank" aria-live="polite">
+            입금 계좌: <strong>{partner.bank_name} {partner.bank_account}</strong> (예금주 {partner.bank_holder}) — 송금은 은행 앱에서 하세요.
+          </p>
+        )}
         {partnerId && (
           <div className="sp-alloc">
             <p className="sp-alloc-head">

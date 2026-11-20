@@ -238,6 +238,20 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         }
       }
 
+      // T-401 PR-07 매출 행 설명 끝에 산지 — 배분된 매입의 산지(중복 제거)
+      const saleIds = rows.rows.filter((r) => r.kind === 'sale').map((r) => r.ref_id);
+      const originBySale = new Map();
+      if (saleIds.length) {
+        const og = await db.query(
+          `SELECT pa.sale_id, string_agg(DISTINCT pu.origin_region, '·') AS origins
+             FROM purchase_allocation pa JOIN purchase pu ON pu.id = pa.purchase_id AND pu.user_id = $1
+            WHERE pa.sale_id = ANY($2::int[]) AND pu.origin_region IS NOT NULL
+            GROUP BY pa.sale_id`,
+          [userId, saleIds]
+        );
+        for (const o of og.rows) originBySale.set(o.sale_id, o.origins);
+      }
+
       let entries = rows.rows.map((r) => {
         const allocations = ['receipt', 'discount', 'offset'].includes(r.kind) ? allocByPayment.get(r.ref_id) || [] : undefined;
         const e = {
@@ -262,6 +276,10 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         if (allocations) e.allocations = allocations;
         if (r.kind === 'offset') e.offset_id = offsetByPayment.get(r.ref_id) || null;
         e.description = describe({ ...e, product_name: r.product_name }, allocations);
+        if (r.kind === 'sale' && originBySale.get(r.ref_id)) {
+          e.origin_region = originBySale.get(r.ref_id);
+          e.description += ` · 산지 ${e.origin_region}`;
+        }
         return e;
       });
 

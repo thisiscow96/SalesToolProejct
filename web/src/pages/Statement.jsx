@@ -213,6 +213,13 @@ export default function Statement() {
                       {Number(it.refunded_qty) > 0 && (
                         <span className="stmt-refund"> (환불 {qtyUnit(it.refunded_qty, it.unit)})</span>
                       )}
+                      {Array.isArray(it.origins) && it.origins.length > 0 && (
+                        <span className="stmt-origin">
+                          {' · '}
+                          {it.origins.slice(0, 3).map((o) => [o.producer_name, o.origin_region].filter(Boolean).join(' ')).join(', ')}
+                          {it.origins.length > 3 ? ` 외 ${it.origins.length - 3}` : ''}
+                        </span>
+                      )}
                     </td>
                     <td data-label="수량" className="num">{qtyUnit(it.quantity, it.unit)}</td>
                     <td data-label="단가" className="num">{won(it.unit_price)}</td>

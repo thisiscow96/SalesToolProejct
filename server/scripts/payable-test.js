@@ -385,18 +385,22 @@ async function main() {
       (SELECT COALESCE(SUM(paid_amount), 0) FROM purchase) c, (SELECT string_agg(payment_status::text, '' ORDER BY id) FROM purchase) d`)).rows[0];
   const before31 = JSON.stringify(await snap());
   let err31 = null;
+  let after31 = null;
   const c31 = await pool.connect();
   try {
+    // T-401: 같은 트랜잭션 안에서 다시 실행·비교한 뒤 되돌린다 — COMMIT 하면 014 의 뷰 정의가 뒤 마이그레이션(023)의 뷰를 덮어써
+    // 이 테스트 DB 의 다른 검사가 옛 뷰로 돌게 된다(운영에서는 같은 파일을 두 번 적용하지 않음). 판정 기준은 그대로
     await c31.query('BEGIN');
     await c31.query(fs.readFileSync(path.join(__dirname, '..', 'migrations', '014_supplier_payment.sql'), 'utf8'));
-    await c31.query('COMMIT');
+    after31 = JSON.stringify((await c31.query(`SELECT (SELECT COUNT(*) FROM supplier_payment) a, (SELECT COUNT(*) FROM supplier_payment_allocation) b,
+      (SELECT COALESCE(SUM(paid_amount), 0) FROM purchase) c, (SELECT string_agg(payment_status::text, '' ORDER BY id) FROM purchase) d`)).rows[0]);
   } catch (e) {
     err31 = e.message;
-    await c31.query('ROLLBACK').catch(() => {});
   } finally {
+    await c31.query('ROLLBACK').catch(() => {});
     c31.release();
   }
-  check('AC-31 014를 데이터가 있는 DB에 다시 실행 → 오류 없음, 데이터 변화 없음', !err31 && JSON.stringify(await snap()) === before31, err31);
+  check('AC-31 014를 데이터가 있는 DB에 다시 실행 → 오류 없음, 데이터 변화 없음', !err31 && after31 === before31, err31);
 
   await pool.end();
   const pass = results.filter((x) => x.ok).length;

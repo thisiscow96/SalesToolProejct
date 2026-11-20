@@ -18,7 +18,7 @@
 const { AGING_BUCKETS, LEDGER_MAX_ROWS, money } = require('./ledger-routes');
 
 /** 매입 가능한 거래처 유형(index.js PURCHASE_PARTNER_TYPES 와 같음) — RULE-01 */
-const PAYABLE_PARTNER_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+const PAYABLE_PARTNER_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
 const PAY_METHODS = ['cash', 'transfer', 'bill', 'other'];
 /** RULE-10 지급 방법 기본값 [가정 T201-U-6] */
 const DEFAULT_PAY_METHOD = 'transfer';
@@ -33,7 +33,7 @@ const OPENING_MEMO = '기초 정리';
  */
 const PAYABLE_DUE_CTE = `
         WITH pdue AS (
-          SELECT pu.id, pu.partner_id, pu.purchase_date, pu.product_id, pu.quantity,
+          SELECT pu.id, pu.payee_partner_id AS partner_id, pu.purchase_date, pu.product_id, pu.quantity, -- T-401 PR-05 지급 대상 기준
                  pu.total_amount, pu.paid_amount,
                  (pu.total_amount - pu.paid_amount)        AS due,
                  GREATEST($2::date - pu.purchase_date, 0)  AS days
@@ -42,7 +42,7 @@ const PAYABLE_DUE_CTE = `
             AND pu.status = 'active'
             AND pu.payment_status IN ('unpaid', 'partial')
             AND pu.total_amount - pu.paid_amount > 0
-            AND ($3::int IS NULL OR pu.partner_id = $3::int)
+            AND ($3::int IS NULL OR pu.payee_partner_id = $3::int)
         )`;
 
 const KIND_LABEL = {
@@ -155,7 +155,7 @@ async function activePaymentsOfPurchase(client, userId, purchaseId) {
 async function partnerPayable(client, userId, partnerId) {
   const r = await client.query(
     `SELECT COALESCE(SUM(total_amount - paid_amount), 0)::text AS due
-       FROM purchase WHERE user_id = $1 AND partner_id = $2 AND status = 'active'`,
+       FROM purchase WHERE user_id = $1 AND payee_partner_id = $2 AND status = 'active'`, // T-401 PR-05
     [userId, partnerId]
   );
   return r.rows[0].due;
@@ -257,7 +257,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
         }
         const ids = input.allocations.map((a) => a.purchase_id).sort((x, y) => x - y);
         const lk = await client.query(
-          `SELECT id, partner_id, status, (total_amount - paid_amount)::text AS due
+          `SELECT id, payee_partner_id AS partner_id, status, (total_amount - paid_amount)::text AS due
              FROM purchase WHERE user_id = $1 AND id = ANY($2::int[]) ORDER BY id FOR UPDATE`,
           [userId, ids]
         );
@@ -270,7 +270,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
             throw payError(400, 'PURCHASE_NOT_PAYABLE', `매입 #${p.id} 는 취소된 매입이라 지급할 수 없습니다.`, { purchase_id: p.id });
           }
           if (p.partner_id !== input.partnerId) {
-            throw payError(400, 'PURCHASE_NOT_PAYABLE', `매입 #${p.id} 는 선택한 매입처의 매입이 아닙니다.`, { purchase_id: p.id });
+            throw payError(400, 'PURCHASE_NOT_PAYABLE', `매입 #${p.id} 는 선택한 거래처에 줄 돈이 아닙니다(지급 대상이 다름).`, { purchase_id: p.id });
           }
         }
         // 잠근 뒤 남은 미지급과 비교(DB NUMERIC)
@@ -297,7 +297,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
         const through = input.kind === 'opening' ? input.throughDate : null;
         const c0 = await client.query(
           `SELECT id FROM purchase
-            WHERE user_id = $1 AND partner_id = $2 AND status = 'active'
+            WHERE user_id = $1 AND payee_partner_id = $2 AND status = 'active'
               AND payment_status IN ('unpaid', 'partial') AND total_amount - paid_amount > 0
               AND ($3::date IS NULL OR purchase_date <= $3::date)
             ORDER BY id`,
@@ -313,7 +313,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
           `WITH t AS (
              SELECT id, purchase_date, (total_amount - paid_amount) AS due
                FROM purchase
-              WHERE id = ANY($1::int[]) AND partner_id = $2 AND status = 'active' AND total_amount - paid_amount > 0
+              WHERE id = ANY($1::int[]) AND payee_partner_id = $2 AND status = 'active' AND total_amount - paid_amount > 0
            ), c AS (
              SELECT id, due, SUM(due) OVER (ORDER BY purchase_date, id) AS cum FROM t
            )
@@ -684,7 +684,7 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
             `SELECT pu.id, to_char(pu.purchase_date, 'YYYY-MM-DD') AS date, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.created_at,
                     pr.name AS product_name
                FROM purchase pu LEFT JOIN product pr ON pr.id = pu.product_id
-              WHERE pu.user_id = $1 AND pu.partner_id = $2 AND pu.status = 'cancelled'
+              WHERE pu.user_id = $1 AND pu.payee_partner_id = $2 AND pu.status = 'cancelled'
                 AND ($3::date IS NULL OR pu.purchase_date >= $3::date) AND ($4::date IS NULL OR pu.purchase_date <= $4::date)`,
             [userId, partnerId, fromP, toP]
           );
