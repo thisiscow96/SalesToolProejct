@@ -1,0 +1,363 @@
+// 거래처 탭 (T-102) — 목록·검색·등록·수정, 매입·매출 모달에서 쓰는 빠른 등록 모달
+import { useEffect, useId, useMemo, useState } from 'react';
+import { fetchPartners, getToken, getUser, API_BASE } from '../api';
+import './TabPartners.css';
+
+/** 거래처 유형 — 서버 partner_type enum 과 같은 값. 표시 이름은 화면용 */
+export const PARTNER_TYPE_OPTIONS = [
+  { value: 'supplier', label: '매입처', hint: '매입에서 선택' },
+  { value: 'customer', label: '판매처', hint: '매출에서 선택' },
+  { value: 'same_market', label: '같은 시장', hint: '매입·매출 모두' },
+  { value: 'wholesaler', label: '도매상', hint: '매입·매출 모두' },
+  { value: 'market_wholesaler', label: '시장도매인', hint: '매입·매출 모두' },
+];
+const TYPE_LABEL = Object.fromEntries(PARTNER_TYPE_OPTIONS.map((o) => [o.value, o.label]));
+export const partnerTypeLabel = (type) => TYPE_LABEL[type] || type || '-';
+
+/* ── API (api.js 는 이 작업 범위 밖이라 같은 인증 방식으로 여기서 호출) ── */
+async function sendPartner(method, url, body) {
+  const token = getToken();
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401 && getUser()) {
+    try {
+      window.sessionStorage.removeItem('user');
+    } catch {
+      /* 저장소 접근 불가 — 무시 */
+    }
+    window.location.href = '/login';
+  }
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    /* 본문 없음 */
+  }
+  if (!res.ok) throw new Error(data.message || '저장하지 못했습니다.');
+  return data.data;
+}
+export const createPartner = (body) => sendPartner('POST', `${API_BASE}/partners`, body);
+export const updatePartner = (id, body) => sendPartner('PUT', `${API_BASE}/partners/${encodeURIComponent(id)}`, body);
+
+const EMPTY_FORM = { name: '', type: 'supplier', contact: '', phone: '', location: '', address: '', memo: '' };
+const FIELDS = ['name', 'type', 'contact', 'phone', 'location', 'address', 'memo'];
+
+/**
+ * 거래처 등록·수정 모달.
+ * - partner 가 있으면 수정, 없으면 등록(defaultType 으로 유형 기본값)
+ * - 매입·매출 모달 위에 겹쳐 띄울 수 있도록 Main.jsx 의 Modal 과 같은 클래스를 쓰고 스크롤 잠금은 원래 값으로 되돌린다
+ * - 수정 시 바뀐 항목만 보낸다(목록 API 가 메모를 주지 않아도 기존 메모를 지우지 않게)
+ */
+export function PartnerFormModal({ open, partner, defaultType = 'supplier', allowedTypes, onClose, onSaved }) {
+  const titleId = useId();
+  const formId = `partner-form-${titleId.replace(/:/g, '')}`;
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [err, setErr] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const isEdit = !!partner;
+  const typeOptions = allowedTypes ? PARTNER_TYPE_OPTIONS.filter((o) => allowedTypes.has(o.value)) : PARTNER_TYPE_OPTIONS;
+
+  useEffect(() => {
+    if (!open) return;
+    setErr('');
+    setSubmitting(false);
+    if (partner) {
+      const f = {};
+      for (const k of FIELDS) f[k] = partner[k] == null ? '' : String(partner[k]);
+      setForm(f);
+    } else {
+      setForm({ ...EMPTY_FORM, type: defaultType });
+    }
+  }, [open, partner, defaultType]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const submit = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setErr('');
+    if (!form.name.trim()) {
+      setErr('거래처 이름을 입력하세요.');
+      return;
+    }
+    let body;
+    if (isEdit) {
+      body = {};
+      for (const k of FIELDS) {
+        const before = partner[k] == null ? '' : String(partner[k]);
+        if (k in partner || form[k] !== '') {
+          if (form[k].trim() !== before.trim()) body[k] = form[k];
+        }
+      }
+      if (Object.keys(body).length === 0) {
+        onClose();
+        return;
+      }
+    } else {
+      body = { ...form };
+    }
+    setSubmitting(true);
+    (isEdit ? updatePartner(partner.id, body) : createPartner(body))
+      .then((saved) => {
+        setSubmitting(false);
+        onSaved(saved);
+      })
+      .catch((ex) => {
+        setSubmitting(false);
+        setErr(ex.message);
+      });
+  };
+
+  return (
+    <div className="main-modal-backdrop partner-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="main-modal partner-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <div className="main-modal-header">
+          <h2 id={titleId}>{isEdit ? '거래처 수정' : '새 거래처 등록'}</h2>
+        </div>
+        <div className="main-modal-body">
+          <form id={formId} className="main-modal-form" onSubmit={submit} noValidate>
+            {err && (
+              <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+                {err}
+              </div>
+            )}
+            <div className="main-modal-fields partner-form-grid">
+              <label className="partner-field-wide">
+                <span className="partner-label">거래처 이름 <span className="partner-required" aria-hidden="true">*</span></span>
+                <input
+                  type="text"
+                  required
+                  aria-required="true"
+                  maxLength={200}
+                  autoFocus
+                  autoComplete="off"
+                  placeholder="예: 한국청과"
+                  value={form.name}
+                  onChange={set('name')}
+                />
+              </label>
+              <label>
+                <span className="partner-label">유형 <span className="partner-required" aria-hidden="true">*</span></span>
+                <select required value={form.type} onChange={set('type')}>
+                  {typeOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label} — {o.hint}
+                    </option>
+                  ))}
+                  {isEdit && !typeOptions.some((o) => o.value === form.type) && (
+                    <option value={form.type}>{partnerTypeLabel(form.type)}</option>
+                  )}
+                </select>
+              </label>
+              <label>
+                담당자
+                <input type="text" maxLength={100} autoComplete="off" value={form.contact} onChange={set('contact')} />
+              </label>
+              <label>
+                연락처
+                <input type="text" inputMode="tel" maxLength={50} autoComplete="off" placeholder="010-0000-0000" value={form.phone} onChange={set('phone')} />
+              </label>
+              <label>
+                위치
+                <input type="text" maxLength={200} autoComplete="off" placeholder="예: 가락시장 청과동" value={form.location} onChange={set('location')} />
+              </label>
+              <label className="partner-field-wide">
+                주소
+                <input type="text" maxLength={2000} autoComplete="off" value={form.address} onChange={set('address')} />
+              </label>
+              <label className="partner-field-full">
+                메모
+                <textarea rows={3} maxLength={2000} value={form.memo} onChange={set('memo')} />
+              </label>
+            </div>
+          </form>
+        </div>
+        <div className="main-modal-footer">
+          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+            취소
+          </button>
+          <button type="submit" form={formId} className="main-modal-btn primary" disabled={submitting}>
+            {submitting ? '처리 중…' : isEdit ? '저장' : '등록'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function TabPartners() {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
+  const [q, setQ] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    setErr('');
+    fetchPartners()
+      .then((rows) =>
+        setList((prev) => {
+          // 목록 API 가 주지 않는 메모는 이번 화면에서 저장한 값으로 채워 둔다
+          const memo = new Map(prev.filter((p) => 'memo' in p).map((p) => [p.id, p.memo]));
+          return rows.map((r) => ('memo' in r || !memo.has(r.id) ? r : { ...r, memo: memo.get(r.id) }));
+        })
+      )
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => {
+    load();
+  }, []);
+
+  const shown = useMemo(() => {
+    const k = q.trim().toLowerCase();
+    return list.filter((p) => {
+      if (typeFilter && p.type !== typeFilter) return false;
+      if (!k) return true;
+      return [p.name, p.contact, p.phone, p.location, p.address, p.memo].some((v) => v && String(v).toLowerCase().includes(k));
+    });
+  }, [list, q, typeFilter]);
+
+  const close = () => {
+    setShowForm(false);
+    setEditing(null);
+  };
+  const onSaved = (saved) => {
+    const wasEdit = !!editing;
+    close();
+    setList((prev) => {
+      const next = wasEdit ? prev.map((p) => (p.id === saved.id ? { ...p, ...saved } : p)) : [...prev, saved];
+      return next.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'));
+    });
+    setNotice(wasEdit ? `'${saved.name}' 거래처를 수정했습니다.` : `'${saved.name}' 거래처를 등록했습니다.`);
+  };
+
+  return (
+    <>
+      {notice && (
+        <div className="partner-notice" role="status">
+          {notice}
+        </div>
+      )}
+      <div className="main-filters">
+        <label>
+          검색
+          <input
+            type="search"
+            className="partner-search"
+            placeholder="이름·담당자·연락처·위치"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="거래처 검색"
+          />
+        </label>
+        <label>
+          유형
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">전체</option>
+            {PARTNER_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
+          새로고침
+        </button>
+        <button
+          type="button"
+          className="main-btn"
+          onClick={() => {
+            setNotice('');
+            setEditing(null);
+            setShowForm(true);
+          }}
+        >
+          거래처 등록
+        </button>
+      </div>
+      {loading ? (
+        <p className="main-loading">불러오는 중…</p>
+      ) : err ? (
+        <p className="main-error">{err}</p>
+      ) : list.length === 0 ? (
+        <p className="main-empty">등록된 거래처가 없습니다. 「거래처 등록」으로 첫 매입처·판매처를 추가하세요.</p>
+      ) : shown.length === 0 ? (
+        <p className="main-empty">조건에 맞는 거래처가 없습니다.</p>
+      ) : (
+        <>
+        <p className="partner-count">{shown.length === list.length ? `${list.length}곳` : `${shown.length}곳 / 전체 ${list.length}곳`}</p>
+        <div className="main-table-wrap">
+          <table className="main-table partner-table">
+            <thead>
+              <tr>
+                <th>거래처</th>
+                <th>유형</th>
+                <th>담당자</th>
+                <th>연락처</th>
+                <th>위치</th>
+                <th>주소</th>
+                <th className="main-col-memo">메모</th>
+                <th aria-label="관리" />
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((p) => (
+                <tr key={p.id}>
+                  <td className="partner-name">{p.name}</td>
+                  <td>
+                    <span className={`partner-type partner-type--${p.type}`}>{partnerTypeLabel(p.type)}</span>
+                  </td>
+                  <td>{p.contact || '-'}</td>
+                  <td>{p.phone || '-'}</td>
+                  <td>{p.location || '-'}</td>
+                  <td className="partner-address">{p.address || '-'}</td>
+                  <td className="main-col-memo">{p.memo || '-'}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="main-btn main-btn--secondary partner-edit-btn"
+                      aria-label={`${p.name} 수정`}
+                      onClick={() => {
+                        setNotice('');
+                        setEditing(p);
+                        setShowForm(true);
+                      }}
+                    >
+                      수정
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </>
+      )}
+      <PartnerFormModal open={showForm} partner={editing} onClose={close} onSaved={onSaved} />
+    </>
+  );
+}

@@ -18,6 +18,7 @@ import {
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
 import { computeRefundPossibleQty, computeAutoRefundAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
+import TabPartners, { PartnerFormModal } from './TabPartners';
 import './Main.css';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -459,6 +460,20 @@ function TabPurchases() {
   const [convertRows, setConvertRows] = useState([]);
   const [actionErr, setActionErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // 매입 등록·매출 전환 모달 위에서 바로 거래처 추가 (T-102): null | 'purchase' | 'sale'
+  const [partnerAddFor, setPartnerAddFor] = useState(null);
+
+  const onPartnerAdded = (saved) => {
+    const ctx = partnerAddFor;
+    setPartnerAddFor(null);
+    setPartners((prev) => [...prev, saved].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko')));
+    // 새 거래처를 바로 선택해 둔다 — 매입은 거래처가 비어 있는 행, 매출 전환은 판매처
+    if (ctx === 'purchase' && PURCHASE_ACCOUNT_TYPES.has(saved.type)) {
+      setPurchaseRows((rows) => rows.map((r) => (r.partner_id ? r : { ...r, partner_id: String(saved.id) })));
+    } else if (ctx === 'sale' && SALE_ACCOUNT_TYPES.has(saved.type)) {
+      setConvertCustomer(String(saved.id));
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -695,6 +710,9 @@ function TabPurchases() {
             <button type="button" className="main-modal-toolbar-btn" onClick={cloneSelectedPurchaseRows}>
               복제
             </button>
+            <button type="button" className="main-modal-toolbar-btn" onClick={() => setPartnerAddFor('purchase')}>
+              ＋ 새 거래처
+            </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
             <table className="main-table main-table--purchase-modal">
@@ -838,6 +856,9 @@ function TabPurchases() {
                 ))}
               </select>
             </label>
+            <button type="button" className="main-modal-toolbar-btn partner-inline-add" onClick={() => setPartnerAddFor('sale')}>
+              ＋ 새 거래처
+            </button>
             <label>
               판매일 <input required className="main-input-date" type="date" value={convertDate} onChange={(e) => setConvertDate(e.target.value)} />
             </label>
@@ -931,6 +952,13 @@ function TabPurchases() {
           </table>
         </div>
       )}
+      <PartnerFormModal
+        open={partnerAddFor !== null}
+        defaultType={partnerAddFor === 'sale' ? 'customer' : 'supplier'}
+        allowedTypes={partnerAddFor === 'sale' ? SALE_ACCOUNT_TYPES : PURCHASE_ACCOUNT_TYPES}
+        onClose={() => setPartnerAddFor(null)}
+        onSaved={onPartnerAdded}
+      />
     </>
   );
 }
@@ -2567,6 +2595,7 @@ const BASE_TABS = [
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
+  { id: 'partners', label: '거래처', Component: TabPartners },
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
 
