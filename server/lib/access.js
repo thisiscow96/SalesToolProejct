@@ -140,6 +140,20 @@ function buildRules(env = process.env) {
     //   거래처·지급·상계는 주인만, 품목은 단건(R-04)과 같은 규칙(U-6). 줄마다 단건 라우트 권한·본문 조건을 다시 거친다(lib/excel-upload.js)
     ['R-62', 'GET', '/api/excel/:kind/template', ALL],
     ...excelRules(env),
+    // ---- T-403 데이터 이관 — 전부 주인만(직원은 탭도 안 보임). 공용 품목 만들기는 줄마다 POST /api/products(관리자) 규칙을 다시 거친다
+    ['R-79', 'GET', '/api/migrations/template/:kind', OWNER],
+    ['R-80', 'GET', '/api/migrations', OWNER],
+    ['R-81', 'POST', '/api/migrations', OWNER, { ui: 'migration' }],
+    ['R-82', 'GET', '/api/migrations/:id', OWNER],
+    ['R-83', 'DELETE', '/api/migrations/:id', OWNER, { ui: 'migration' }],
+    ['R-84', 'POST', '/api/migrations/:id/files/:kind', OWNER, { ui: 'migration' }],
+    ['R-85', 'DELETE', '/api/migrations/:id/files/:kind', OWNER, { ui: 'migration' }],
+    ['R-86', 'POST', '/api/migrations/:id/validate', OWNER, { ui: 'migration' }],
+    ['R-87', 'POST', '/api/migrations/:id/commit', OWNER, { ui: 'migration' }],
+    ['R-88', 'GET', '/api/migrations/:id/rollback-check', OWNER],
+    ['R-89', 'POST', '/api/migrations/:id/rollback', OWNER, { ui: 'migration' }],
+    ['R-90', 'GET', '/api/migrations/:id/reconcile', OWNER],
+    ['R-91', 'GET', '/api/migration-history', OWNER],
   ];
 }
 

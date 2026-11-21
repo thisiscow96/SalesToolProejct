@@ -3144,6 +3144,8 @@ app.get('/api/disposals', async (req, res) => {
 // T-213: 라우트 점검 테스트가 서버를 띄우지 않고 라우트 목록을 읽을 수 있게 app 을 내보낸다(node index.js 로 실행할 때만 listen)
 // T-402 엑셀 업로드 + 템플릿 — 모든 입력 라우트가 등록된 뒤(줄마다 기존 라우트를 그대로 부른다)
 require('./lib/excel-upload').registerExcelRoutes(app, { pool, authorize, getUserId, recordAudit });
+// T-403 데이터 이관 — 엑셀 업로드 뒤(같은 한 연결 실행·핸들러 호출을 쓴다)
+require('./lib/migration-routes').registerMigrationRoutes(app, { pool, authorize, getUserId, recordAudit, kstToday, getUserWarehouseLabel });
 
 module.exports = { app, pool };
 const host = process.env.HOST || '0.0.0.0';
