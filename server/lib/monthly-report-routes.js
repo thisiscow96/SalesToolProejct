@@ -80,7 +80,8 @@ dsp AS (
          CASE WHEN avgp.avg_price IS NULL THEN NULL ELSE ROUND(d.quantity * avgp.avg_price, 2) END AS cost
   FROM disposal d
   LEFT JOIN LATERAL (
-    SELECT SUM(pu.total_amount) / NULLIF(SUM(pu.quantity), 0) AS avg_price
+    -- T-403 이관 재고 로트는 total_amount 0(돈 아님) — 원가 추정은 수량 × 단가로
+    SELECT SUM(CASE WHEN pu.entry_kind = 'opening_stock' THEN ROUND(pu.quantity * pu.unit_price, 2) ELSE pu.total_amount END) / NULLIF(SUM(pu.quantity), 0) AS avg_price
     FROM purchase pu
     WHERE pu.user_id = d.user_id AND pu.product_id = d.product_id AND pu.status = 'active'
       AND pu.purchase_date <= d.disposal_date

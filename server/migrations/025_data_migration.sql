@@ -8,7 +8,7 @@
 -- 저장 위치
 --   기초 미수   → sale     (entry_mode='opening', 시스템 품목 "이관 기초 잔액", 수량 1)  — 미수·연령·원장·한도·수금 배분이 그대로 맞는다
 --   기초 미지급 → purchase (entry_kind='opening_ap', 시스템 품목, 재고·로트 제외)
---   이관 재고   → purchase (entry_kind='opening_stock', 실제 품목·수량·원가·입고일, 지급 완료) + inventory 증가 — 줄 돈 원장에서 제외
+--   이관 재고   → purchase (entry_kind='opening_stock', 실제 품목·수량·원가 단가·입고일, total_amount=paid_amount=0 → 상태 paid) + inventory 증가 — 줄 돈 원장에서 제외
 --   과거 거래·기준일 이전 폐기 → migration_history (기록 전용, 잔액·재고 영향 없음)
 --   기준일 이후 폐기 → disposal (기존 폐기 API 그대로, migration_batch_id 표시)
 
@@ -132,9 +132,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_opening_ref ON purchase (user_id, 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_opening_ref ON sale (user_id, external_ref)
   WHERE entry_mode = 'opening' AND external_ref IS NOT NULL AND status <> 'cancelled';
 
--- 시스템 품목 1행 (없을 때만)
-INSERT INTO product (name, unit, memo, is_system, owner_user_id, category_large)
-SELECT '이관 기초 잔액', '건', 'T-403 데이터 이관 — 기초 미수·미지급 행 전용(품목 목록에 안 보임)', true, NULL, '이관'
+-- 시스템 품목 1행 (없을 때만). id 를 큰 고정값(2,000,000,000)으로 둔다 — 새 DB 에서 025 가 품목보다 먼저 돌아도
+-- "id 가 가장 작은 공용 품목"을 쓰는 기존 스크립트·화면 정렬이 시스템 품목을 고르지 않게. 시퀀스는 건드리지 않는다(일반 품목 id 는 계속 작은 수)
+-- product_key 도 고정값(PSYS-MIG) — generateProductKey 의 ^P[0-9]+$ 계산에 끼지 않는다
+INSERT INTO product (id, name, unit, memo, is_system, owner_user_id, category_large, product_key)
+SELECT 2000000000, '이관 기초 잔액', '건', 'T-403 데이터 이관 — 기초 미수·미지급 행 전용(품목 목록에 안 보임)', true, NULL, '이관', 'PSYS-MIG'
 WHERE NOT EXISTS (SELECT 1 FROM product WHERE is_system);
 
 -- ======================================================================

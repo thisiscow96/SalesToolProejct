@@ -544,8 +544,10 @@ async function doOpeningStock(rows, ctx) {
     const ins = await ctx.client.query(
       `INSERT INTO purchase (user_id, partner_id, product_id, quantity, unit_price, total_amount, purchase_date, memo, payment_status, paid_amount,
                              payee_partner_id, producer_id, origin_region, entry_kind, migration_batch_id, external_ref)
-       SELECT $1, x.pid, x.prid, ROUND(x.q, 3), ROUND(x.p, 2), ROUND(ROUND(x.q, 3) * ROUND(x.p, 2), 2), x.d, x.memo, 'paid',
-              ROUND(ROUND(x.q, 3) * ROUND(x.p, 2), 2), x.pid, x.producer, x.origin, 'opening_stock', $2, x.ref
+       -- 이관 재고는 돈이 아니다: total_amount = paid_amount = 0 → 상태식(paid)·지급 배분 합(0) 불변식이 그대로 맞고 미지급에 안 잡힌다.
+       -- 원가는 unit_price 에 둔다(판매 원가 = 배분 수량 × 매입 단가 — 기존 식 그대로). 재고 금액이 필요하면 quantity × unit_price
+       SELECT $1, x.pid, x.prid, ROUND(x.q, 3), ROUND(x.p, 2), 0, x.d, x.memo, 'paid',
+              0, x.pid, x.producer, x.origin, 'opening_stock', $2, x.ref
          FROM unnest($3::int[], $4::int[], $5::numeric[], $6::numeric[], $7::date[], $8::text[], $9::int[], $10::text[], $11::text[])
               AS x(pid, prid, q, p, d, memo, producer, origin, ref)
        RETURNING id, product_id, quantity, partner_id`,
@@ -792,7 +794,7 @@ async function rollbackBlockers(db, userId, batchId) {
     const r = await db.query(sql, [userId, batchId]);
     if (r.rows.length) {
       const n = Number(r.rows[0].total_n || r.rows.length);
-      blockers.push({ type, label, count: n, samples: r.rows.slice(0, 5).map((x) => ({ id: x.id, date: x.d ? ymdOf(x.d) : null, summary: x.summary })) });
+      blockers.push({ type, label, count: n, samples: r.rows.slice(0, 5).map((x) => ({ id: x.id, date: x.d ? (typeof x.d === 'string' ? x.d.slice(0, 10) : `${x.d.getFullYear()}-${pad2(x.d.getMonth() + 1)}-${pad2(x.d.getDate())}`) : null, summary: x.summary })) });
     }
   };
   const S = `(SELECT id FROM sale WHERE user_id = $1 AND migration_batch_id = $2)`;
@@ -802,7 +804,7 @@ async function rollbackBlockers(db, userId, batchId) {
   const PR = `(SELECT id FROM product WHERE migration_batch_id = $2)`;
   const lim = 'COUNT(*) OVER () AS total_n';
   await add('payment_allocation', '기초 미수에 수금·할인·상계 배분', `
-    SELECT pa.id, p.paid_at AS d, ${lim}, '수금 #' || p.id || ' ' || to_char(pa.amount, 'FM999,999,999,990') || '원' || CASE WHEN p.status = 'cancelled' THEN ' (취소됨)' ELSE '' END AS summary
+    SELECT pa.id, to_char(p.paid_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS d, ${lim}, '수금 #' || p.id || ' ' || to_char(pa.amount, 'FM999,999,999,990') || '원' || CASE WHEN p.status = 'cancelled' THEN ' (취소됨)' ELSE '' END AS summary
       FROM payment_allocation pa JOIN payment p ON p.id = pa.payment_id WHERE pa.sale_id IN ${S} ORDER BY pa.id LIMIT 50`);
   await add('sale_discount_offset', '기초 미수에 할인·상계', `
     SELECT s.id, s.sale_date AS d, ${lim}, '매출 #' || s.id || ' 할인 ' || s.discount_amount || ' · 상계 ' || s.offset_amount AS summary
@@ -810,13 +812,13 @@ async function rollbackBlockers(db, userId, batchId) {
   await add('refund', '반품', `
     SELECT r.id, r.refunded_at AS d, ${lim}, '반품 #' || r.id AS summary FROM refund r WHERE r.sale_id IN ${S} OR r.sale_id IN (SELECT sale_id FROM purchase_allocation WHERE purchase_id IN ${PU}) ORDER BY r.id LIMIT 50`);
   await add('supplier_payment_allocation', '기초 미지급에 지급·할인·상계 배분', `
-    SELECT a.id, sp.paid_at AS d, ${lim}, '지급 #' || sp.id || ' ' || to_char(a.amount, 'FM999,999,999,990') || '원' || CASE WHEN sp.status = 'cancelled' THEN ' (취소됨)' ELSE '' END AS summary
+    SELECT a.id, to_char(sp.paid_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS d, ${lim}, '지급 #' || sp.id || ' ' || to_char(a.amount, 'FM999,999,999,990') || '원' || CASE WHEN sp.status = 'cancelled' THEN ' (취소됨)' ELSE '' END AS summary
       FROM supplier_payment_allocation a JOIN supplier_payment sp ON sp.id = a.supplier_payment_id WHERE a.purchase_id IN ${PU} ORDER BY a.id LIMIT 50`);
   await add('purchase_allocation', '이관 재고에서 판매', `
     SELECT pa.id, s.sale_date AS d, ${lim}, '매출 #' || s.id || ' 수량 ' || pa.quantity AS summary
       FROM purchase_allocation pa JOIN sale s ON s.id = pa.sale_id WHERE pa.purchase_id IN ${PU} ORDER BY pa.id LIMIT 50`);
   await add('trade_correction', '정정 기록', `
-    SELECT tc.id, tc.created_at AS d, ${lim}, tc.target_type || ' #' || tc.target_id || ' ' || tc.action AS summary
+    SELECT tc.id, to_char(tc.created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS d, ${lim}, tc.target_type || ' #' || tc.target_id || ' ' || tc.action AS summary
       FROM trade_correction tc WHERE tc.user_id = $1 AND ((tc.target_type = 'sale' AND tc.target_id IN ${S}) OR (tc.target_type = 'purchase' AND tc.target_id IN ${PU})) ORDER BY tc.id LIMIT 50`);
   await add('inventory', '되돌리면 재고가 모자람(이미 판매·폐기됨)', `
     WITH need AS (
@@ -992,7 +994,7 @@ async function buildReconcile(db, userId, batch, files) {
       }
     }
     const saved = await db.query(
-      `SELECT product_id, SUM(quantity) AS q, SUM(total_amount) AS a, COUNT(*)::int AS lots FROM purchase
+      `SELECT product_id, SUM(quantity) AS q, SUM(ROUND(quantity * unit_price, 2)) AS a, COUNT(*)::int AS lots FROM purchase
         WHERE user_id = $1 AND migration_batch_id = $2 AND entry_kind = 'opening_stock' GROUP BY product_id`, [userId, B]
     );
     for (const s of saved.rows) {

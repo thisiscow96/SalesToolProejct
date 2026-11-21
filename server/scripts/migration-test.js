@@ -264,6 +264,14 @@ async function main() {
   }
   check('AC-403-18·21 이관품목P 재고 = 15 − 기준일 이후 폐기 2 = 13', (await inv(A.uid, prP)) === 13, await inv(A.uid, prP));
   {
+    // T-401 불변식(지급 배분 합 = paid_amount, 상태식)이 이관 행에서도 맞아야 한다 — payable-test AC-28 과 같은 식
+    const bad = await q(`SELECT pu.id, pu.entry_kind FROM purchase pu
+        LEFT JOIN (SELECT spa.purchase_id, SUM(spa.amount) s FROM supplier_payment_allocation spa JOIN supplier_payment sp ON sp.id = spa.supplier_payment_id AND sp.status = 'active' GROUP BY spa.purchase_id) x ON x.purchase_id = pu.id
+       WHERE pu.user_id = $1 AND (pu.paid_amount <> COALESCE(x.s, 0) OR pu.payment_status IS DISTINCT FROM
+         (CASE WHEN pu.paid_amount >= pu.total_amount THEN 'paid' WHEN pu.paid_amount > 0 THEN 'partial' ELSE 'unpaid' END)::payment_status)`, [A.uid]);
+    check('AC-403-18 이관 재고·기초 미지급도 지급 불변식(배분 합 = 지급액, 상태식) 유지', bad.length === 0, bad);
+  }
+  {
     const il = await json('GET', '/api/inventory', null, A.token);
     const row = ((il.json && il.json.data) || []).find((x) => x.product_id === prP);
     check('AC-403-18 재고현황 경과일 기준 = 10-05(가장 오래된 이관 로트)', row && row.aging_base_date === '2026-10-05', row);
