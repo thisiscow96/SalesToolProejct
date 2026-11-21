@@ -29,7 +29,8 @@ const { parseListOptions, runList } = require('./list-query');
 
 const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login', 'staff', 'staff_entry',
   'discount', 'offset', 'offset_cancel', // T-401 정산 할인·상계
-  'excel_upload']; // T-402 엑셀 업로드 한 줄(건별은 원천 행)
+  'excel_upload', // T-402 엑셀 업로드 한 줄(건별은 원천 행)
+  'data_migration']; // T-403 데이터 이관 저장·되돌림
 const SKIP_FIELDS = new Set(['id', 'user_id', 'created_at', 'updated_at']);
 
 function same(a, b) {
@@ -195,14 +196,14 @@ const UNION_SQL = `
   UNION ALL
   SELECT 'audit_log', al.id,
          CASE WHEN al.entity_type = 'auth' THEN 'login' WHEN al.entity_type = 'staff' THEN 'staff'
-              WHEN al.entity_type = 'upload' THEN 'excel_upload' ELSE 'partner' END, al.created_at,
+              WHEN al.entity_type = 'upload' THEN 'excel_upload' WHEN al.entity_type = 'migration' THEN 'data_migration' ELSE 'partner' END, al.created_at,
          al.entity_type::text, al.entity_id,
          CASE WHEN al.entity_type = 'auth' THEN '로그인'
               WHEN al.entity_type = 'staff' THEN COALESCE(st.name, al.after_data->>'name', al.before_data->>'name')
-              WHEN al.entity_type = 'upload' THEN al.note
+              WHEN al.entity_type IN ('upload', 'migration') THEN al.note
               ELSE COALESCE(acc.name, al.after_data->>'name') END,
          al.partner_id, CASE WHEN al.actor_staff_id IS NULL THEN 'self' ELSE 'staff' END,
-         CASE WHEN al.entity_type IN ('staff', 'upload') THEN al.note
+         CASE WHEN al.entity_type IN ('staff', 'upload', 'migration') THEN al.note
               WHEN al.action = 'create' THEN '등록' WHEN al.action = 'update' THEN '수정' ELSE al.note END,
          al.changed_fields, al.before_data, al.after_data, al.actor_staff_id
     FROM audit_log al

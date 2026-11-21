@@ -150,7 +150,8 @@ ALTER TABLE audit_log ADD  CONSTRAINT audit_log_action_chk CHECK (action IN (
 ));
 
 -- ======================================================================
--- 4. 뷰 — 023 최신 정의 그대로 + 끝에 칸 추가 / 가지 조건만 (CREATE OR REPLACE 조건: 기존 칸 이름·타입·순서 그대로)
+-- 4. 뷰 — 023 최신 정의 그대로 + 가지 조건만. 칸은 늘리지 않는다(옛 마이그레이션 012·014·015 를 다시 실행하는 회귀 검사가
+--    CREATE OR REPLACE 로 칸 수가 줄면 실패하므로 — 설계 4.4 의 is_opening 칸은 원장 라우트에서 매출·매입을 조인해 계산)
 -- ======================================================================
 CREATE OR REPLACE VIEW partner_ledger_entry AS
 SELECT s.user_id,
@@ -168,8 +169,7 @@ SELECT s.user_id,
        NULL::numeric(14, 2)                    AS credit_amount,
        NULL::numeric(14, 2)                    AS cash_refund_amount,
        s.memo,
-       s.created_at                            AS entered_at,
-       (s.entry_mode = 'opening')              AS is_opening
+       s.created_at                            AS entered_at
 FROM sale s
 WHERE s.status <> 'cancelled'
 UNION ALL
@@ -177,7 +177,7 @@ SELECT r.user_id, s.partner_id, r.refunded_at, 2, 'return', r.id, r.sale_id,
        s.product_id, r.quantity, s.unit_price,
        0, COALESCE(r.return_amount, COALESCE(r.refund_amount, 0) + COALESCE(r.credit_amount, 0)),
        COALESCE(r.credit_amount, 0), COALESCE(r.refund_amount, 0),
-       r.reason, r.created_at, false
+       r.reason, r.created_at
 FROM refund r
 JOIN sale s ON s.id = r.sale_id AND s.user_id = r.user_id
 WHERE s.status <> 'cancelled'
@@ -185,32 +185,32 @@ UNION ALL
 SELECT r.user_id, s.partner_id, r.refunded_at, 2, 'discount_reversal', r.id, r.sale_id,
        s.product_id, NULL, NULL,
        r.discount_reversed_amount, 0, NULL, NULL,
-       r.reason, r.created_at, false
+       r.reason, r.created_at
 FROM refund r
 JOIN sale s ON s.id = r.sale_id AND s.user_id = r.user_id
 WHERE s.status <> 'cancelled' AND r.discount_reversed_amount > 0
 UNION ALL
 SELECT p.user_id, p.partner_id, (p.paid_at AT TIME ZONE 'Asia/Seoul')::date, 3, 'receipt', p.id, NULL,
        NULL, NULL, NULL,
-       0, p.amount, NULL, NULL, p.memo, p.paid_at, false
+       0, p.amount, NULL, NULL, p.memo, p.paid_at
 FROM payment p
 WHERE p.entry_kind = 'receive' AND p.status = 'active'
 UNION ALL
 SELECT p.user_id, p.partner_id, (p.paid_at AT TIME ZONE 'Asia/Seoul')::date, 3, 'discount', p.id, NULL,
        NULL, NULL, NULL,
-       0, p.amount, NULL, NULL, p.memo, p.paid_at, false
+       0, p.amount, NULL, NULL, p.memo, p.paid_at
 FROM payment p
 WHERE p.entry_kind = 'discount' AND p.status = 'active'
 UNION ALL
 SELECT p.user_id, p.partner_id, (p.paid_at AT TIME ZONE 'Asia/Seoul')::date, 3, 'offset', p.id, NULL,
        NULL, NULL, NULL,
-       0, p.amount, NULL, NULL, p.memo, p.paid_at, false
+       0, p.amount, NULL, NULL, p.memo, p.paid_at
 FROM payment p
 WHERE p.entry_kind = 'offset' AND p.status = 'active'
 UNION ALL
 SELECT p.user_id, p.partner_id, (p.paid_at AT TIME ZONE 'Asia/Seoul')::date, 4, 'refund_cash', p.id, NULL,
        NULL, NULL, NULL,
-       p.amount, 0, NULL, NULL, p.memo, p.paid_at, false
+       p.amount, 0, NULL, NULL, p.memo, p.paid_at
 FROM payment p
 WHERE p.entry_kind = 'refund' AND p.status = 'active';
 
@@ -230,14 +230,13 @@ SELECT pu.user_id,
        NULL::text               AS pay_kind,
        NULL::text               AS method,
        pu.memo,
-       pu.created_at            AS entered_at,
-       (pu.entry_kind = 'opening_ap') AS is_opening
+       pu.created_at            AS entered_at
 FROM purchase pu
 WHERE pu.status = 'active' AND pu.entry_kind <> 'opening_stock'
 UNION ALL
 SELECT sp.user_id, sp.partner_id, (sp.paid_at AT TIME ZONE 'Asia/Seoul')::date, 2, 'payment', sp.id,
        NULL, NULL, NULL,
-       0::numeric(14, 2), sp.amount, sp.kind::text, sp.method::text, sp.memo, sp.paid_at, false
+       0::numeric(14, 2), sp.amount, sp.kind::text, sp.method::text, sp.memo, sp.paid_at
 FROM supplier_payment sp
 WHERE sp.status = 'active';
 

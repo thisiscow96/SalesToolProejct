@@ -114,10 +114,10 @@ const DASHBOARD_SQL = `${RECEIVABLE_DUE_CTE},
 SELECT
   (SELECT json_build_object('amount', COALESCE(SUM(pu.total_amount), 0), 'count', COUNT(*))
      FROM purchase pu
-    WHERE pu.user_id = $1 AND pu.purchase_date = $2::date AND pu.status = 'active')            AS purchases,
+    WHERE pu.user_id = $1 AND pu.purchase_date = $2::date AND pu.status = 'active' AND pu.entry_kind = 'normal')            AS purchases,
   (SELECT json_build_object('amount', COALESCE(SUM(sa.total_amount), 0), 'count', COUNT(*))
      FROM sale sa
-    WHERE sa.user_id = $1 AND sa.sale_date = $2::date AND sa.status <> 'cancelled')           AS sales,
+    WHERE sa.user_id = $1 AND sa.sale_date = $2::date AND sa.status <> 'cancelled' AND sa.entry_mode <> 'opening')           AS sales,
   (SELECT json_build_object('amount', COALESCE(SUM(py.amount), 0), 'count', COUNT(*))
      FROM payment py
     WHERE py.user_id = $1 AND py.entry_kind = 'receive'

@@ -209,7 +209,8 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
          )
          SELECT to_char(o.entry_date, 'YYYY-MM-DD') AS date, o.kind, o.kind_order, o.ref_id, o.sale_id,
                 pr.name AS product_name, o.quantity, o.unit_price,
-                o.increase, o.decrease, o.balance, o.credit_amount, o.cash_refund_amount, o.memo, o.entered_at
+                o.increase, o.decrease, o.balance, o.credit_amount, o.cash_refund_amount, o.memo, o.entered_at,
+                (o.kind = 'sale' AND EXISTS (SELECT 1 FROM sale s2 WHERE s2.id = o.ref_id AND s2.entry_mode = 'opening')) AS is_opening -- T-403
          FROM ordered o
          LEFT JOIN product pr ON pr.id = o.product_id
          WHERE ($3::date IS NULL OR o.entry_date >= $3::date)
@@ -276,6 +277,11 @@ function registerLedgerRoutes(app, { pool, getUserId, kstToday }) {
         if (allocations) e.allocations = allocations;
         if (r.kind === 'offset') e.offset_id = offsetByPayment.get(r.ref_id) || null;
         e.description = describe({ ...e, product_name: r.product_name }, allocations);
+        if (r.kind === 'sale' && r.is_opening) { // T-403 이관 기초 미수 — 원래 매출일 줄
+          e.is_opening = true;
+          e.kind_label = '이관 기초';
+          e.description = `이관 기초 #${r.ref_id}${r.memo && r.memo !== '이관 기초' ? ` (${String(r.memo).replace(/^이관 기초 · /, '')})` : ''}`;
+        }
         if (r.kind === 'sale' && originBySale.get(r.ref_id)) {
           e.origin_region = originBySale.get(r.ref_id);
           e.description += ` · 산지 ${e.origin_region}`;
