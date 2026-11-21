@@ -20,6 +20,7 @@
  *  - 미지급 잔액 = 지급 원장 뷰(supplier_ledger_entry)의 누계(기준일까지, 기초 정리 포함)
  *    → 월말 − 월초 = 매출 − 반품 − 수금 + 환불 지급 (미수) / 매입 − 지급 − 기초 정리 (미지급)  이 식이 항상 맞는다.
  *    T-401 뒤: 미수 = 매출 − 반품 − 수금 − 매출 할인 − 상계 + 환불 지급 + 할인 되돌림 / 미지급 = 매입 − 지급 − 기초 정리 − 매입 할인 − 상계
+ *    T-403 뒤: 미수 식에 + 이관 기초 미수(opening_receivable), 미지급 식에 + 이관 기초 미지급(opening_payable). 매출·매입 합계에는 이관 행이 없다
  *
  * 원칙: 모든 집계에 user_id = 토큰 사용자. 금액은 DB NUMERIC 으로 더하고 응답 직전에만 Number.
  *       현재·전월 두 번의 집계를 같은 시점 데이터로 읽으려고 REPEATABLE READ 읽기 전용 트랜잭션 하나에서 실행한다.
@@ -72,13 +73,15 @@ sl AS (
   FROM sale sa
   LEFT JOIN alc ON alc.sale_id = sa.id
   WHERE sa.user_id = $1 AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date AND sa.status <> 'cancelled'
+    AND sa.entry_mode <> 'opening' -- T-403 이관 기초 미수는 매출 합계에서 빼고 opening_receivable 로
 ),
 dsp AS (
   SELECT d.id, d.quantity, avgp.avg_price,
          CASE WHEN avgp.avg_price IS NULL THEN NULL ELSE ROUND(d.quantity * avgp.avg_price, 2) END AS cost
   FROM disposal d
   LEFT JOIN LATERAL (
-    SELECT SUM(pu.total_amount) / NULLIF(SUM(pu.quantity), 0) AS avg_price
+    -- T-403 이관 재고 로트는 total_amount 0(돈 아님) — 원가 추정은 수량 × 단가로
+    SELECT SUM(CASE WHEN pu.entry_kind = 'opening_stock' THEN ROUND(pu.quantity * pu.unit_price, 2) ELSE pu.total_amount END) / NULLIF(SUM(pu.quantity), 0) AS avg_price
     FROM purchase pu
     WHERE pu.user_id = d.user_id AND pu.product_id = d.product_id AND pu.status = 'active'
       AND pu.purchase_date <= d.disposal_date
@@ -88,7 +91,20 @@ dsp AS (
 SELECT
   (SELECT json_build_object('amount', COALESCE(SUM(pu.total_amount), 0), 'count', COUNT(*))
      FROM purchase pu
-    WHERE pu.user_id = $1 AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date AND pu.status = 'active') AS purchases,
+    WHERE pu.user_id = $1 AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date AND pu.status = 'active'
+      AND pu.entry_kind = 'normal') AS purchases, -- T-403 이관 기초·이관 재고 제외
+  -- T-403 이관 기초(원래 매출일·매입일이 그 달) — 원장에는 들어가므로 월말−월초 식에 더한다(설계 5.3)
+  (SELECT json_build_object('amount', COALESCE(SUM(sa.total_amount), 0), 'count', COUNT(*))
+     FROM sale sa WHERE sa.user_id = $1 AND sa.entry_mode = 'opening' AND sa.status <> 'cancelled'
+      AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date) AS opening_receivable,
+  (SELECT json_build_object('amount', COALESCE(SUM(pu.total_amount), 0), 'count', COUNT(*))
+     FROM purchase pu WHERE pu.user_id = $1 AND pu.entry_kind = 'opening_ap' AND pu.status = 'active'
+      AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date) AS opening_payable,
+  -- T-403 이관 기록(참고, U-403-08) — 잔액 식에 넣지 않는다
+  (SELECT COALESCE(json_agg(t ORDER BY t.kind), '[]'::json) FROM (
+     SELECT h.kind, SUM(h.amount) AS amount, COUNT(*)::int AS count FROM migration_history h
+       JOIN migration_batch b ON b.id = h.batch_id AND b.status = 'saved'
+      WHERE h.user_id = $1 AND h.txn_date >= $2::date AND h.txn_date <= $3::date GROUP BY h.kind) t) AS history,
   (SELECT json_build_object('amount', COALESCE(SUM(total_amount), 0), 'count', COUNT(*),
                             'cost', COALESCE(SUM(cost), 0),
                             'costed_sales', COALESCE(SUM(total_amount) FILTER (WHERE costed), 0),
@@ -177,6 +193,7 @@ SELECT
        JOIN account a ON a.id = sa.partner_id AND a.user_id = $1
        LEFT JOIN alc ON alc.sale_id = sa.id
       WHERE sa.user_id = $1 AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date AND sa.status <> 'cancelled'
+        AND sa.entry_mode <> 'opening'
       GROUP BY sa.partner_id, a.name, a.type
       ORDER BY amount DESC, a.name, sa.partner_id
       LIMIT $4) t) AS sales_partners,
@@ -186,6 +203,7 @@ SELECT
        FROM purchase pu
        JOIN account a ON a.id = pu.partner_id AND a.user_id = $1
       WHERE pu.user_id = $1 AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date AND pu.status = 'active'
+        AND pu.entry_kind = 'normal'
       GROUP BY pu.partner_id, a.name, a.type
       ORDER BY amount DESC, a.name, pu.partner_id
       LIMIT $4) t) AS purchase_partners`;
@@ -240,6 +258,10 @@ function shapeSummary(x) {
       margin_pct: x.margin_pct == null ? null : Number(x.margin_pct),
       cost_missing_count: Number(sales.cost_missing_count || 0),
     },
+    // T-403: 그 달 원래 날짜의 이관 기초(원장에는 포함, 매출·매입 합계에는 미포함) · 이관 기록(참고)
+    opening_receivable: ac(x.opening_receivable),
+    opening_payable: ac(x.opening_payable),
+    history: (x.history || []).map((h) => ({ kind: h.kind, amount: money(h.amount), count: Number(h.count || 0) })),
     balances: {
       receivable: { opening: money(rv.opening), closing: money(rv.closing) },
       payable: { opening: money(pv.opening), closing: money(pv.closing) },

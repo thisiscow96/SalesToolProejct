@@ -609,7 +609,8 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
            )
            SELECT to_char(o.entry_date, 'YYYY-MM-DD') AS date, o.kind, o.kind_order, o.ref_id,
                   pr.name AS product_name, o.quantity, o.unit_price, o.pay_kind, o.method,
-                  o.increase, o.decrease, o.balance, o.memo, o.entered_at
+                  o.increase, o.decrease, o.balance, o.memo, o.entered_at,
+                  (o.kind = 'purchase' AND EXISTS (SELECT 1 FROM purchase p2 WHERE p2.id = o.ref_id AND p2.entry_kind = 'opening_ap')) AS is_opening -- T-403
            FROM ordered o
            LEFT JOIN product pr ON pr.id = o.product_id
            WHERE ($3::date IS NULL OR o.entry_date >= $3::date)
@@ -665,7 +666,11 @@ function registerPayableRoutes(app, { pool, getUserId, kstToday, connectOr503, p
             memo: r.memo,
             _order: [r.date, r.kind_order, new Date(r.entered_at || 0).getTime(), r.ref_id],
           };
-          if (r.kind === 'purchase') {
+          if (r.kind === 'purchase' && r.is_opening) { // T-403 이관 기초 미지급 — 원래 매입일 줄
+            e.is_opening = true;
+            e.kind_label = '이관 기초';
+            e.description = `이관 기초 #${r.ref_id}${r.memo && r.memo !== '이관 기초' ? ` (${String(r.memo).replace(/^이관 기초 · /, '')})` : ''}`;
+          } else if (r.kind === 'purchase') {
             e.description = `매입 #${r.ref_id} ${r.product_name || '상품'} ${fmt(r.quantity)} × ${fmt(r.unit_price)}`;
           } else {
             e.pay_kind = r.pay_kind;

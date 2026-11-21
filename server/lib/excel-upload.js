@@ -433,6 +433,7 @@ const KINDS = {
           `SELECT p.id, p.quantity - COALESCE((SELECT SUM(a.quantity) FROM purchase_allocation a WHERE a.purchase_id = p.id), 0) AS remaining
              FROM purchase p
             WHERE p.user_id = $1 AND p.partner_id = $2 AND p.product_id = $3 AND p.purchase_date = $4 AND p.status <> 'cancelled'
+              AND p.entry_kind <> 'opening_ap'
             ORDER BY p.id`,
           [ctx.userId, pp.id, pr.id, pdate]
         );
@@ -570,8 +571,10 @@ const INPUT_KINDS = new Set(['purchase', 'sale', 'convert', 'payment']);
 const HEAD_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8EEF7' } };
 const REQ_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE8CC' } };
 
-async function buildTemplate(kind) {
-  const def = KINDS[kind];
+async function buildTemplate(kind, opts = {}) {
+  // T-403: kind 대신 정의 객체를 받으면 그 정의로(데이터 이관 템플릿). opts.maxRows·opts.notes 로 안내 문구를 바꾼다
+  const def = typeof kind === 'object' && kind ? kind : KINDS[kind];
+  const maxRows = opts.maxRows || MAX_ROWS;
   const wb = new ExcelJS.Workbook();
   wb.creator = '판매툴';
   wb.created = new Date(Date.UTC(2026, 10, 21));
@@ -595,7 +598,7 @@ async function buildTemplate(kind) {
   def.columns.forEach((c, i) => {
     if (!c.allowed) return;
     const col = ws.getColumn(i + 1).letter;
-    for (let r = 2; r <= MAX_ROWS + 1; r += 1) {
+    for (let r = 2; r <= Math.min(maxRows, MAX_ROWS) + 1; r += 1) {
       ws.getCell(`${col}${r}`).dataValidation = {
         type: 'list', allowBlank: true, formulae: [`"${c.allowed.split(',').map((s) => s.trim()).join(',')}"`],
         showErrorMessage: true, errorTitle: '허용 값', error: `허용: ${c.allowed}`,
@@ -615,7 +618,7 @@ async function buildTemplate(kind) {
   g.getRow(1).eachCell((cell) => { cell.fill = HEAD_FILL; });
   for (const c of def.columns) g.addRow({ h: c.header, r: c.required ? '필수' : '', f: c.format, a: c.allowed || '', d: c.help || '' });
   g.addRow({});
-  const notes = [
+  const notes = opts.notes || [
     `[${def.label}] 업로드 작성 방법`,
     `· '${INPUT_SHEET}' 시트의 1행(머리글)은 바꾸지 마세요. 열 순서는 바꿔도 됩니다. * 표시(주황) 열은 필수입니다.`,
     '· 2행부터 한 줄에 한 건씩 씁니다. 예시 줄은 지우고 쓰세요(그대로 올리면 예시도 저장됩니다).',
@@ -637,8 +640,9 @@ async function buildTemplate(kind) {
 // ---------------------------------------------------------------------------
 const normHeader = (s) => String(s || '').replace(/\(필수\)|\*|\s/g, '').trim();
 
-async function parseWorkbook(kind, buffer) {
-  const def = KINDS[kind];
+async function parseWorkbook(kind, buffer, opts = {}) {
+  const def = typeof kind === 'object' && kind ? kind : KINDS[kind]; // T-403: 정의 객체도 받음
+  const maxRows = opts.maxRows || MAX_ROWS;
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(buffer);
@@ -672,7 +676,7 @@ async function parseWorkbook(kind, buffer) {
     }
     if (!any) continue; // 빈 줄은 건너뜀
     rows.push({ line: r, vals });
-    if (rows.length > MAX_ROWS) return { error: `한 번에 ${MAX_ROWS.toLocaleString('ko-KR')}줄까지 올릴 수 있습니다. 파일을 나눠 올려 주세요.` };
+    if (rows.length > maxRows) return { error: `한 번에 ${maxRows.toLocaleString('ko-KR')}줄까지 올릴 수 있습니다. 파일을 나눠 올려 주세요.`, code: 'TOO_MANY_ROWS' };
   }
   if (!rows.length) return { error: '올릴 줄이 없습니다. 2행부터 입력해 주세요.' };
   return { rows };
@@ -822,7 +826,7 @@ function registerExcelRoutes(app, deps) {
           const k = name.trim().toLowerCase();
           if (!prCache.has(k)) {
             const r = await client.query(
-              `SELECT id, name FROM product WHERE (owner_user_id IS NULL OR owner_user_id = $1) AND lower(btrim(name)) = lower(btrim($2))
+              `SELECT id, name FROM product WHERE (owner_user_id IS NULL OR owner_user_id = $1) AND NOT is_system AND lower(btrim(name)) = lower(btrim($2))
                 ORDER BY (owner_user_id IS NULL) DESC, id LIMIT 1`,
               [userId, name]
             );
@@ -936,4 +940,7 @@ function registerExcelRoutes(app, deps) {
 module.exports = {
   registerExcelRoutes, buildTemplate, parseWorkbook, KINDS, INPUT_KINDS, MAX_ROWS, MAX_BYTES,
   readDate, readNumber, textOf, patchPool,
+  // T-403 데이터 이관이 같은 방식(한 연결·핸들러 호출·셀 읽기)을 쓴다
+  rawCell, readYesNo, pick, RowError, rowErr, need, dateCol, numCol, enumCol, optText, won,
+  PARTNER_TYPE_IN, bulkStore, makeBulkContext, invoke, HEAD_FILL,
 };

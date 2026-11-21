@@ -21,6 +21,7 @@ export const HISTORY_KIND_OPTIONS = [
   { value: 'staff_entry', label: '직원 입력' }, // T-213
   { value: 'staff', label: '직원 관리' }, // T-213
   { value: 'excel_upload', label: '엑셀 업로드' }, // T-402
+  { value: 'data_migration', label: '데이터 이관' }, // T-403
 ];
 const KIND_LABEL = Object.fromEntries(HISTORY_KIND_OPTIONS.filter((o) => o.value).map((o) => [o.value, o.label]));
 const KIND_CLASS = {
@@ -33,6 +34,7 @@ const KIND_CLASS = {
   staff_entry: 'main-status--entry-receive',
   staff: 'ah-badge-muted',
   excel_upload: 'main-status--entry-receive',
+  data_migration: 'main-status--pay-partial',
 };
 
 const FIELD_LABEL = {
@@ -119,6 +121,7 @@ function actorText(row) {
 /** 바뀐 내용: "단가 1,000원 → 1,200원" 줄 목록. 등록이면 값만 */
 function ChangeList({ row, partnerName }) {
   if (row.kind === 'login') return <span className="ah-muted">로그인 성공</span>;
+  if (row.kind === 'data_migration') return <span>{row.reason}</span>; // T-403
   if (row.kind === 'excel_upload') { const fn = row.changes?.find((c) => c.field === 'file_name')?.after; return <span>{row.reason}{fn ? ` · ${fn}` : ''}</span>; } // T-402
   if (row.kind === 'staff_entry') {
     const a = row.changes?.[0]?.after;

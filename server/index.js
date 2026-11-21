@@ -628,7 +628,7 @@ app.get('/api/products', async (req, res) => {
                  SELECT r.status, r.reject_reason FROM product_request r
                   WHERE r.product_id = p.id AND p.owner_user_id IS NOT NULL ORDER BY r.created_at DESC, r.id DESC LIMIT 1
                ) rq ON true
-              WHERE (p.owner_user_id IS NULL OR p.owner_user_id = $1::int)`;
+              WHERE (p.owner_user_id IS NULL OR p.owner_user_id = $1::int) AND NOT p.is_system`; // T-403 시스템 품목 숨김
     if (scope === 'public') q += ' AND p.owner_user_id IS NULL';
     else if (scope === 'personal') q += ' AND p.owner_user_id = $1::int';
     if (categoryLarge) { params.push(categoryLarge); q += ` AND p.category_large = $${params.length}`; }
@@ -1065,6 +1065,7 @@ app.get('/api/purchases', async (req, res) => {
     let q = `SELECT pu.id, pu.partner_id, pu.product_id, pu.purchase_date, pu.created_at, pu.quantity, pu.unit_price, pu.total_amount, pu.memo, pu.source_name,
              pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
              pu.paid_amount, pu.payment_status,
+             pu.entry_kind, pu.external_ref, pu.migration_batch_id, -- T-403 이관 표시
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
@@ -1089,6 +1090,8 @@ app.get('/api/purchases', async (req, res) => {
     } else {
       params.push(from, to);
       q += ' AND pu.purchase_date BETWEEN $2 AND $3';
+      // T-403 U-403-06: 기초 미지급(이관 기초)은 기본 숨김, include_opening=1 이면 배지와 함께. 이관 재고 로트는 늘 보임
+      if (!(req.query.include_opening === '1' || req.query.include_opening === 'true')) q += " AND pu.entry_kind <> 'opening_ap'";
     }
     if (partnerFilter) {
       params.push(partnerFilter);
@@ -1178,7 +1181,7 @@ app.get('/api/purchases/recent-partners', async (req, res) => {
     const r = await pool.query(
       `SELECT pu.partner_id, to_char(MAX(pu.purchase_date), 'YYYY-MM-DD') AS last_date, COUNT(*)::int AS cnt
          FROM purchase pu
-        WHERE pu.user_id = $1 AND pu.purchase_date >= ($2::date - $3::int)
+        WHERE pu.user_id = $1 AND pu.purchase_date >= ($2::date - $3::int) AND pu.entry_kind = 'normal'
         GROUP BY pu.partner_id
         ORDER BY MAX(pu.purchase_date) DESC, COUNT(*) DESC, pu.partner_id
         LIMIT 50`,
@@ -1226,6 +1229,7 @@ app.get('/api/sales', async (req, res) => {
     let q = `SELECT s.id, s.partner_id, s.product_id, s.sale_date, s.created_at, s.quantity, s.unit_price, s.total_amount,
              s.payment_status, s.paid_amount, s.discount_amount, s.offset_amount, s.status, s.memo,
              s.returned_amount, s.overpaid_amount, s.cancelled_at, s.cancel_reason, s.updated_at, s.entry_mode,
+             s.external_ref, s.migration_batch_id, -- T-403 이관 표시
              (SELECT COUNT(*)::int FROM purchase_allocation pa WHERE pa.sale_id = s.id) AS allocation_count,
              GREATEST(s.total_amount - s.returned_amount - s.paid_amount - s.discount_amount - s.offset_amount, 0)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name, pt.location AS partner_location,
@@ -1243,6 +1247,7 @@ app.get('/api/sales', async (req, res) => {
     } else if (refundableOnly) {
       // 반품 규칙 B(T-108): 외상(수금 0원) 매출도 반품할 수 있다 — 반품 금액은 미수에서 먼저 빠진다 (U3: 예전엔 수금 있는 매출만)
       q += ` AND s.status NOT IN ('refunded', 'cancelled')`;
+      q += ` AND s.entry_mode <> 'opening'`; // T-403: 기초 미수는 반품 대상 아님(물건이 없음)
       q += ` AND (s.quantity - COALESCE((SELECT SUM(r.quantity) FROM refund r WHERE r.sale_id = s.id), 0)) > 0.0001`;
       if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
       if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
@@ -1254,6 +1259,8 @@ app.get('/api/sales', async (req, res) => {
       if (from) { params.push(from); q += ` AND s.sale_date >= $${params.length}`; }
       if (to) { params.push(to); q += ` AND s.sale_date <= $${params.length}`; }
     }
+    // T-403 U-403-06: 미수 목록(unpaid_only — 수금 화면)에는 기초 미수 포함, 그 밖 목록은 기본 숨김(include_opening=1 이면 배지와 함께)
+    if (!unpaidOnly && !(req.query.include_opening === '1' || req.query.include_opening === 'true')) q += ` AND s.entry_mode <> 'opening'`;
     if (partnerId && Number.isFinite(partnerId)) { params.push(partnerId); q += ` AND s.partner_id = $${params.length}`; }
     q += createdByClause(createdBy, params, 's');
     q += searchClause(opts, params, ['p.name', 's.memo', 'pt.name']);
@@ -1308,7 +1315,7 @@ app.get('/api/sales/statement', async (req, res) => {
        FROM sale s
        JOIN product p ON p.id = s.product_id
        WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
-         AND s.status <> 'cancelled'
+         AND s.status <> 'cancelled' AND s.entry_mode <> 'opening' -- T-403 이관 기초 제외
        ORDER BY s.sale_date, s.created_at NULLS LAST, s.id`,
       [userId, partnerId, from, to]
     );
@@ -1323,7 +1330,7 @@ app.get('/api/sales/statement', async (req, res) => {
               COALESCE(SUM(GREATEST(s.total_amount - s.returned_amount - s.paid_amount - s.discount_amount - s.offset_amount, 0)), 0)::numeric AS unpaid_amount
        FROM sale s
        WHERE s.user_id = $1 AND s.partner_id = $2 AND s.sale_date BETWEEN $3 AND $4
-         AND s.status <> 'cancelled'`,
+         AND s.status <> 'cancelled' AND s.entry_mode <> 'opening'`,
       [userId, partnerId, from, to]
     );
     res.json({
@@ -1375,6 +1382,7 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
          WHERE pu.user_id = $1
            AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
            AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
+           AND pu.entry_kind = 'normal' -- T-403 이관 기초·이관 재고는 매입 합계 제외
            AND ($4::int IS NULL OR pu.partner_id = $4)
          GROUP BY pu.purchase_date::date
        ),
@@ -1386,6 +1394,7 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
          WHERE sa.user_id = $1
            AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
            AND sa.status NOT IN ('cancelled')
+           AND sa.entry_mode <> 'opening' -- T-403 이관 기초는 매출 합계 제외
            AND ($4::int IS NULL OR sa.partner_id = $4)
          GROUP BY sa.sale_date::date
        ),
@@ -1410,6 +1419,7 @@ app.get('/api/reports/daily-purchase-sales', async (req, res) => {
          WHERE sa.user_id = $1
            AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
            AND sa.status NOT IN ('cancelled')
+           AND sa.entry_mode <> 'opening' -- T-403 이관 기초는 매출 합계 제외
            AND ($4::int IS NULL OR sa.partner_id = $4)
          GROUP BY sa.sale_date::date
        )
@@ -1473,6 +1483,7 @@ app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
          WHERE pu.user_id = $1
            AND pu.purchase_date >= $2::date AND pu.purchase_date <= $3::date
            AND pu.status = 'active' -- 취소된 매입 제외 (T-103)
+           AND pu.entry_kind = 'normal' -- T-403 이관 기초·이관 재고는 매입 합계 제외
            AND ($4::int IS NULL OR ac.id = $4)
          GROUP BY pr.id, pr.name, ac.id, ac.name
          UNION ALL
@@ -1501,6 +1512,7 @@ app.get('/api/reports/daily-purchase-sales-breakdown', async (req, res) => {
          WHERE sa.user_id = $1
            AND sa.sale_date >= $2::date AND sa.sale_date <= $3::date
            AND sa.status NOT IN ('cancelled')
+           AND sa.entry_mode <> 'opening' -- T-403 이관 기초는 매출 합계 제외
            AND ($4::int IS NULL OR ac.id = $4)
          GROUP BY pr.id, pr.name, ac.id, ac.name
        ) sub
@@ -1688,6 +1700,31 @@ async function insertTransfer(client, row) {
   );
 }
 
+// T-403 (설계 3.5·5.2): 이관 행(기초 미수·기초 미지급·이관 재고)은 정정·취소·반품하지 않는다 — 묶음 되돌리기로 고친다
+// 라우트가 아니라 미들웨어로 둔다(라우트 권한 표·엑셀 업로드의 라우트 찾기에 영향 없음). 주인 확인은 앞의 권한 미들웨어가 이미 했다
+const MIGRATION_ROW_GUARDS = [
+  ['POST', /^\/api\/sales\/(\d+)\/(?:cancel|refund)\/?$/i, 'sale'],
+  ['PATCH', /^\/api\/sales\/(\d+)\/?$/i, 'sale'],
+  ['POST', /^\/api\/purchases\/(\d+)\/cancel\/?$/i, 'purchase'],
+  ['PATCH', /^\/api\/purchases\/(\d+)\/?$/i, 'purchase'],
+];
+app.use(async (req, res, next) => {
+  const g = MIGRATION_ROW_GUARDS.find(([m, re]) => m === req.method && re.test(req.path));
+  if (!g || !req.auth || !req.auth.userId) return next();
+  const id = parseInt(g[1].exec(req.path)[1], 10);
+  try {
+    const r = g[2] === 'sale'
+      ? await pool.query(`SELECT (entry_mode = 'opening') AS mig FROM sale WHERE id = $1 AND user_id = $2`, [id, req.auth.userId])
+      : await pool.query(`SELECT (entry_kind <> 'normal') AS mig FROM purchase WHERE id = $1 AND user_id = $2`, [id, req.auth.userId]);
+    if (r.rows[0] && r.rows[0].mig) {
+      return res.status(409).json({ ok: false, code: 'MIGRATION_ROW', message: '이관 데이터는 묶음 되돌리기로 고칩니다(수금이 걸렸으면 매출 할인으로 줄이세요).' });
+    }
+  } catch (err) {
+    console.error('migration guard error:', err.message);
+  }
+  return next();
+});
+
 // 매입 등록 (입고 + 재고 증가 + 이동 이력)
 app.post('/api/purchases', async (req, res) => {
   const userId = await getUserId(req);
@@ -1716,7 +1753,7 @@ app.post('/api/purchases', async (req, res) => {
       return res.status(400).json({ ok: false, message: '매입 가능한 거래처(공급/도매 등)를 선택하세요.' });
     }
     // 공용 품목 또는 내 개인 품목만 (T-216) — 남의 개인 품목은 "없음"과 같게
-    const pr = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)`, [prid, userId]);
+    const pr = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2) AND NOT is_system`, [prid, userId]);
     if (!pr.rows[0]) {
       await client.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ ok: false, message: '상품을 찾을 수 없습니다.' });
@@ -1808,13 +1845,14 @@ app.post('/api/purchases/convert-to-sales', async (req, res) => {
       const qty = Number(n.qty);
       if (!(qty > 0)) throw reqError(400, '각 행에 매입 ID, 판매처, 수량, 단가, 판매일이 필요합니다.');
       const pu = await client.query(
-        `SELECT id, partner_id, product_id, quantity, status FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        `SELECT id, partner_id, product_id, quantity, status, entry_kind FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [purchaseId, userId]
       );
       const p = pu.rows[0];
       // 남의 매입 ID 도 '없음'과 같은 404 — 다른 회원 매입의 존재를 알려 주지 않는다
       if (!p) throw reqError(404, `매입 ${purchaseId} 를 찾을 수 없습니다.`);
       if (p.status === 'cancelled') throw reqError(400, `매입 ${purchaseId} 는 취소된 매입이라 전환할 수 없습니다.`); // T-103 AC-03
+      if (p.entry_kind === 'opening_ap') throw reqError(409, `매입 ${purchaseId} 는 이관 기초 미지급(물건 없음)이라 판매로 전환할 수 없습니다.`); // T-403 AC-403-28
       const al = await client.query(`SELECT COALESCE(SUM(quantity),0) AS s FROM purchase_allocation WHERE purchase_id = $1`, [purchaseId]);
       const allocated = Number(al.rows[0].s);
       const remaining = Number(p.quantity) - allocated;
@@ -2597,7 +2635,7 @@ app.patch('/api/purchases/:id', async (req, res) => {
       partnerRow = acc.rows[0];
     }
     if (changed.includes('product_id')) {
-      const prd = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)`, [next.product_id, userId]);
+      const prd = await client.query(`SELECT id FROM product WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2) AND NOT is_system`, [next.product_id, userId]);
       if (!prd.rows[0]) throw corrError(400, 'VALIDATION', '상품을 찾을 수 없습니다.', { field: 'product_id' });
     }
 
@@ -3144,6 +3182,8 @@ app.get('/api/disposals', async (req, res) => {
 // T-213: 라우트 점검 테스트가 서버를 띄우지 않고 라우트 목록을 읽을 수 있게 app 을 내보낸다(node index.js 로 실행할 때만 listen)
 // T-402 엑셀 업로드 + 템플릿 — 모든 입력 라우트가 등록된 뒤(줄마다 기존 라우트를 그대로 부른다)
 require('./lib/excel-upload').registerExcelRoutes(app, { pool, authorize, getUserId, recordAudit });
+// T-403 데이터 이관 — 엑셀 업로드 뒤(같은 한 연결 실행·핸들러 호출을 쓴다)
+require('./lib/migration-routes').registerMigrationRoutes(app, { pool, authorize, getUserId, recordAudit, kstToday, getUserWarehouseLabel });
 
 module.exports = { app, pool };
 const host = process.env.HOST || '0.0.0.0';
