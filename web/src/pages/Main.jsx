@@ -43,6 +43,7 @@ import {
 } from './TradeCorrection';
 import { FifoSaleModal, FifoSellButton, SellableCell } from './FifoSale';
 import TabStaff from './TabStaff'; // T-213 직원 관리
+import TabMigration from './TabMigration'; // T-403 데이터 이관
 import { can, isStaff, ROLE_LABEL } from '../lib/staffAccess'; // T-213 역할별 버튼
 import './Main.css';
 import '../styles/mobile.css';
@@ -579,6 +580,7 @@ function TabPurchases({ onNavigate } = {}) {
   const priceReqSeq = useRef({});
   // T-201 지급: 미지급만 보기, 지급 등록 모달 { partnerId?, purchaseIds? } | null
   const [unpaidOnly, setUnpaidOnly] = useState(false);
+  const [includeOpening, setIncludeOpening] = useState(false); // T-403 U-403-06 기초 미지급(이관 기초) 보기
   const [payModal, setPayModal] = useState(null);
 
   const loadRecentPartners = () => {
@@ -651,6 +653,7 @@ function TabPurchases({ onNavigate } = {}) {
     };
     if (productId) params.product_id = productId;
     if (unpaidOnly) params.unpaid_only = 1; // T-201: 기간과 상관없이 미지급·일부 매입 전체
+    if (includeOpening) params.include_opening = 1; // T-403
     if (partnerFilter) params.partner_id = partnerFilter;
     if (searchText.trim()) params.q = searchText.trim();
     return params;
@@ -909,6 +912,9 @@ function TabPurchases({ onNavigate } = {}) {
         {can('sale.convert') && <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>}
         <label className="ledger-check" title="기간과 상관없이 아직 다 주지 않은 매입만">
           <input type="checkbox" checked={unpaidOnly} onChange={(e) => setUnpaidOnly(e.target.checked)} /> 미지급만
+        </label>
+        <label className="ledger-check" title="데이터 이관으로 넣은 기초 미지급(이관 기초) 줄도 함께 보기">
+          <input type="checkbox" checked={includeOpening} onChange={(e) => setIncludeOpening(e.target.checked)} /> 이관 기초 포함
         </label>
         {can('supplier_payment.create') && (
         <button
@@ -1307,7 +1313,7 @@ function TabPurchases({ onNavigate } = {}) {
                   </td>
                   <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText>{row.producer_name || row.origin_region ? <small className="main-origin-note">{[row.producer_name, row.origin_region].filter(Boolean).join(' · ')}{row.payee_partner_id && row.payee_partner_id !== row.partner_id ? ' · 지급: 생산자' : ''}</small> : null}</td>
                   <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /><MigrationBadge row={row} /></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
                   <td data-card="extra" data-label="매출 반영" className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
                   <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
@@ -1408,6 +1414,7 @@ function TabSales({ navFilter } = {}) {
   const [submitting, setSubmitting] = useState(false);
   /** false: 최초·기본은 수금 완료 매출만 목록 */
   const [showAllSales, setShowAllSales] = useState(() => !!navFilter?.show_all);
+  const [includeOpening, setIncludeOpening] = useState(false); // T-403 U-403-06 기초 미수(이관 기초) 보기
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundableSales, setRefundableSales] = useState([]);
   const [loadingRefundable, setLoadingRefundable] = useState(false);
@@ -1425,6 +1432,7 @@ function TabSales({ navFilter } = {}) {
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
     if (partnerId) params.partner_id = partnerId;
     if (!showAllSales) params.paid_only = '1';
+    if (includeOpening) params.include_opening = '1'; // T-403
     if (searchText.trim()) params.q = searchText.trim();
     return params;
   };
@@ -1664,6 +1672,10 @@ function TabSales({ navFilter } = {}) {
         <label className="main-filter-checkbox">
           <input type="checkbox" checked={showAllSales} onChange={(e) => setShowAllSales(e.target.checked)} />
           미수·일부 포함
+        </label>
+        <label className="main-filter-checkbox" title="데이터 이관으로 넣은 기초 미수(이관 기초) 줄도 함께 보기 — 미수·일부 포함과 같이 켜세요">
+          <input type="checkbox" checked={includeOpening} onChange={(e) => setIncludeOpening(e.target.checked)} />
+          이관 기초 포함
         </label>
         <SearchTextField id="sale-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·거래처" />
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
@@ -2139,6 +2151,7 @@ function TabSales({ navFilter } = {}) {
                     <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
                       <CellText>{row.product_name}</CellText>
                       <StaffEntryBadge row={row} />
+                      <MigrationBadge row={row} />
                       {row.entry_mode === 'fifo' && (
                         <span className="fifo-badge" title={`재고에서 오래된 매입부터 나간 판매${row.allocation_count > 1 ? ` (매입 ${row.allocation_count}건에서)` : ''}`}>재고 판매</span>
                       )}
@@ -3282,6 +3295,14 @@ const BASE_TABS = [
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
 const STAFF_TAB = { id: 'staff', label: '직원 관리', Component: TabStaff }; // T-213 주인만
+const MIGRATION_TAB = { id: 'migration', label: '데이터 이관', Component: TabMigration }; // T-403 주인만(직원에게는 탭이 없다 — 서버도 403)
+
+/** T-403 이관 행 배지 — 기초 미수(매출)·기초 미지급(매입)·이관 재고(매입) */
+function MigrationBadge({ row }) {
+  if (row?.entry_mode === 'opening' || row?.entry_kind === 'opening_ap') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 잔액(묶음 되돌리기로만 고칩니다)">이관 기초</span>;
+  if (row?.entry_kind === 'opening_stock') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 재고 로트">이관 재고</span>;
+  return null;
+}
 
 /** 직원이 넣은 행이면 입력자 배지 (주인이 넣은 행은 아무것도 안 보임) — T-213 */
 function StaffEntryBadge({ row }) {
@@ -3295,7 +3316,7 @@ function tabsFor(user) {
   const out = [];
   for (const t of BASE_TABS) {
     out.push(t);
-    if (t.id === 'history') out.push(STAFF_TAB);
+    if (t.id === 'history') out.push(STAFF_TAB, MIGRATION_TAB);
   }
   return user?.is_admin ? [...out, ADMIN_TAB] : out;
 }

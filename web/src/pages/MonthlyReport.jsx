@@ -79,6 +79,17 @@ function summaryRows(d) {
   if (z(d.offsets) || z(p.offsets)) {
     rows.push({ key: 'offsets', label: '상계', sub: '받을 돈·줄 돈을 같은 금액만큼 지움(현금 아님)', cur: z(d.offsets), count: d.offsets?.count, prev: z(p.offsets), ch: diffOnly(z(d.offsets), z(p.offsets)), good: 'none' });
   }
+  // T-403 데이터 이관 — 원래 날짜가 이 달인 기초 잔액(매출·매입 합계에는 없고 잔액에만 들어감). 둘 다 0이면 숨김
+  if (z(d.opening_receivable) || z(p.opening_receivable)) {
+    rows.push({ key: 'opening_receivable', label: '이관 기초 미수', sub: '데이터 이관으로 넣은 받을 돈(매출 합계에 넣지 않음)', cur: z(d.opening_receivable), count: d.opening_receivable?.count, prev: z(p.opening_receivable), ch: diffOnly(z(d.opening_receivable), z(p.opening_receivable)), good: 'none' });
+  }
+  if (z(d.opening_payable) || z(p.opening_payable)) {
+    rows.push({ key: 'opening_payable', label: '이관 기초 미지급', sub: '데이터 이관으로 넣은 줄 돈(매입 합계에 넣지 않음)', cur: z(d.opening_payable), count: d.opening_payable?.count, prev: z(p.opening_payable), ch: diffOnly(z(d.opening_payable), z(p.opening_payable)), good: 'none' });
+  }
+  const HK = { purchase: '매입', sale: '매출', receipt: '수금', supplier_payment: '지급', disposal: '폐기' };
+  for (const h of d.history || []) {
+    rows.push({ key: `history_${h.kind}`, label: `이관 기록(참고) ${HK[h.kind] || h.kind}`, sub: '과거 거래 기록 — 잔액·합계에 넣지 않음', cur: h.amount, count: h.count, prev: null, ch: { diff: null, pct: null }, good: 'none' });
+  }
   return rows;
 }
 
