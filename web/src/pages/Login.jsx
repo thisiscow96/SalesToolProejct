@@ -17,6 +17,7 @@ export default function Login({ onLogin }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (loading) return; // Enter 연타 등으로 요청이 두 번 나가지 않게
     setError('');
     if (!agentNo.trim() || !password || (asStaff && !loginId.trim())) {
       setError(asStaff ? '중매인 번호, 직원 ID, 비밀번호를 입력하세요.' : '중매인 번호와 비밀번호를 입력하세요.');
@@ -72,8 +73,9 @@ export default function Login({ onLogin }) {
         <h1 className="login-title">로그인</h1>
         <p className="login-subtitle">{asStaff ? '중매인 번호, 직원 ID, 비밀번호를 입력하세요.' : '중매인 번호와 비밀번호를 입력하세요.'}</p>
         <div className="login-mode" role="tablist" aria-label="로그인 종류">
-          <button type="button" role="tab" aria-selected={!asStaff} className={'login-mode-btn' + (!asStaff ? ' active' : '')} onClick={() => { setAsStaff(false); setError(''); }}>중매인</button>
-          <button type="button" role="tab" aria-selected={asStaff} className={'login-mode-btn' + (asStaff ? ' active' : '')} onClick={() => { setAsStaff(true); setError(''); }}>직원으로 로그인</button>
+          {/* 로그인 요청 중에는 종류를 바꾸지 못하게 — 바꾸면 보낸 요청과 화면 모드가 엇갈린다 */}
+          <button type="button" role="tab" aria-selected={!asStaff} disabled={loading} className={'login-mode-btn' + (!asStaff ? ' active' : '')} onClick={() => { if (loading) return; setAsStaff(false); setError(''); }}>중매인</button>
+          <button type="button" role="tab" aria-selected={asStaff} disabled={loading} className={'login-mode-btn' + (asStaff ? ' active' : '')} onClick={() => { if (loading) return; setAsStaff(true); setError(''); }}>직원으로 로그인</button>
         </div>
         {successMessage && <p className="login-success" role="status">{successMessage}</p>}
         <form className="login-form" onSubmit={handleSubmit}>

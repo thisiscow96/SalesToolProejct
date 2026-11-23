@@ -1,0 +1,32 @@
+// 로그인 요청 중 "중매인/직원으로 로그인" 전환이 막히는지 실제 브라우저로 확인
+const { chromium } = require(process.env.PLAYWRIGHT_CORE || 'playwright-core');
+const URL = process.env.WEB || 'http://127.0.0.1:5241';
+(async () => {
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const page = await browser.newPage();
+  let loginCalls = 0;
+  await page.route('**/api/auth/login', async (route) => { loginCalls++; await new Promise(r => setTimeout(r, 2500)); await route.continue(); });
+  await page.goto(URL + '/login');
+  await page.waitForSelector('.login-mode-btn');
+  const inputs = page.locator('form.login-form input');
+  await inputs.nth(0).fill('admin001');
+  await page.locator('input[type=password]').fill('wrong-pass');
+  await page.click('button.login-btn');
+  await page.waitForTimeout(300);
+  const staffBtn = page.locator('.login-mode-btn', { hasText: '직원으로 로그인' });
+  const disabledDuring = await staffBtn.isDisabled();
+  await staffBtn.click({ force: true }).catch(() => {});
+  await page.keyboard.press('Enter');
+  const selectedDuring = await staffBtn.getAttribute('aria-selected');
+  const label = await page.locator('button.login-btn').innerText();
+  await page.waitForTimeout(3500);
+  const disabledAfter = await staffBtn.isDisabled();
+  await staffBtn.click();
+  const selectedAfter = await staffBtn.getAttribute('aria-selected');
+  const r = { disabledDuring, selectedDuring, labelDuring: label, loginCalls, disabledAfter, selectedAfter };
+  console.log(JSON.stringify(r));
+  const ok = disabledDuring && selectedDuring === 'false' && loginCalls === 1 && !disabledAfter && selectedAfter === 'true';
+  console.log(ok ? 'PASS 로그인 중 전환 잠김·중복 요청 없음·끝나면 다시 전환 가능' : 'FAIL');
+  await browser.close();
+  process.exit(ok ? 0 : 1);
+})().catch(e => { console.error('ERR', e.message); process.exit(1); });
