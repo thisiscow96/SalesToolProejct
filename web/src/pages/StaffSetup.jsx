@@ -2,7 +2,8 @@
 // - StaffSetup          : /staff-setup — 초대 코드로 비밀번호 정하기(로그인 전)
 // - ForcePasswordChange : 임시 비밀번호로 처음 로그인한 직원이 메인 대신 보는 "새 비밀번호를 정하세요" 화면
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { BusyLink } from '../components/Busy';
 import { setupStaffPassword, changeMyPassword } from '../lib/staffAccess';
 import './Login.css';
 
@@ -89,7 +90,7 @@ export default function StaffSetup() {
             <PasswordFields pw={pw} setPw={setPw} pw2={pw2} setPw2={setPw2} disabled={busy} />
             {error && <p className="login-error" role="alert">{error}</p>}
             <button type="submit" className="login-btn" disabled={busy}>{busy ? '저장 중…' : '비밀번호 정하기'}</button>
-            <Link to="/login" className="login-signup-link">로그인으로 돌아가기</Link>
+            <BusyLink busy={busy} to="/login" className="login-signup-link">로그인으로 돌아가기</BusyLink>
           </form>
         </div>
       </div>
@@ -141,7 +142,9 @@ export function ForcePasswordChange({ user, onDone }) {
             <button
               type="button"
               className="login-signup-link login-link-btn"
+              disabled={busy}
               onClick={() => {
+                if (busy) return; // T-404: 비밀번호 저장 중에는 로그아웃하지 않는다
                 window.sessionStorage.removeItem('user');
                 window.location.href = '/login';
               }}

@@ -2,7 +2,8 @@
 //  - PersonalProductModal: 매입 등록 중 목록에 없는 품목을 내 개인 품목으로 바로 추가 (+ 관리자에게 공용 등록 요청)
 //  - ProductRequestAdminPanel: 관리자 상품 마스터 안에서 요청 승인(공용으로 승격) · 반려
 // 모달 모양은 거래처 빠른 등록(TabPartners.css 의 partner-modal 클래스)을 그대로 쓴다.
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useBusyIds } from '../components/Busy';
 import { createPersonalProduct, fetchProductRequests, approveProductRequest, rejectProductRequest } from '../api';
 import './TabPartners.css';
 import './ProductRequest.css';
@@ -23,6 +24,8 @@ export function PersonalProductModal({ open, onClose, onSaved, onUsePublic }) {
   const [err, setErr] = useState('');
   const [dupPublic, setDupPublic] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  submittingRef.current = submitting;
 
   useEffect(() => {
     if (!open) return;
@@ -35,7 +38,8 @@ export function PersonalProductModal({ open, onClose, onSaved, onUsePublic }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
+      // T-404: 추가 요청 중에는 Esc 로 닫지 않는다
+      if (e.key === 'Escape' && !submittingRef.current) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -68,7 +72,7 @@ export function PersonalProductModal({ open, onClose, onSaved, onUsePublic }) {
   };
 
   return (
-    <div className="main-modal-backdrop partner-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="main-modal-backdrop partner-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
       <div className="main-modal partner-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="main-modal-header">
           <h2 id={titleId}>목록에 없는 품목 추가</h2>
@@ -120,7 +124,7 @@ export function PersonalProductModal({ open, onClose, onSaved, onUsePublic }) {
           </form>
         </div>
         <div className="main-modal-footer">
-          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+          <button type="button" className="main-modal-btn secondary" onClick={() => !submitting && onClose()} disabled={submitting}>
             취소
           </button>
           <button type="submit" form={formId} className="main-modal-btn primary" disabled={submitting}>
@@ -147,7 +151,7 @@ export function ProductRequestAdminPanel({ onChanged }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
-  const [busyId, setBusyId] = useState(null);
+  const busyRows = useBusyIds(); // T-404: 줄마다 따로 잠금(다른 줄을 눌러도 앞 줄 잠금 유지)
   const [rejecting, setRejecting] = useState(null); // { id, reason }
 
   const load = (st = status) => {
@@ -164,7 +168,7 @@ export function ProductRequestAdminPanel({ onChanged }) {
   }, [status]);
 
   const approve = (row) => {
-    setBusyId(row.id);
+    if (!busyRows.start(row.id)) return;
     setErr('');
     setNotice('');
     approveProductRequest(row.id)
@@ -174,7 +178,7 @@ export function ProductRequestAdminPanel({ onChanged }) {
         onChanged?.();
       })
       .catch((e) => setErr(e.message))
-      .finally(() => setBusyId(null));
+      .finally(() => busyRows.end(row.id));
   };
 
   const submitReject = (e) => {
@@ -183,7 +187,8 @@ export function ProductRequestAdminPanel({ onChanged }) {
       setErr('반려 사유를 입력하세요.');
       return;
     }
-    setBusyId(rejecting.id);
+    const rid = rejecting.id;
+    if (!busyRows.start(rid)) return;
     setErr('');
     setNotice('');
     rejectProductRequest(rejecting.id, rejecting.reason)
@@ -193,7 +198,7 @@ export function ProductRequestAdminPanel({ onChanged }) {
         load();
       })
       .catch((ex) => setErr(ex.message))
-      .finally(() => setBusyId(null));
+      .finally(() => busyRows.end(rid));
   };
 
   return (
@@ -265,15 +270,15 @@ export function ProductRequestAdminPanel({ onChanged }) {
                             value={rejecting.reason}
                             onChange={(e) => setRejecting({ id: r.id, reason: e.target.value })}
                           />
-                          <button type="submit" className="main-modal-toolbar-btn" disabled={busyId === r.id}>반려</button>
+                          <button type="submit" className="main-modal-toolbar-btn" disabled={busyRows.has(r.id)}>반려</button>
                           <button type="button" className="main-modal-toolbar-btn" onClick={() => setRejecting(null)}>취소</button>
                         </form>
                       ) : (
                         <>
-                          <button type="button" className="main-modal-toolbar-btn" disabled={busyId === r.id || !!r.duplicate_public_id} onClick={() => approve(r)}>
+                          <button type="button" className="main-modal-toolbar-btn" disabled={busyRows.has(r.id) || !!r.duplicate_public_id} onClick={() => approve(r)}>
                             승인
                           </button>{' '}
-                          <button type="button" className="main-modal-toolbar-btn" disabled={busyId === r.id} onClick={() => setRejecting({ id: r.id, reason: r.duplicate_public_id ? '같은 이름의 공용 품목이 있습니다. 그 품목을 선택해 쓰세요.' : '' })}>
+                          <button type="button" className="main-modal-toolbar-btn" disabled={busyRows.has(r.id)} onClick={() => setRejecting({ id: r.id, reason: r.duplicate_public_id ? '같은 이름의 공용 품목이 있습니다. 그 품목을 선택해 쓰세요.' : '' })}>
                             반려
                           </button>
                         </>

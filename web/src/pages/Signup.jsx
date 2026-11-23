@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { BusyLink } from '../components/Busy';
 import { API_BASE } from '../api';
 import './Signup.css';
 
@@ -58,6 +59,12 @@ export default function Signup() {
     return () => clearInterval(t);
   }, [verifyExpiresAt, remainingSec]);
 
+  // T-404: 중복확인 응답이 올 때 칸의 값이 보낸 값과 다르면 결과를 버린다(확인 중에는 칸도 잠근다)
+  const emailNow = useRef(email);
+  emailNow.current = email;
+  const agentNoNow = useRef(agentNo);
+  agentNoNow.current = agentNo;
+
   async function checkEmail() {
     if (!email.trim()) { setError('이메일을 입력하세요.'); return; }
     if (!isValidEmail(email)) { setError('이메일 형식이 올바르지 않습니다.'); setEmailChecked(false); return; }
@@ -66,13 +73,15 @@ export default function Signup() {
     setEmailVerified(false);
     setVerificationCode('');
     setVerifyExpiresAt(null);
+    const sent = email.trim();
     try {
       const res = await fetch(`${API_BASE}/auth/check-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: sent }),
       });
       const data = await res.json().catch(() => ({}));
+      if (emailNow.current.trim() !== sent) return; // 그 사이 칸이 바뀜 — 결과를 붙이지 않는다
       setEmailChecked(data.available === true);
       if (!res.ok) setError(data.message || '확인할 수 없습니다.');
       else if (!data.available) setError(data.message || '이미 사용 중인 이메일입니다.');
@@ -148,13 +157,15 @@ export default function Signup() {
     if (!agentNo.trim()) { setError('중매인 번호를 입력하세요.'); return; }
     setChecking('agent_no');
     setError('');
+    const sent = agentNo.trim();
     try {
       const res = await fetch(`${API_BASE}/auth/check-agent-no`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_no: agentNo.trim() }),
+        body: JSON.stringify({ agent_no: sent }),
       });
       const data = await res.json().catch(() => ({}));
+      if (agentNoNow.current.trim() !== sent) return; // 그 사이 칸이 바뀜 — 결과를 붙이지 않는다
       setAgentNoChecked(data.available === true);
       if (!data.available) setError('이미 사용 중인 중매인 번호입니다.');
     } catch {
@@ -250,7 +261,7 @@ export default function Signup() {
                 value={email}
                 onChange={(e) => { setEmail(e.target.value); setEmailChecked(null); setEmailVerified(false); setVerifyExpiresAt(null); setDevCode(''); setVerifyError(''); }}
                 placeholder="예: user@example.com"
-                disabled={loading}
+                disabled={loading || checking === 'email'}
               />
               <button type="button" className="signup-check-btn" onClick={checkEmail} disabled={!!checking || loading}>
                 {checking === 'email' ? '확인 중…' : '중복확인'}
@@ -304,7 +315,7 @@ export default function Signup() {
                 value={agentNo}
                 onChange={(e) => { setAgentNo(e.target.value); setAgentNoChecked(null); }}
                 placeholder="중매인 번호 입력"
-                disabled={loading}
+                disabled={loading || checking === 'agent_no'}
               />
               <button type="button" className="signup-check-btn" onClick={checkAgentNo} disabled={!!checking || loading}>
                 {checking === 'agent_no' ? '확인 중…' : '중복확인'}
@@ -348,7 +359,7 @@ export default function Signup() {
           </button>
         </form>
         <p className="signup-login-row">
-          이미 계정이 있나요? <Link to="/login" className="signup-login-link">로그인</Link>
+          이미 계정이 있나요? <BusyLink busy={loading} to="/login" className="signup-login-link">로그인</BusyLink>
         </p>
       </div>
       </div>

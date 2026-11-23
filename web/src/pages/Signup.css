@@ -274,3 +274,10 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* T-404: 요청 중 잠긴 링크 */
+.signup-login-link.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}

@@ -1,9 +1,10 @@
 // T-213 직원 관리 탭 (주인만) — 설계 9장
 // 표: 이름·직원 ID·역할·상태·마지막 로그인 / 직원 추가(임시 비밀번호 또는 이메일 초대)
 // 행마다: 역할 변경·정지/되살리기·비밀번호 재설정·초대 다시 보내기·삭제(되돌릴 수 없음)
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { staffApi, ROLE_LABEL } from '../lib/staffAccess';
 import './TabStaff.css';
+import { useBusyIds } from '../components/Busy';
 
 const STATUS_LABEL = { invited: '초대 중', active: '사용 중', suspended: '정지', deleted: '삭제됨' };
 const ROLE_HELP = {
@@ -20,13 +21,16 @@ function fmtTime(v) {
 
 function Modal({ title, children, onClose, onSubmit, submitLabel, busy, danger }) {
   const titleId = useId();
+  // T-404: 처리 중에는 [닫기]뿐 아니라 Esc·바깥 클릭으로도 닫지 않는다
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose();
+    const onKey = (e) => e.key === 'Escape' && !busyRef.current && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div className="main-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="main-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="main-modal staff-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="main-modal-header">
           <h2 id={titleId}>{title}</h2>
@@ -198,7 +202,8 @@ export default function TabStaff() {
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
   const [modal, setModal] = useState(null); // { type: 'add'|'reset'|'delete', row }
-  const [busyId, setBusyId] = useState(null);
+  // T-404: 처리 중인 직원 행들 — 한 줄만 기억하면 다른 줄을 누를 때 앞 줄 잠금이 풀려 같은 요청이 두 번 나갔다
+  const busyRows = useBusyIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,7 +226,7 @@ export default function TabStaff() {
     load();
   };
   const act = async (row, fn, msg) => {
-    setBusyId(row.id);
+    if (!busyRows.start(row.id)) return;
     setNotice('');
     try {
       const r = await fn();
@@ -230,7 +235,7 @@ export default function TabStaff() {
     } catch (ex) {
       setNotice(ex.message);
     } finally {
-      setBusyId(null);
+      busyRows.end(row.id);
     }
   };
   const inviteMsg = (row) => (r) =>
@@ -282,7 +287,7 @@ export default function TabStaff() {
             </thead>
             <tbody>
               {rows.map((row) => {
-                const busy = busyId === row.id;
+                const busy = busyRows.has(row.id);
                 return (
                   <tr key={row.id}>
                     <td data-card="title" data-label="이름" className="staff-name">{row.name}</td>
