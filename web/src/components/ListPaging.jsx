@@ -70,6 +70,9 @@ export function usePagedList(resource) {
   const [err, setErr] = useState('');
   const lastParams = useRef({});
   const seq = useRef(0);
+  // T-404: CSV 전체 받기 진행 중 — 버튼 잠금·"받는 중…" 표시, 연타로 두 번 받지 않게
+  const [downloading, setDownloading] = useState(false);
+  const downloadingRef = useRef(false);
 
   const fetchAt = (params, off) => {
     const my = ++seq.current;
@@ -111,9 +114,18 @@ export function usePagedList(resource) {
     goPage: (off) => fetchAt(lastParams.current, off),
     lastParams,
     /** CSV — 마지막 검색 조건 그대로, 페이지와 상관없이 전체(limit 없이 서버 조회) */
-    downloadAll: (csvName, fetchAll) =>
-      fetchAll(lastParams.current)
+    downloading,
+    downloadAll: (csvName, fetchAll) => {
+      if (downloadingRef.current) return Promise.resolve();
+      downloadingRef.current = true;
+      setDownloading(true);
+      return fetchAll(lastParams.current)
         .then((rows) => downloadListCsv(csvName, rows))
-        .catch((e) => setErr(`CSV 저장 실패: ${e.message}`)),
+        .catch((e) => setErr(`CSV 저장 실패: ${e.message}`))
+        .finally(() => {
+          downloadingRef.current = false;
+          setDownloading(false);
+        });
+    },
   };
 }

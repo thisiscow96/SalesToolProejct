@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   fetchInventory,
   fetchPurchases,
@@ -30,6 +30,7 @@ import TabMonthly from './MonthlyReport'; // T-215 월 정산
 import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
 import CardMoreToggle from '../components/CardMoreToggle';
 import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
+import { useLatestRequest } from '../components/Busy';
 import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
 import { PersonalProductModal, ProductRequestAdminPanel, productOptionLabel } from './ProductRequest';
 import {
@@ -208,19 +209,40 @@ function CollectAmountInput({ value, onChange, disabled, placeholder, className,
 }
 
 /** 단가·금액: 입력 시 천단위 콤마, 저장값은 숫자 문자열(콤마 없음) */
-function UnitPriceInput({ value, onChange, disabled, placeholder, className, title, ariaDescribedBy }) {
+function UnitPriceInput({ value, onChange, disabled, placeholder, className, title, ariaDescribedBy, onFocus, onBlur }) {
   const [focused, setFocused] = useState(false);
   const raw = normalizeMoneyInputString(value);
   const display = focused ? raw : formatMoneyInputDisplay(raw);
+  const inputRef = useRef(null);
+  const reselectRef = useRef(false);
+  useLayoutEffect(() => {
+    // 포커스로 표시 값이 바뀐 직후(화면에 그리기 전·다음 키 입력 전) 전체 선택을 되돌린다
+    if (focused && reselectRef.current && inputRef.current && document.activeElement === inputRef.current) {
+      inputRef.current.select();
+    }
+    reselectRef.current = false;
+  }, [focused]);
   return (
     <input
+      ref={inputRef}
       type="text"
       inputMode="decimal"
       autoComplete="off"
       className={'main-input-unit-price ' + (className || '')}
       value={display}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      onFocus={(e) => {
+        // T-404: Tab 으로 들어오면 브라우저가 전체 선택하는데, 포커스 때 콤마를 빼며 값을 다시 그리면 선택이 풀려
+        // 이어 친 숫자가 기존 값 뒤에 붙었다(3,600 → 36,002,500). 전체 선택 상태였으면 다시 그린 뒤 다시 전체 선택한다.
+        const el = e.target;
+        const len = el.value.length;
+        reselectRef.current = len > 0 && el.selectionStart === 0 && el.selectionEnd === len;
+        setFocused(true);
+        onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        onBlur?.(e);
+      }}
       onChange={(e) => onChange(normalizeMoneyInputString(e.target.value))}
       disabled={disabled}
       placeholder={placeholder}
@@ -280,7 +302,7 @@ function Modal({
     <div
       className="main-modal-backdrop"
       role="presentation"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}
     >
       <div
         className={
@@ -298,10 +320,16 @@ function Modal({
         </div>
         <div className="main-modal-body">{children}</div>
         <div className="main-modal-footer">
-          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+          {/* T-404: 요청 중에는 취소·바깥 클릭으로 닫지 않는다(닫혀도 저장은 계속되므로 "취소했는데 저장됨"이 됨) */}
+          <button
+            type="button"
+            className="main-modal-btn secondary"
+            onClick={() => !submitting && onClose()}
+            disabled={!!submitting}
+          >
             취소
           </button>
-          <button type="submit" form={formId} className="main-modal-btn primary" disabled={disabled}>
+          <button type="submit" form={formId} className="main-modal-btn primary" disabled={disabled} aria-busy={!!submitting}>
             {submitting ? '처리 중…' : saveLabel}
           </button>
         </div>
@@ -430,17 +458,20 @@ function TabReorder() {
     if (searchText.trim()) params.q = searchText.trim();
     return params;
   };
+  const invReq = useLatestRequest(); // T-404: 늦게 온 이전 조건 응답이 새 조건 결과를 덮지 않게
   const loadInventory = (quiet, params = appliedParams) => {
+    const t = invReq.next();
     if (!quiet) setLoading(true);
     setErr('');
     return fetchInventory(params)
       .then((rows) => {
+        if (!invReq.isCurrent(t)) return;
         setList(rows);
         // 판매 뒤 행이 줄어 지금 쪽이 비면 마지막 쪽으로
         setInvOffset((o) => (o >= rows.length ? Math.max(0, Math.floor((rows.length - 1) / PAGE_SIZE) * PAGE_SIZE) : o));
       })
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => invReq.isCurrent(t) && setErr(e.message))
+      .finally(() => invReq.isCurrent(t) && setLoading(false));
   };
   const runSearch = () => {
     const params = buildParams();
@@ -578,6 +609,8 @@ function TabPurchases({ onNavigate } = {}) {
   const [recentPartners, setRecentPartners] = useState([]);
   // T-210: 행별 최근 단가 조회 순번 — 상품·거래처를 빠르게 바꿀 때 늦게 온 이전 응답을 버린다
   const priceReqSeq = useRef({});
+  /** T-404: 사용자가 들어가 있는 단가 칸(행 key) — 늦게 온 최근 단가 제안으로 그 칸을 덮지 않는다 */
+  const priceFocusKey = useRef(null);
   // T-201 지급: 미지급만 보기, 지급 등록 모달 { partnerId?, purchaseIds? } | null
   const [unpaidOnly, setUnpaidOnly] = useState(false);
   const [includeOpening, setIncludeOpening] = useState(false); // T-403 U-403-06 기초 미지급(이관 기초) 보기
@@ -603,7 +636,7 @@ function TabPurchases({ onNavigate } = {}) {
         setPurchaseRows((rows) =>
           rows.map((r) => {
             if (r.key !== key) return r;
-            const canFill = r.unit_price_auto || r.unit_price === '';
+            const canFill = (r.unit_price_auto || r.unit_price === '') && priceFocusKey.current !== key;
             if (!last) {
               return { ...r, price_hint: { none: true }, ...(r.unit_price_auto ? { unit_price: '', unit_price_auto: false } : {}) };
             }
@@ -935,7 +968,7 @@ function TabPurchases({ onNavigate } = {}) {
           지급 등록
         </button>
         )}
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('purchases', fetchPurchases)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('purchases', fetchPurchases)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       <Modal
         open={showForm}
@@ -1093,6 +1126,12 @@ function TabPurchases({ onNavigate } = {}) {
                         className={'main-input-unit-price--purchase' + (row.unit_price_auto ? ' main-input-unit-price--suggested' : '')}
                         value={row.unit_price}
                         onChange={(v) => updatePurchaseRow(row.key, { unit_price: v, unit_price_auto: false })}
+                        onFocus={() => {
+                          priceFocusKey.current = row.key;
+                        }}
+                        onBlur={() => {
+                          if (priceFocusKey.current === row.key) priceFocusKey.current = null;
+                        }}
                         title={row.unit_price_auto ? '최근 매입 단가로 채운 제안값입니다. 바꾸면 입력한 값을 씁니다.' : undefined}
                         ariaDescribedBy={row.price_hint ? `price-hint-${row.key}` : undefined}
                       />
@@ -1688,7 +1727,7 @@ function TabSales({ navFilter } = {}) {
         <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
           거래명세서
         </button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('sales', fetchSales)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('sales', fetchSales)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
       <Modal
@@ -2255,7 +2294,7 @@ function TabPayments() {
         <label>거래처 <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}><option value="">전체</option>{partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         <SearchTextField id="pay-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="메모·거래처" />
         <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('payments', fetchPayments)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('payments', fetchPayments)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       <Modal
         open={!!cancelRow}
@@ -2738,7 +2777,7 @@ function TabDisposals() {
           폐기 등록
         </button>
         )}
-        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('disposals', fetchDisposals)} disabled={loading || paged.total === 0} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">엑셀(CSV) 다운로드</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('disposals', fetchDisposals)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       <Modal
         open={showDisposalModal}
@@ -2982,7 +3021,9 @@ function TabDailyTrade() {
   const formatPct = (v) => (v == null ? '—' : `${v.toFixed(1)}%`);
   const profitClass = (v) => (v < 0 ? 'main-profit-negative' : '');
 
+  const dailyReq = useLatestRequest(); // T-404: 늦게 온 이전 조건 응답이 새 조건 결과를 덮지 않게
   const load = () => {
+    const t = dailyReq.next();
     setLoading(true);
     setErr('');
     const d = sanitizeYmd(reportDate, today());
@@ -2991,11 +3032,12 @@ function TabDailyTrade() {
     if (partnerId) params.partner_id = partnerId;
     Promise.all([fetchDailyPurchaseSales(params), fetchDailyPurchaseSalesBreakdown(params)])
       .then(([summary, detail]) => {
+        if (!dailyReq.isCurrent(t)) return;
         setRows(summary);
         setBreakdown(detail);
       })
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => dailyReq.isCurrent(t) && setErr(e.message))
+      .finally(() => dailyReq.isCurrent(t) && setLoading(false));
   };
 
   useEffect(() => {

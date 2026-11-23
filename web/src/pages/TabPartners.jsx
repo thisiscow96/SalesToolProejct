@@ -1,5 +1,5 @@
 // 거래처 탭 (T-102) — 목록·검색·등록·수정, 매입·매출 모달에서 쓰는 빠른 등록 모달
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { fetchPartners, fetchReceivablesAging, getToken, getUser, API_BASE } from '../api';
 import { PartnerLedgerModal, ReceivablesAgingView, won } from './PartnerLedger';
 import CardMoreToggle from '../components/CardMoreToggle';
@@ -91,6 +91,8 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
   const [form, setForm] = useState(EMPTY_FORM);
   const [err, setErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  submittingRef.current = submitting;
   const isEdit = !!partner;
   const typeOptions = allowedTypes ? PARTNER_TYPE_OPTIONS.filter((o) => allowedTypes.has(o.value)) : PARTNER_TYPE_OPTIONS;
 
@@ -113,7 +115,8 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
+      // T-404: 저장 요청 중에는 Esc 로 닫지 않는다(닫혀도 요청은 끝까지 가서 새로 연 창에 결과가 섞였다)
+      if (e.key === 'Escape' && !submittingRef.current) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -187,7 +190,7 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
   };
 
   return (
-    <div className="main-modal-backdrop partner-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="main-modal-backdrop partner-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
       <div className="main-modal partner-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="main-modal-header">
           <h2 id={titleId}>{isEdit ? '거래처 수정' : '새 거래처 등록'}</h2>
@@ -308,10 +311,10 @@ export function PartnerFormModal({ open, partner, defaultType = 'supplier', allo
           </form>
         </div>
         <div className="main-modal-footer">
-          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+          <button type="button" className="main-modal-btn secondary" onClick={() => !submitting && onClose()} disabled={submitting}>
             취소
           </button>
-          <button type="submit" form={formId} className="main-modal-btn primary" disabled={submitting}>
+          <button type="submit" form={formId} className="main-modal-btn primary" disabled={submitting} aria-busy={submitting}>
             {submitting ? '처리 중…' : isEdit ? '저장' : '등록'}
           </button>
         </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
+import { BusyLink } from '../components/Busy';
 import { API_BASE } from '../api';
 import { refreshMe } from '../lib/staffAccess';
 import './Login.css';
@@ -120,9 +121,9 @@ export default function Login({ onLogin }) {
             {loading ? '로그인 중…' : '로그인'}
           </button>
           {asStaff ? (
-            <Link to="/staff-setup" className="login-signup-link">초대 코드로 비밀번호 설정</Link>
+            <BusyLink busy={loading} to="/staff-setup" className="login-signup-link">초대 코드로 비밀번호 설정</BusyLink>
           ) : (
-            <Link to="/signup" className="login-signup-link">회원가입</Link>
+            <BusyLink busy={loading} to="/signup" className="login-signup-link">회원가입</BusyLink>
           )}
         </form>
       </div>

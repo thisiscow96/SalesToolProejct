@@ -147,6 +147,15 @@ function BatchView({ id, onBack }) {
   const [busy, setBusy] = useState('');
   const [result, setResult] = useState(null); // 검증·저장 응답
   const [confirmed, setConfirmed] = useState(false);
+  // T-404: 파일 올리기·빼기 중인 카드 — 진행 중에는 검증·저장·삭제·목록 이동을 잠근다(바꾸기 전 파일로 저장되는 것 방지)
+  const [cardBusy, setCardBusy] = useState({});
+  const onCardBusy = useCallback((kind, on) => {
+    setCardBusy((m) => ({ ...m, [kind]: on }));
+    if (on) {
+      setResult(null); // 파일이 바뀌면 이전 검증 결과로는 저장하지 않는다 — 다시 검증해야 저장 버튼이 나온다
+      setConfirmed(false);
+    }
+  }, []);
   const load = useCallback(async () => {
     try {
       const r = await migrationApi.get(id);
@@ -198,17 +207,18 @@ function BatchView({ id, onBack }) {
 
   const summary = result && result.summary;
   const warnCount = summary ? summary.warnings : 0;
-  const canSave = batch.status === 'draft' && summary && summary.errors === 0 && (warnCount === 0 || confirmed) && !busy;
+  const locked = !!busy || Object.values(cardBusy).some(Boolean);
+  const canSave = batch.status === 'draft' && summary && summary.errors === 0 && (warnCount === 0 || confirmed) && !locked;
 
   return (
     <section aria-label={`이관 묶음 #${id}`}>
       <div className="mg-head">
-        <button type="button" className="main-btn main-btn--secondary" onClick={onBack}>← 목록</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={onBack} disabled={locked}>← 목록</button>
         <h3 className="mg-title">묶음 #{batch.id} <span className={`mg-status mg-status--${batch.status}`}>{STATUS[batch.status]}</span></h3>
         <span className="mg-cut">기준일 <b>{batch.cutover_date}</b></span>
         {batch.memo && <span className="mg-muted">{batch.memo}</span>}
         {batch.status === 'draft' && (
-          <button type="button" className="main-btn main-btn--secondary mg-danger-text mg-head-right" onClick={onDelete} disabled={!!busy}>묶음 삭제</button>
+          <button type="button" className="main-btn main-btn--secondary mg-danger-text mg-head-right" onClick={onDelete} disabled={locked}>묶음 삭제</button>
         )}
       </div>
       {err && <div className="main-alert-banner" role="alert">{err}</div>}
@@ -218,13 +228,13 @@ function BatchView({ id, onBack }) {
         <>
           <div className="mg-cards">
             {KINDS.map((k) => (
-              <KindCard key={k.kind} def={k} file={files[k.kind]} batchId={id} disabled={!!busy}
+              <KindCard key={k.kind} def={k} file={files[k.kind]} batchId={id} disabled={locked} onBusy={onCardBusy}
                 onChanged={async (msg) => { setResult(null); setNotice(msg || ''); await load(); }}
                 onError={setErr} />
             ))}
           </div>
           <div className="mg-actions">
-            <button type="button" className="main-btn" onClick={onValidate} disabled={!!busy || !(batch.files || []).length}>
+            <button type="button" className="main-btn" onClick={onValidate} disabled={locked || !(batch.files || []).length}>
               {busy === 'validate' ? '검증 중…' : '전체 검증'}
             </button>
             <span className="mg-muted">저장 순서대로 실제로 넣어 본 뒤 되돌립니다. 결과가 그대로 저장 결과입니다.</span>
@@ -254,7 +264,7 @@ function BatchView({ id, onBack }) {
   );
 }
 
-function KindCard({ def, file, batchId, disabled, onChanged, onError }) {
+function KindCard({ def, file, batchId, disabled, onChanged, onError, onBusy }) {
   const ref = useRef(null);
   const [busy, setBusy] = useState('');
   const pick = async (e) => {
@@ -264,6 +274,7 @@ function KindCard({ def, file, batchId, disabled, onChanged, onError }) {
     if (!/\.xlsx$/i.test(f.name)) return onError('엑셀(.xlsx) 파일을 골라 주세요.');
     if (f.size > 5 * 1024 * 1024) return onError('파일은 5MB까지 올릴 수 있습니다. 나눠서 여러 묶음으로 올려 주세요.');
     setBusy('up');
+    onBusy?.(def.kind, true);
     onError('');
     try {
       const r = await migrationApi.upload(batchId, def.kind, f);
@@ -272,10 +283,12 @@ function KindCard({ def, file, batchId, disabled, onChanged, onError }) {
       onError(ex.message);
     } finally {
       setBusy('');
+      onBusy?.(def.kind, false);
     }
   };
   const remove = async () => {
     setBusy('rm');
+    onBusy?.(def.kind, true);
     try {
       await migrationApi.removeFile(batchId, def.kind);
       await onChanged(`${def.label} 파일을 뺐습니다.`);
@@ -283,6 +296,7 @@ function KindCard({ def, file, batchId, disabled, onChanged, onError }) {
       onError(ex.message);
     } finally {
       setBusy('');
+      onBusy?.(def.kind, false);
     }
   };
   const tpl = async () => {

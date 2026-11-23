@@ -2,7 +2,8 @@
 // - 원장: 매출(+)·반품(−)·수금(−)·환불 지급(+)을 날짜순으로, 행마다 잔액 누계. 기간을 고르면 기초 잔액부터 시작
 // - 미수 연령: 거래처별 미수를 매출일 기준 30일 이내 / 31–60 / 61–90 / 90일 초과로. 줄을 누르면 매출별 남은 미수
 // 금액 계산은 모두 서버(DB NUMERIC)에서 하고, 화면은 받은 숫자를 그대로 보여 준다.
-import { Fragment, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useLatestRequest } from '../components/Busy';
 import { fetchPartnerLedger, fetchReceivablesAging, createOffset, cancelOffset } from '../api';
 import { fetchPayableLedger, fetchPayablesAging } from '../lib/payablesApi';
 import { kstTodayYmd } from '../lib/dates';
@@ -118,7 +119,28 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   const [offsetDlg, setOffsetDlg] = useState(null);
   const [cancelOfs, setCancelOfs] = useState(null); // { id, amount, reason, busy, err }
   const [reloadKey, setReloadKey] = useState(0);
-  useModalBehavior(!!partner, onClose);
+  // T-404: Esc 는 맨 위 창만 닫는다(상계·상계 취소·입금 안내가 떠 있으면 원장은 그대로). 처리 중인 창은 닫지 않는다
+  const top = useRef({});
+  top.current = { offsetDlg, cancelOfs, reminderOpen, onClose };
+  const offsetReq = useLatestRequest();
+  const closeOffset = useCallback(() => {
+    offsetReq.invalidate(); // 불러오는 중에 닫으면 늦게 온 응답으로 창이 다시 뜨지 않게
+    setOffsetDlg(null);
+  }, [offsetReq.invalidate]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onEsc = useCallback(() => {
+    const t = top.current;
+    if (t.reminderOpen) return; // 입금 안내 창이 자기 Esc 를 처리한다
+    if (t.cancelOfs) {
+      if (!t.cancelOfs.busy) setCancelOfs(null);
+      return;
+    }
+    if (t.offsetDlg) {
+      if (!t.offsetDlg.busy) closeOffset();
+      return;
+    }
+    t.onClose();
+  }, [closeOffset]);
+  useModalBehavior(!!partner, onEsc);
 
   useEffect(() => {
     if (!partner) return undefined;
@@ -160,14 +182,17 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
   // T-401 상계 버튼 — 매입·판매를 함께 하는 거래처, 주인만
   const canOffset = !payable && !!data && OFFSET_TYPES.has(data.partner?.type) && can('offset.create');
   const openOffset = async () => {
+    const t = offsetReq.next();
     setOffsetDlg({ loading: true });
     try {
       const [rv, pv] = await Promise.all([fetchPartnerLedger(partner.id, {}), fetchPayableLedger(partner.id, {})]);
+      if (!offsetReq.isCurrent(t)) return; // 그 사이 창을 닫음
       const receivable = Number(rv.check?.sale_based_due ?? rv.closing_balance) || 0;
       const payableAmt = Number(pv.closing_balance) || 0;
       const max = Math.max(0, Math.min(receivable, payableAmt));
       setOffsetDlg({ receivable, payable: payableAmt, max, amount: max ? String(max) : '', memo: '' });
     } catch (e) {
+      if (!offsetReq.isCurrent(t)) return;
       setOffsetDlg({ err: e.message, receivable: 0, payable: 0, max: 0, amount: '', memo: '' });
     }
   };
@@ -432,7 +457,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
       </div>
       {reminderOpen && <PaymentReminderModal partner={partner} onClose={() => setReminderOpen(false)} />}
       {offsetDlg && (
-        <div className="main-modal-backdrop ledger-sub-backdrop" role="presentation" onMouseDown={(ev) => ev.target === ev.currentTarget && !offsetDlg.busy && setOffsetDlg(null)}>
+        <div className="main-modal-backdrop ledger-sub-backdrop" role="presentation" onMouseDown={(ev) => ev.target === ev.currentTarget && !offsetDlg.busy && closeOffset()}>
           <div className="main-modal ledger-offset-modal" role="dialog" aria-modal="true" aria-label="상계">
             <div className="main-modal-header"><h2>상계 — {partner.name}</h2></div>
             <form className="main-modal-body main-modal-form" onSubmit={submitOffset}>
@@ -456,7 +481,7 @@ export function PartnerLedgerModal({ partner, onClose, onShowAging, mode = 'rece
                 </>
               )}
               <div className="main-modal-footer">
-                <button type="button" className="main-modal-btn secondary" onClick={() => setOffsetDlg(null)} disabled={offsetDlg.busy}>닫기</button>
+                <button type="button" className="main-modal-btn secondary" onClick={closeOffset} disabled={offsetDlg.busy}>닫기</button>
                 <button type="submit" className="main-modal-btn primary" disabled={offsetDlg.busy || offsetDlg.loading || !offsetDlg.max}>{offsetDlg.busy ? '처리 중…' : '상계 저장'}</button>
               </div>
             </form>

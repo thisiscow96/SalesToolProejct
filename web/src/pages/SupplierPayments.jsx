@@ -22,6 +22,7 @@ import { won } from './PartnerLedger';
 import { can } from '../lib/staffAccess';
 import './SupplierPayments.css';
 import ExcelUploadBar from '../components/ExcelUpload'; // T-402
+import { useLatestRequest } from '../components/Busy';
 
 /** 매입 가능한 거래처 유형 — 서버 PURCHASE_PARTNER_TYPES 와 같음 */
 export const PAYABLE_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
@@ -495,7 +496,9 @@ export default function TabSupplierPayments() {
   const [modal, setModal] = useState(null); // { type: 'pay' | 'opening' | 'cancel', row? }
 
   const loadPartners = () => fetchPartners().then(setPartners).catch(() => {});
+  const listReq = useLatestRequest(); // T-404: 늦게 온 이전 조건 응답이 새 조건 결과를 덮지 않게
   const load = (opts = {}) => {
+    const t = listReq.next();
     setLoading(true);
     setErr('');
     fetchSupplierPayments({
@@ -504,9 +507,9 @@ export default function TabSupplierPayments() {
       partner_id: partnerId,
       include_cancelled: (opts.includeCancelled ?? includeCancelled) ? 1 : '',
     })
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .then((rows) => listReq.isCurrent(t) && setList(rows))
+      .catch((e) => listReq.isCurrent(t) && setErr(e.message))
+      .finally(() => listReq.isCurrent(t) && setLoading(false));
   };
   useEffect(() => {
     loadPartners();

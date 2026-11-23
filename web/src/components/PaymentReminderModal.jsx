@@ -85,10 +85,14 @@ export default function PaymentReminderModal({ partner, onClose, onPartnerEmailS
   }, [load]);
 
   // Esc 는 이 창만 닫는다(아래 원장 모달까지 닫히지 않게 캡처 단계에서 멈춤)
+  // T-404: 메일 보내는 중에는 닫지 않는다(발송 결과 안내를 보게)
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
+      if (busyRef.current) return;
       onClose();
     };
     window.addEventListener('keydown', onKey, true);
@@ -177,7 +181,7 @@ export default function PaymentReminderModal({ partner, onClose, onPartnerEmailS
   const emailChanged = data && toEmail.trim() !== (data.partner.email || '') && toEmail.trim() !== '';
 
   return (
-    <div className="main-modal-backdrop reminder-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="main-modal-backdrop reminder-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <div className="main-modal reminder-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="main-modal-header">
           <h2 id={titleId}>{partner.name} 입금 안내</h2>
@@ -308,7 +312,7 @@ export default function PaymentReminderModal({ partner, onClose, onPartnerEmailS
           ) : null}
         </div>
         <div className="main-modal-footer reminder-footer">
-          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+          <button type="button" className="main-modal-btn secondary" onClick={() => !busy && onClose()} disabled={busy}>
             닫기
           </button>
           <button type="button" className={`main-modal-btn ${mailReady ? 'secondary' : 'primary'}`} onClick={doCopy} disabled={!data || busy}>
