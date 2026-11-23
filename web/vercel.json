@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://salestoolproejct.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://salestoolproejct-2a59.onrender.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

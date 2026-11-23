@@ -1,0 +1,260 @@
+/* 미수 입금 안내 (T-214) — 토큰만 사용(styles/tokens.css). 원장 모달 위에 겹치므로 한 단계 위. 휴대폰은 전체 화면 */
+.reminder-backdrop {
+  z-index: 1020;
+}
+.main-modal-backdrop .main-modal.reminder-modal {
+  width: min(42rem, 100%);
+  max-width: 42rem;
+}
+.reminder-sub {
+  margin: var(--sp-1) 0 0;
+  color: var(--c-text-2);
+  font-size: var(--fs-13);
+}
+
+/* 미수 요약 — 합계 한 줄 + 경과 4칸 */
+.reminder-due {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+.reminder-due > div {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+}
+.reminder-due dt {
+  color: var(--c-text-2);
+  font-size: var(--fs-12);
+}
+.reminder-due dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.reminder-due .reminder-due-total {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-color: var(--c-border-strong);
+}
+.reminder-due .reminder-due-total dd {
+  font-size: var(--fs-20);
+}
+.reminder-due .is-old {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+}
+.reminder-due .is-old dd {
+  color: var(--c-danger-text);
+}
+
+/* 알림 줄 */
+.reminder-note {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-14);
+  line-height: 1.5;
+}
+.reminder-note--info {
+  border-color: var(--c-info);
+  background: var(--c-info-soft);
+  color: var(--c-text);
+}
+.reminder-note--done,
+.reminder-note--ok {
+  border-color: var(--c-success);
+  background: var(--c-success-soft);
+  color: var(--c-text);
+}
+.reminder-note--err {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+}
+
+/* 입력 */
+.reminder-fields {
+  display: grid;
+  gap: var(--sp-3);
+}
+.reminder-field {
+  display: grid;
+  gap: var(--sp-1);
+  font-size: var(--fs-14);
+}
+.reminder-label {
+  color: var(--c-text-2);
+  font-weight: 600;
+}
+.reminder-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.reminder-field input[type='text'],
+.reminder-field input[type='email'],
+.reminder-body {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-16); /* 휴대폰 확대 방지 */
+}
+.reminder-body {
+  resize: vertical;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.reminder-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 32px;
+  color: var(--c-text-2);
+  font-size: var(--fs-13);
+}
+.reminder-check input {
+  width: 18px;
+  height: 18px;
+}
+.reminder-hint {
+  margin: 0;
+  color: var(--c-text-3);
+  font-size: var(--fs-12);
+}
+.reminder-hint--warn {
+  color: var(--c-warning-text);
+}
+.reminder-link {
+  min-height: 32px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: none;
+  color: var(--c-info-text);
+  font-size: var(--fs-13);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* 복사용 숨은 칸 */
+.reminder-copy-buffer {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+/* 이력 */
+.reminder-history {
+  margin-top: var(--sp-4);
+}
+.reminder-history h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-14);
+  color: var(--c-text-2);
+}
+.reminder-history ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-1);
+}
+.reminder-history li {
+  display: grid;
+  grid-template-columns: 6.5rem auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--c-border);
+  font-size: var(--fs-13);
+}
+.reminder-history-time,
+.reminder-history-amt {
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-2);
+}
+.reminder-history-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reminder-badge {
+  display: inline-block;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.reminder-badge--ok {
+  background: var(--c-success-soft);
+  color: var(--c-success-text);
+}
+.reminder-badge--fail {
+  background: var(--c-danger-soft);
+  color: var(--c-danger-text);
+}
+.reminder-badge--wait {
+  background: var(--c-warning-soft);
+  color: var(--c-warning-text);
+}
+.reminder-badge--copy {
+  background: var(--c-info-soft);
+  color: var(--c-info-text);
+}
+
+/* ---------- 휴대폰: 전체 화면, 버튼 세로로 ---------- */
+@media (max-width: 480px) {
+  .reminder-backdrop {
+    padding: 0;
+  }
+  .main-modal-backdrop .main-modal.reminder-modal {
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .reminder-due {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .reminder-history li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .reminder-history-time {
+    grid-column: 1 / -1;
+  }
+  .reminder-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .reminder-footer .main-modal-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+/* 원장 하단의 [입금 안내 보내기] — 휴대폰에서는 버튼 4개가 한 줄에 들어가지 않으므로 맨 위 한 줄 전체로 */
+@media (max-width: 480px) {
+  .ledger-footer .ledger-remind-btn {
+    order: -1;
+    flex: 1 1 100%;
+  }
+}

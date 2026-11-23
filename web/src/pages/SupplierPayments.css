@@ -1,0 +1,179 @@
+/* 매입처 지급 화면 (T-201) — 토큰은 styles/tokens.css. 모달·표·입력은 Main.css·TradeCorrection.css 클래스를 그대로 쓰고 여기엔 지급 전용만 */
+
+.sp-modal--wide {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.sp-grid {
+  margin-bottom: 12px;
+}
+
+.sp-alloc {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  padding: 10px 12px;
+}
+
+.sp-alloc-head {
+  margin: 0 0 8px;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+
+.sp-alloc-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.sp-alloc-table th,
+.sp-alloc-table td {
+  white-space: nowrap;
+}
+
+.sp-alloc-table tfoot td {
+  font-weight: var(--fw-semibold);
+  border-top: 1px solid var(--c-border-strong);
+}
+
+.sp-alloc-input {
+  width: 120px;
+  max-width: 100%;
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  text-align: right;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+}
+
+.sp-alloc-input:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 1px;
+}
+
+.sp-alloc-input--bad {
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+}
+
+.sp-bad {
+  color: var(--c-danger-text);
+}
+
+.sp-muted {
+  color: var(--c-text-3);
+  font-size: var(--fs-12);
+}
+
+.sp-alloc-summary {
+  max-width: 280px;
+  font-size: var(--fs-13);
+  color: var(--c-text-2);
+}
+
+.sp-cancel-btn {
+  min-height: var(--control-h-sm);
+}
+
+@media (max-width: 640px) {
+  .sp-modal--wide {
+    width: 100vw;
+  }
+  .sp-alloc-input {
+    width: 96px;
+  }
+  .sp-alloc-summary {
+    max-width: none;
+  }
+}
+
+.sp-method {
+  white-space: nowrap;
+}
+
+/* 휴대폰: 배분 표는 총액 열을 숨겨 "이번 지급" 칸이 화면 안에 들어오게 */
+@media (max-width: 640px) {
+  .sp-col-total {
+    display: none;
+  }
+  .sp-alloc-table th,
+  .sp-alloc-table td {
+    padding-left: 6px;
+    padding-right: 6px;
+    font-size: var(--fs-13);
+  }
+  .sp-alloc-table .sp-foot-label {
+    white-space: normal;
+  }
+}
+
+.sp-mobile-product {
+  display: none;
+}
+@media (max-width: 640px) {
+  .sp-col-product {
+    display: none;
+  }
+  .sp-mobile-product {
+    display: block;
+    font-size: var(--fs-12);
+    color: var(--c-text-2);
+  }
+  .sp-alloc-table td:first-child {
+    white-space: normal;
+  }
+}
+@media (max-width: 640px) {
+  .sp-alloc-table {
+    width: 100%;
+  }
+  .sp-alloc-table td:last-child {
+    width: 40%;
+  }
+  .sp-alloc-input {
+    width: 100%;
+    min-width: 72px;
+  }
+  .sp-alloc-table tfoot td {
+    white-space: normal;
+  }
+}
+
+/* ---------- T-401 지급 구분(현금 지급 / 매입 할인) ---------- */
+.sp-kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.sp-kind-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 36px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.sp-kind-opt input {
+  margin: 0;
+  width: auto;
+  min-height: 0;
+  display: inline-block;
+}
+.sp-kind-opt.is-on {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+  font-weight: var(--fw-semibold);
+}
+
+.main-modal-form .sp-kind .sp-kind-opt {
+  flex-direction: row;
+  align-items: center;
+}

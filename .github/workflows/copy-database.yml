@@ -1,0 +1,37 @@
+# 기존 DB(Render 등) → 새 무료 DB(Neon 등)로 데이터 통째로 복사 (한 번만 실행)
+# Secrets: SOURCE_DATABASE_URL (옛 DB External URL), DATABASE_URL (새 DB URL, ?sslmode=require 포함)
+# Repo → Actions → "Copy database to new Postgres" → Run workflow → 확인란에 COPY 입력
+name: Copy database to new Postgres
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '새 DB의 기존 테이블을 덮어씁니다. 진행하려면 COPY 입력'
+        required: true
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.confirm == 'COPY' }}
+    steps:
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
+      - name: Dump source
+        env:
+          SRC: ${{ secrets.SOURCE_DATABASE_URL }}
+        run: |
+          test -n "$SRC" || { echo "::error::SOURCE_DATABASE_URL 이 없습니다"; exit 1; }
+          /usr/lib/postgresql/17/bin/pg_dump "$SRC" --no-owner --no-privileges -Fc -f dump.bin
+          ls -lh dump.bin
+      - name: Restore into new database
+        env:
+          DST: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DST" || { echo "::error::DATABASE_URL 이 없습니다"; exit 1; }
+          /usr/lib/postgresql/17/bin/pg_restore --no-owner --no-privileges --clean --if-exists -d "$DST" dump.bin
+          psql "$DST" -c 'SELECT COUNT(*) AS users FROM "user";'

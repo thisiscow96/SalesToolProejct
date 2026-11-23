@@ -1,0 +1,76 @@
+/* T-403 데이터 이관 탭 — 디자인 토큰만 사용(styles/tokens.css). 휴대폰: 카드 1열, 표는 가로 스크롤 */
+.mg { display: flex; flex-direction: column; gap: var(--sp-4); }
+.mg-nav { display: flex; gap: var(--sp-2); border-bottom: 1px solid var(--c-border); }
+.mg-nav-btn {
+  padding: var(--sp-2) var(--sp-3); border: 0; background: none; cursor: pointer;
+  font-size: var(--fs-14); color: var(--c-text-2); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.mg-nav-btn.on { color: var(--c-accent-text); border-bottom-color: var(--c-accent); font-weight: var(--fw-semibold); }
+.mg-nav-btn:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+.mg-intro { padding: var(--sp-3) var(--sp-4); background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+.mg-intro p { margin: 0 0 var(--sp-1); font-size: var(--fs-14); line-height: var(--lh-base); }
+.mg-muted { color: var(--c-text-3); font-size: var(--fs-13); }
+.mg-empty { padding: var(--sp-6); text-align: center; color: var(--c-text-3); background: var(--c-surface); border: 1px dashed var(--c-border-strong); border-radius: var(--radius-md); }
+.mg-create, .mg-filter, .mg-rb-form {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
+  margin: var(--sp-3) 0; font-size: var(--fs-14); color: var(--c-text-2);
+}
+.mg-create input, .mg-filter input, .mg-filter select, .mg-rb-form input { min-height: 36px; }
+.mg-create input[type='text'], .mg-rb-form input { min-width: 240px; }
+.mg-create-note { flex-basis: 100%; }
+.mg-filter label { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.mg-status {
+  display: inline-block; padding: 2px 10px; border-radius: var(--radius-full); font-size: var(--fs-12);
+  font-weight: var(--fw-semibold); background: var(--c-neutral-soft); color: var(--c-neutral-text); vertical-align: middle;
+}
+.mg-status--draft { background: var(--c-info-soft); color: var(--c-info-text); }
+.mg-status--saved { background: var(--c-success-soft); color: var(--c-success-text); }
+.mg-status--rolled_back { background: var(--c-warning-soft); color: var(--c-warning-text); }
+.mg-status--bad { background: var(--c-danger-soft); color: var(--c-danger-text); }
+.mg-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.mg-title { margin: 0; font-size: var(--fs-20); }
+.mg-cut { font-size: var(--fs-14); color: var(--c-text-2); }
+.mg-head-right { margin-left: auto; }
+.mg-danger-text { color: var(--c-danger-text) !important; }
+.main-btn.mg-danger { background: var(--c-danger); border-color: var(--c-danger); }
+.mg-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--sp-3); }
+.mg-card {
+  display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3);
+  background: var(--c-surface); border: 1px dashed var(--c-border-strong); border-radius: var(--radius-md);
+}
+.mg-card.has { border-style: solid; border-color: var(--c-accent); box-shadow: var(--shadow-sm); }
+.mg-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.mg-card-title { font-weight: var(--fw-semibold); font-size: var(--fs-16); }
+.mg-card-help { margin: 0; font-size: var(--fs-12); color: var(--c-text-3); line-height: var(--lh-base); }
+.mg-card-file { margin: 0; font-size: var(--fs-13); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mg-card-btns { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: auto; }
+.mg-card-btns .main-btn { padding-left: var(--sp-3); padding-right: var(--sp-3); }
+.mg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-4) 0 var(--sp-2); }
+.mg-actions--save { position: sticky; bottom: 0; padding: var(--sp-3) 0; background: var(--c-bg); border-top: 1px solid var(--c-border); }
+.mg-err-note { color: var(--c-danger-text); font-size: var(--fs-13); }
+.mg-result { padding: var(--sp-3); background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+.mg-warns { list-style: none; margin: 0; padding: 0; }
+.mg-confirm { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; font-weight: var(--fw-semibold); font-size: var(--fs-14); }
+.mg-confirm input { width: 18px; height: 18px; }
+.mg-kind-rows h4 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-14); }
+.mg-saved { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mg-rep-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.mg-rep-head h4, .mg-rollback h4 { margin: 0; font-size: var(--fs-16); }
+.mg-rep caption { text-align: left; padding: var(--sp-2) var(--sp-3); font-weight: var(--fw-semibold); font-size: var(--fs-14); color: var(--c-text); }
+.mg-rep td.num, .mg-rep th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mg-diff-bad td, .mg-diff-bad th { background: var(--c-danger-soft); color: var(--c-danger-text); }
+.mg-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-rollback { padding: var(--sp-3) var(--sp-4); background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; }
+.mg-rollback p { margin: 0; }
+.mg-blockers ul { margin: var(--sp-2) 0 0; padding-left: var(--sp-5); font-size: var(--fs-13); line-height: var(--lh-base); }
+.mg-hist-kind { padding: 2px 8px; border-radius: var(--radius-full); background: var(--c-neutral-soft); font-size: var(--fs-12); }
+.mg-pager { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); font-size: var(--fs-13); }
+.mg-table td, .mg-table th { white-space: nowrap; }
+/* 목록·원장에 쓰는 이관 배지 */
+.mg-badge { display: inline-block; margin-left: var(--sp-1); padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-12); font-weight: var(--fw-semibold); background: var(--c-warning-soft); color: var(--c-warning-text); white-space: nowrap; }
+@media (max-width: 767px) {
+  .mg-cards { grid-template-columns: 1fr; }
+  .mg-create input[type='text'], .mg-rb-form input { min-width: 0; flex: 1 1 100%; }
+  .mg-head-right { margin-left: 0; }
+  .main-table-wrap:has(> .mg-table), .main-table-wrap:has(> .mg-rep) { overflow-x: auto; }
+}

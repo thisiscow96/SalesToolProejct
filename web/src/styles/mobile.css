@@ -1,0 +1,694 @@
+/*
+ * T-206 휴대폰 화면 — 경매장·창고에서 서서 한 손으로 보고 입력한다.
+ * - 목록 표(.main-table--cards): 768 미만에서 카드형. 제목·작은 줄·핵심 값 3~4개만 보이고, 나머지는 '자세히'로 펼친다.
+ * - 입력 표(.main-table--form, 모달 안): 행 하나가 카드 하나. 칸마다 이름을 붙이고 입력칸을 48px·16px 글자로 키운다
+ *   (16px 미만이면 iOS가 확대해 버린다). 숫자 칸은 마크업에서 inputMode=decimal(숫자 키패드).
+ * - 저장 버튼은 전체 화면 시트의 바닥에 고정(기존 구조) + 홈 바 여백.
+ * 칸의 역할은 JSX의 data-card(title·sub·key·extra·check·action·field·wide·more), 이름은 data-label.
+ * 색·간격·글자는 tokens.css 변수만 쓴다. Main.css 다음에 불러온다(Main.jsx).
+ */
+
+/* 넓은 화면(표)에서는 '자세히' 칸을 쓰지 않는다 */
+.main-table td.main-card-more {
+  display: none;
+}
+
+/* 반품 미리보기 아래 줄(미수 차감 · 환불) — 예전 인라인 스타일을 옮김 */
+.main-refund-split {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  /* ---------------------------------------------------------
+   * 셸: 탭은 가로 스크롤(넘치면 끝이 흐려짐 — Main.css), 터치 높이 48px
+   * --------------------------------------------------------- */
+  .main-tab {
+    height: 48px;
+    padding: 0 var(--sp-3);
+    font-size: var(--fs-14);
+  }
+
+  .main-content {
+    padding: var(--sp-3) var(--sp-3) calc(var(--sp-8) + env(safe-area-inset-bottom));
+  }
+
+  .main-page-title {
+    margin: var(--sp-1) var(--sp-1) var(--sp-3);
+  }
+
+  /* 툴바: 기간은 한 줄, 버튼은 두 칸씩 */
+  .main-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+  }
+
+  .main-filters > label,
+  .main-filters > .main-date-filter,
+  .main-filters > .main-filter-checkbox,
+  .main-filters > .main-modal-hint {
+    grid-column: 1 / -1;
+  }
+
+  .main-filters > .main-btn {
+    width: 100%;
+    height: 44px;
+    padding: 0 var(--sp-2);
+  }
+
+  /* 주 버튼(등록)은 혼자 한 줄 — 가장 자주 누르는 버튼을 크게 */
+  .main-filters > .main-btn:not(.main-btn--secondary) {
+    grid-column: 1 / -1;
+    order: -1;
+  }
+
+  .main-filters > label:first-child,
+  .main-filters > .main-date-filter {
+    order: -3;
+  }
+
+  .main-filters > label:not(.main-date-filter):not(.main-filter-checkbox) {
+    order: -2;
+  }
+
+  .main-date-filter {
+    display: grid;
+    grid-template-columns: auto 1fr auto 1fr;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+
+  .main-date-filter .main-date-input-ymd {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* 입력칸은 16px 이상(iOS 자동 확대 방지) */
+  .main-content input:not([type='checkbox']):not([type='radio']),
+  .main-content select,
+  .main-modal input:not([type='checkbox']):not([type='radio']),
+  .main-modal select,
+  .main-modal textarea {
+    font-size: var(--fs-16);
+  }
+
+  /* 거래처 탭 상단의 '목록 / 미수 연령' 전환도 손가락 크기로 */
+  .partner-view-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .partner-view-switch button {
+    min-height: 40px;
+  }
+
+  /* ---------------------------------------------------------
+   * 목록 표 → 카드
+   * --------------------------------------------------------- */
+  .main-table-wrap:has(> .main-table--cards) {
+    max-height: none;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .main-table.main-table--cards,
+  .main-table.main-table--cards > tbody,
+  .main-table.main-table--cards > tfoot {
+    display: block;
+    width: 100%;
+  }
+
+  /* 머리글은 화면에서만 숨김(읽기 프로그램용으로 남김) — 칸 이름은 data-label로 카드 안에 표시 */
+  .main-table.main-table--cards > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .main-table.main-table--cards > tbody > tr,
+  .main-table.main-table--form > tbody > tr {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--sp-3);
+    row-gap: 0;
+    margin: 0 0 var(--sp-2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .main-table.main-table--cards > tbody > tr:hover {
+    background: var(--c-surface);
+  }
+
+  /* 줄 바꿈 표시: 머리(체크·제목·관리) | 작은 줄 | 값 */
+  .main-table.main-table--cards > tbody > tr::before,
+  .main-table.main-table--cards > tbody > tr::after,
+  .main-table.main-table--form > tbody > tr::before,
+  .main-table.main-table--form > tbody > tr::after {
+    content: '';
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  .main-table.main-table--cards > tbody > tr::before,
+  .main-table.main-table--form > tbody > tr::before {
+    order: 2;
+  }
+
+  .main-table.main-table--cards > tbody > tr::after,
+  .main-table.main-table--form > tbody > tr::after {
+    order: 4;
+  }
+
+  .main-table.main-table--cards > tbody > tr > td[data-card][data-card],
+  .main-table.main-table--form > tbody > tr > td[data-card][data-card] {
+    display: block;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    height: auto;
+    padding: 0;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .main-table--cards td .main-cell-text-scroll,
+  .main-table--form td .main-cell-text-scroll {
+    display: inline;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  /* 체크 · 제목 · 관리 */
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='check'] {
+    order: 0;
+    flex: none;
+    display: flex;
+    align-items: center;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='check'] input[type='checkbox'] {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='title'] {
+    order: 1;
+    flex: 1 1 0;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    font-size: var(--fs-16);
+    font-weight: var(--fw-semibold);
+    line-height: var(--lh-tight);
+    color: var(--c-text);
+    overflow-wrap: anywhere;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='action'] {
+    order: 1;
+    flex: none;
+    margin-left: auto;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='action'] .tc-menu-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  /* 작은 줄: 날짜·거래처·유형 배지 */
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='sub'] {
+    order: 3;
+    flex: 0 1 auto;
+    margin-top: var(--sp-1);
+    font-size: var(--fs-13);
+    font-weight: var(--fw-regular);
+    color: var(--c-text-2);
+    white-space: nowrap;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='sub'] + td[data-card='sub']::before {
+    content: '·';
+    margin-right: var(--sp-3);
+    color: var(--c-text-3);
+  }
+
+  /* 핵심 값(이름 위, 값 아래) — 한 줄에 3개까지 */
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='key'],
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='extra'] {
+    order: 5;
+    flex: 1 1 calc(25% - var(--sp-3));
+    min-width: 4.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-16);
+    font-weight: var(--fw-medium);
+    line-height: var(--lh-tight);
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='key']::before,
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='extra']::before,
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='field']::before,
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='wide']::before,
+  .main-table > tfoot > tr > td[data-card='foot']::before {
+    content: attr(data-label);
+    font-size: var(--fs-12);
+    font-weight: var(--fw-medium);
+    line-height: var(--lh-tight);
+    color: var(--c-text-3);
+    white-space: nowrap;
+  }
+
+  /* 펼칠 값 — 기본은 숨김, '자세히'를 누르면 보인다 */
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='extra'] {
+    order: 6;
+    display: none;
+    font-size: var(--fs-14);
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr:has(.main-card-more-input:checked) > td[data-card][data-card='extra'] {
+    display: flex;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td.main-card-more[data-card] {
+    order: 7;
+    display: block;
+    flex-basis: 100%;
+    margin-top: var(--sp-3);
+  }
+
+  .main-card-more-btn,
+  .main-modal label.main-card-more-btn {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    margin: 0;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-1);
+    height: 36px;
+    font-size: var(--fs-13);
+    font-weight: var(--fw-medium);
+    color: var(--c-text-2);
+    background: var(--c-surface-2);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .main-card-more-btn::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    margin-left: var(--sp-1);
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform var(--dur-fast) var(--ease);
+  }
+
+  .main-card-more-btn:has(.main-card-more-input:checked)::after {
+    transform: translateY(2px) rotate(-135deg);
+  }
+
+  .main-card-more-btn:has(.main-card-more-input:focus-visible) {
+    outline: 2px solid var(--c-focus);
+    outline-offset: 2px;
+  }
+
+  .main-card-more-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .main-card-more-close,
+  .main-card-more-btn:has(.main-card-more-input:checked) .main-card-more-open {
+    display: none;
+  }
+
+  .main-card-more-btn:has(.main-card-more-input:checked) .main-card-more-close {
+    display: inline;
+  }
+
+  /* 상태 표시: 취소 행·재고 경과일 */
+  .main-table.main-table--cards > tbody > tr.tc-row-cancelled {
+    background: var(--c-surface-2);
+    border-style: dashed;
+  }
+
+  .main-table.main-table--cards > tbody > tr.main-row-aging-danger,
+  .main-table.main-table--cards > tbody > tr.main-row-aging-warn {
+    border-left-width: 4px;
+    padding-left: calc(var(--sp-4) - 3px);
+  }
+
+  .main-table.main-table--cards > tbody > tr.main-row-aging-danger {
+    border-left-color: var(--c-danger);
+  }
+
+  .main-table.main-table--cards > tbody > tr.main-row-aging-warn {
+    border-left-color: var(--c-warning);
+  }
+
+  /* 빈 행(상품·거래처별 내역에 결과가 없을 때) */
+  .main-table.main-table--cards > tbody > tr:has(> td.main-empty-cell) {
+    display: block;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .main-table.main-table--cards > tbody > tr > td.main-empty-cell {
+    display: block;
+    padding: var(--sp-8) var(--sp-4);
+    text-align: center;
+    color: var(--c-text-3);
+    border: 1px dashed var(--c-border-strong);
+    border-radius: var(--radius-lg);
+  }
+
+  /* 합계(tfoot) → 요약 카드 */
+  .main-table.main-table--cards > tfoot > tr {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: var(--c-surface-2);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--radius-lg);
+  }
+
+  .main-table.main-table--cards > tfoot > tr > th,
+  .main-table.main-table--cards > tfoot > tr > td {
+    position: static;
+    display: block;
+    height: auto;
+    padding: 0;
+    text-align: left;
+    background: transparent;
+    border: 0;
+  }
+
+  .main-table.main-table--cards > tfoot > tr > th {
+    flex-basis: 100%;
+    font-size: var(--fs-14);
+    color: var(--c-text);
+  }
+
+  .main-table.main-table--cards > tfoot > tr > td[data-card='foot'] {
+    flex: 1 1 calc(33.333% - var(--sp-3));
+    min-width: 5.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: var(--sp-3);
+  }
+
+  /* ---------------------------------------------------------
+   * 입력 표(모달) → 행마다 입력 카드
+   * --------------------------------------------------------- */
+  .main-modal-table-wrap:has(> .main-table--form) {
+    flex: none;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .main-modal .main-table.main-table--form,
+  .main-modal .main-table.main-table--form > tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+  }
+
+  /* 머리글: 이름은 카드 안에 있으므로 숨기고, '전체 선택' 체크만 남긴다 */
+  .main-table.main-table--form > thead,
+  .main-table.main-table--form > thead > tr {
+    display: block;
+  }
+
+  .main-table.main-table--form > thead > tr > th {
+    display: none;
+  }
+
+  .main-table.main-table--form > thead > tr > th.main-col-check {
+    position: static;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: auto;
+    max-width: none;
+    height: auto;
+    margin: 0 0 var(--sp-2);
+    padding: var(--sp-1) var(--sp-1);
+    font-size: var(--fs-13);
+    color: var(--c-text-2);
+    background: transparent;
+    border: 0;
+  }
+
+  .main-table.main-table--form > thead > tr > th.main-col-check::after {
+    content: '전체 선택';
+  }
+
+  .main-table.main-table--form > thead > tr > th.main-col-check input {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+  }
+
+  .main-table.main-table--form > tbody > tr:hover {
+    background: var(--c-surface);
+  }
+
+  /* 선택된 행(체크) 강조 — 무엇이 저장될지 한눈에 */
+  .main-table.main-table--form > tbody > tr:has(> td[data-card='check'] input:checked) {
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 1px var(--c-accent);
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='field'],
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='wide'] {
+    order: 5;
+    flex: 1 1 calc(50% - var(--sp-3));
+    min-width: 8rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    margin-top: var(--sp-3);
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='wide'] {
+    flex-basis: 100%;
+  }
+
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='field']::before,
+  .main-table:is(.main-table--cards, .main-table--form) > tbody > tr > td[data-card][data-card='wide']::before {
+    font-size: var(--fs-13);
+    color: var(--c-text-2);
+  }
+
+  .main-modal .main-table.main-table--form > tbody > tr > td[data-card] input:not([type='checkbox']),
+  .main-modal .main-table.main-table--form > tbody > tr > td[data-card] select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 48px;
+    padding: 0 var(--sp-3);
+    font-size: var(--fs-16);
+    border-radius: var(--radius-md);
+  }
+
+  .main-modal .main-table.main-table--form > tbody > tr > td[data-card] select {
+    padding-right: var(--sp-8);
+  }
+
+  .main-table.main-table--form td.num,
+  .main-table.main-table--form td[data-card='key'] {
+    text-align: left;
+  }
+
+  /* 환불·폐기 사유: 선택 + 직접 입력을 세로로 */
+  .main-table.main-table--form .main-refund-reason-cell,
+  .main-table.main-table--form .main-disposal-reason-cell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    width: 100%;
+  }
+
+  /* 최근 단가 제안 안내는 줄바꿈 허용 */
+  .main-modal .main-table--purchase-modal .main-price-hint {
+    white-space: normal;
+    overflow: visible;
+  }
+
+  /* 행 삭제(×): 40px 터치 */
+  .main-table.main-table--form .main-modal-row-del {
+    width: 40px;
+    height: 40px;
+    font-size: var(--fs-20);
+  }
+
+  /* 모달 툴바(행 추가·복제·새 거래처): 3칸 고르게 */
+  .main-modal-toolbar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+    gap: var(--sp-2);
+  }
+
+  .main-modal-toolbar .main-modal-toolbar-btn {
+    height: 40px;
+  }
+
+  /* 바닥 저장 버튼: 시트 아래 고정(Main.css 구조) + 홈 바 여백, 48px */
+  .main-modal-footer {
+    padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  }
+
+  .main-modal-footer .main-modal-btn {
+    height: 48px;
+    font-size: var(--fs-16);
+  }
+
+  /* 정정 모달(수정·취소)도 휴대폰에서는 전체 화면 시트 */
+  .main-modal.tc-modal {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* 미수 연령 표: 카드 대신 가로 스크롤(구간 비교가 목적) — 거래처 열은 고정, 이름은 한 줄 */
+  .aging-table th:first-child,
+  .aging-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 7.5rem;
+    white-space: nowrap;
+    background: var(--c-surface);
+  }
+
+  .aging-table thead th:first-child {
+    z-index: 3;
+    background: var(--c-surface-2);
+  }
+
+  .aging-table tfoot th:first-child,
+  .aging-table tfoot td:first-child {
+    background: var(--c-surface-2);
+  }
+
+  .aging-table th,
+  .aging-table td {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 767px) {
+  /* 매출 전환: 작은 줄의 매입 번호에 이름을 붙인다 */
+  .main-table--form > tbody > tr > td[data-card][data-card='sub'][data-label='매입 ID']::before {
+    content: '매입 #';
+    margin: 0;
+    color: inherit;
+  }
+}
+
+@media (max-width: 767px) {
+  /* 정정(수정·취소) 모달 입력칸도 48px — 서서 손가락으로 누르기 */
+  .main-modal.tc-modal .tc-form input:not([type='checkbox']):not([type='radio']),
+  .main-modal.tc-modal .tc-form select {
+    height: 48px;
+  }
+
+  /* 정정 메뉴 항목: 44px 터치 */
+  .tc-menu-item {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  /* 2차 검수 보정: 입력 카드에서는 읽기 값(key)을 한 줄에 3개, 입력칸은 그 아래, 펼칠 값·버튼은 맨 아래 */
+  .main-table.main-table--form > tbody > tr > td[data-card][data-card='key'] {
+    flex-basis: calc(33.333% - var(--sp-3));
+    min-width: 5.5rem;
+  }
+
+  .main-table.main-table--form > tbody > tr > td[data-card][data-card='field'],
+  .main-table.main-table--form > tbody > tr > td[data-card][data-card='wide'] {
+    order: 6;
+  }
+
+  .main-table.main-table--form > tbody > tr > td[data-card][data-card='extra'] {
+    order: 7;
+  }
+
+  .main-table.main-table--form > tbody > tr > td.main-card-more[data-card] {
+    order: 8;
+  }
+}
+
+@media (max-width: 767px) {
+  /* T-220: 미수 연령 — 펼친 거래처 줄의 고정(sticky) 이름 칸이 줄 배경과 달라 회색 조각이 보이던 것 */
+  .aging-table tr.aging-row.is-open > td:first-child,
+  .aging-table tr.aging-detail-row > td:first-child {
+    background: var(--c-surface-2);
+  }
+}
+
+@media (max-width: 767px) {
+  /* T-220: 위 고정 칸 규칙(.aging-table td:first-child)이 펼친 매출 표(.aging-sales)의 첫 칸에도 걸리던 것을 되돌린다 */
+  .aging-table .aging-sales th:first-child,
+  .aging-table .aging-sales td:first-child {
+    position: static;
+    min-width: 0;
+    background: none;
+  }
+
+  /* 펼친 매출 표는 화면 폭 안에서 따로 가로 스크롤 — 바깥 표를 끝까지 밀지 않아도 상품·남은 미수가 보인다 */
+  .aging-table .aging-detail {
+    position: sticky;
+    left: var(--sp-4);
+    max-width: calc(100vw - 4.5rem);
+    overflow-x: auto;
+  }
+}

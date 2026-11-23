@@ -1,8 +1,8 @@
 # 운영 DB 마이그레이션만 실행 (Shell 불필요)
-# Repo → Actions → "Migrate database (Render)" → Run workflow
-# Secrets: DATABASE_URL (Render Postgres External URL 권장)
+# Repo → Actions → "Migrate database" → Run workflow
+# Secrets: DATABASE_URL (Neon 등 새 DB URL, ?sslmode=require 포함)
 
-name: Migrate database (Render)
+name: Migrate database
 
 on:
   workflow_dispatch:
@@ -34,5 +34,7 @@ jobs:
         working-directory: server
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # 선택: 풀러가 아닌 직접 연결 주소 — 있으면 migrate 가 먼저 쓴다 (T-219 R-04, 배포 문서 7절)
+          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
           NODE_ENV: production
         run: npm run migrate

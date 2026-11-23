@@ -1,11 +1,14 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   fetchInventory,
   fetchPurchases,
   fetchSales,
   fetchPayments,
+  cancelPayment,
   fetchProducts,
   fetchPartners,
+  fetchLastPurchasePrice,
+  fetchRecentPurchasePartners,
   getUser,
   createProductsBulk,
   createPurchase,
@@ -17,7 +20,35 @@ import {
   fetchDailyPurchaseSales,
   fetchDailyPurchaseSalesBreakdown,
 } from '../api';
+import { toYmd as toYmdKst, kstParts, joinDateAndKstTime, kstNowLocalInput } from '../lib/dates';
+import { computeRefundPossibleQty, computeReturnPreview, computeUnpaidAmount, defaultRefundQty, validateRefundQty } from '../lib/refund';
+import { downloadListCsv } from '../lib/csvLists';
+import TabPartners, { PartnerFormModal } from './TabPartners';
+import TabDashboard from './TabDashboard';
+import TabHistory from './AuditHistory'; // T-212 변경 이력
+import TabMonthly from './MonthlyReport'; // T-215 월 정산
+import TabSupplierPayments, { SupplierPaymentModal, PurchasePayBadge } from './SupplierPayments';
+import CardMoreToggle from '../components/CardMoreToggle';
+import { Pager, SearchTextField, usePagedList, PAGE_SIZE } from '../components/ListPaging';
+import { useLatestRequest } from '../components/Busy';
+import CreditLimitWarning, { creditWarningsOf, creditLine } from '../components/CreditLimitWarning';
+import { PersonalProductModal, ProductRequestAdminPanel, productOptionLabel } from './ProductRequest';
+import {
+  RowActionMenu,
+  CancelTradeModal,
+  EditPurchaseModal,
+  EditSaleModal,
+  CorrectionNotice,
+  purchaseMenuState,
+  saleMenuState,
+} from './TradeCorrection';
+import { FifoSaleModal, FifoSellButton, SellableCell } from './FifoSale';
+import TabStaff from './TabStaff'; // T-213 직원 관리
+import TabMigration from './TabMigration'; // T-403 데이터 이관
+import { can, isStaff, ROLE_LABEL } from '../lib/staffAccess'; // T-213 역할별 버튼
 import './Main.css';
+import '../styles/mobile.css';
+import ExcelUploadBar from '../components/ExcelUpload'; // T-402
 
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 오늘 날짜 yyyy-mm-dd (로컬) */
@@ -59,68 +90,32 @@ function DateSearchField({ value, onChange, id }) {
   );
 }
 
-/** 날짜만 yyyy-mm-dd (DB/Date/문자열 모두 처리) */
+/** 날짜만 yyyy-mm-dd — DATE 문자열은 그대로, 시각이 있는 값(timestamptz)은 KST 날짜 (T-116, lib/dates.js) */
 function toYmd(v) {
-  if (v == null || v === '') return '';
-  if (typeof v === 'string') return v.slice(0, 10);
-  if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const d = String(v.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  const s = String(v);
-  return s.length >= 10 ? s.slice(0, 10) : s;
+  return toYmdKst(v);
 }
 
-/** 매입정보 목록 — YYYY-MM-DD HH:mm (매입일 + 등록시각) */
+/** 매입정보 목록 — YYYY-MM-DD HH:mm (매입일 + 등록시각 KST) */
 function formatPurchaseTableDateTime(row) {
-  const datePart = toYmd(row.purchase_date);
-  const ts = row.created_at;
-  if (ts) {
-    const t = new Date(ts);
-    if (!Number.isNaN(t.getTime())) {
-      const dp = datePart || toYmd(t);
-      return `${dp} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
-    }
-  }
-  return `${datePart || today()} 00:00`;
+  return joinDateAndKstTime(row.purchase_date, row.created_at, today());
 }
 
-/** 매출 — YYYY-MM-DD HH:mm */
+/** 매출 — YYYY-MM-DD HH:mm (매출일 + 등록시각 KST) */
 function formatSaleDateTime(row) {
-  const datePart = toYmd(row.sale_date);
-  const ts = row.created_at;
-  if (ts) {
-    const t = new Date(ts);
-    if (!Number.isNaN(t.getTime())) {
-      const dp = datePart || toYmd(t);
-      return `${dp} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
-    }
-  }
-  return `${datePart || today()} 00:00`;
+  return joinDateAndKstTime(row.sale_date, row.created_at, today());
 }
 
-/** 폐기 — YYYY-MM-DD HH:mm */
+/** 폐기 — YYYY-MM-DD HH:mm (폐기일 + 등록시각 KST) */
 function formatDisposalDateTime(row) {
-  const ymd = toYmd(row.disposal_date);
-  const ts = row.created_at;
-  if (ts) {
-    const d = new Date(ts);
-    if (!Number.isNaN(d.getTime())) {
-      return `${ymd || toYmd(d)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-  }
-  return `${ymd || today()} 00:00`;
+  return joinDateAndKstTime(row.disposal_date, row.created_at, today());
 }
 
-/** 수금 — 수금일시 YYYY-MM-DD HH:mm */
+/** 수금 — 수금일시 YYYY-MM-DD HH:mm (KST) */
 function formatPaymentDateTime(row) {
   const ts = row.paid_at;
   if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return String(ts);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const p = kstParts(ts);
+  return p ? `${p.ymd} ${p.hm}` : String(ts);
 }
 
 function formatProductCreatedYmd(row) {
@@ -180,10 +175,8 @@ function parseMoneyToNumber(s) {
 function formatInventoryDateOnly(row) {
   if (row.last_purchase_date) return toYmd(row.last_purchase_date);
   if (row.last_purchase_created_at) {
-    const d = new Date(row.last_purchase_created_at);
-    if (!Number.isNaN(d.getTime())) {
-      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    }
+    const p = kstParts(row.last_purchase_created_at);
+    if (p) return p.ymd;
   }
   return '—';
 }
@@ -216,22 +209,45 @@ function CollectAmountInput({ value, onChange, disabled, placeholder, className,
 }
 
 /** 단가·금액: 입력 시 천단위 콤마, 저장값은 숫자 문자열(콤마 없음) */
-function UnitPriceInput({ value, onChange, disabled, placeholder, className }) {
+function UnitPriceInput({ value, onChange, disabled, placeholder, className, title, ariaDescribedBy, onFocus, onBlur }) {
   const [focused, setFocused] = useState(false);
   const raw = normalizeMoneyInputString(value);
   const display = focused ? raw : formatMoneyInputDisplay(raw);
+  const inputRef = useRef(null);
+  const reselectRef = useRef(false);
+  useLayoutEffect(() => {
+    // 포커스로 표시 값이 바뀐 직후(화면에 그리기 전·다음 키 입력 전) 전체 선택을 되돌린다
+    if (focused && reselectRef.current && inputRef.current && document.activeElement === inputRef.current) {
+      inputRef.current.select();
+    }
+    reselectRef.current = false;
+  }, [focused]);
   return (
     <input
+      ref={inputRef}
       type="text"
       inputMode="decimal"
       autoComplete="off"
       className={'main-input-unit-price ' + (className || '')}
       value={display}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      onFocus={(e) => {
+        // T-404: Tab 으로 들어오면 브라우저가 전체 선택하는데, 포커스 때 콤마를 빼며 값을 다시 그리면 선택이 풀려
+        // 이어 친 숫자가 기존 값 뒤에 붙었다(3,600 → 36,002,500). 전체 선택 상태였으면 다시 그린 뒤 다시 전체 선택한다.
+        const el = e.target;
+        const len = el.value.length;
+        reselectRef.current = len > 0 && el.selectionStart === 0 && el.selectionEnd === len;
+        setFocused(true);
+        onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        onBlur?.(e);
+      }}
       onChange={(e) => onChange(normalizeMoneyInputString(e.target.value))}
       disabled={disabled}
       placeholder={placeholder}
+      title={title}
+      aria-describedby={ariaDescribedBy}
     />
   );
 }
@@ -246,10 +262,9 @@ function CellText({ children, className }) {
   );
 }
 
-/** 수금 모달 — datetime-local 용 기본값 (yyyy-mm-ddTHH:mm) */
+/** 수금 모달 — datetime-local 용 기본값 (yyyy-mm-ddTHH:mm, KST — 서버는 시간대 없는 값을 KST로 해석) */
 function defaultCollectDateTime() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return kstNowLocalInput();
 }
 
 /** 열린 모달 개수 — body 스크롤 잠금 (중첩 모달 대응) */
@@ -287,7 +302,7 @@ function Modal({
     <div
       className="main-modal-backdrop"
       role="presentation"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}
     >
       <div
         className={
@@ -305,10 +320,16 @@ function Modal({
         </div>
         <div className="main-modal-body">{children}</div>
         <div className="main-modal-footer">
-          <button type="button" className="main-modal-btn secondary" onClick={onClose}>
+          {/* T-404: 요청 중에는 취소·바깥 클릭으로 닫지 않는다(닫혀도 저장은 계속되므로 "취소했는데 저장됨"이 됨) */}
+          <button
+            type="button"
+            className="main-modal-btn secondary"
+            onClick={() => !submitting && onClose()}
+            disabled={!!submitting}
+          >
             취소
           </button>
-          <button type="submit" form={formId} className="main-modal-btn primary" disabled={disabled}>
+          <button type="submit" form={formId} className="main-modal-btn primary" disabled={disabled} aria-busy={!!submitting}>
             {submitting ? '처리 중…' : saveLabel}
           </button>
         </div>
@@ -317,7 +338,7 @@ function Modal({
   );
 }
 
-const PURCHASE_ACCOUNT_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market']);
+const PURCHASE_ACCOUNT_TYPES = new Set(['supplier', 'wholesaler', 'market_wholesaler', 'same_market', 'producer']); // T-401 producer
 const SALE_ACCOUNT_TYPES = new Set(['customer', 'same_market', 'wholesaler', 'market_wholesaler']);
 
 /** 환불 사유 픽리스트 */
@@ -350,6 +371,9 @@ function buildDisposalReasonFromDraft(d) {
   return '';
 }
 
+/** 수금 종류 표시 (T-401: 정산 할인·상계 추가) */
+const ENTRY_KIND_LABEL = { receive: '수금', refund: '환불', discount: '할인', offset: '상계' };
+
 /** 수금 반영 수량(비율): 총 수량 × (수금액/매출금액) */
 function computeCollectedQty(s) {
   const q = Number(s.quantity);
@@ -357,23 +381,6 @@ function computeCollectedQty(s) {
   const pa = Number(s.paid_amount);
   if (!Number.isFinite(q) || ta <= 0 || !Number.isFinite(pa)) return 0;
   return (pa / ta) * q;
-}
-
-/** 환불 가능 수량 = 총 수량 − 환불된 수량(환불 누적) */
-function computeRefundPossibleQty(s) {
-  const q = Number(s.quantity);
-  const rf = Number(s.refunded_qty || 0);
-  if (!Number.isFinite(q)) return 0;
-  return Math.max(0, q - rf);
-}
-
-/** 반품(환불) 금액 = (환불 요청수량 / 총 수량) × 매출 금액(수금 발생액) */
-function computeAutoRefundAmount(s, requestQty) {
-  const tot = Number(s.quantity);
-  const paid = Number(s.paid_amount);
-  const rq = Number(requestQty);
-  if (!Number.isFinite(tot) || tot <= 0 || !Number.isFinite(rq) || rq <= 0 || !Number.isFinite(paid)) return 0;
-  return Math.round((rq / tot) * paid * 100) / 100;
 }
 
 function buildRefundReasonFromDraft(d) {
@@ -395,8 +402,16 @@ function newPurchaseRow() {
     product_id: '',
     quantity: '',
     unit_price: '',
+    /** T-210: true면 unit_price는 최근 매입 단가로 자동 채운 제안값(회색). 사용자가 단가를 고치면 false */
+    unit_price_auto: false,
+    /** T-210: 최근 매입 안내 { scope, unit_price, purchase_date, partner_name } | { none: true } | null */
+    price_hint: null,
     purchase_date: today(),
     selected: false,
+    // T-401 10장: 생산자(선택)·산지·지급 대상(supplier=제공처 기본 | producer)
+    producer_id: '',
+    origin_region: '',
+    payee: 'supplier',
   };
 }
 
@@ -413,92 +428,303 @@ function newProductMasterRow() {
 }
 
 function TabReorder() {
+  // T-209 재고 경과일 기준 [가정]: 3일 이상 주의, 7일 이상 경고.
+  // 경과일은 서버가 계산(오늘 − 남은 재고 중 가장 오래된 매입일). 여기서는 색 단계만 정한다.
+  const AGING_WARN_DAYS = 3;
+  const AGING_DANGER_DAYS = 7;
+  const agingLevel = (days) => {
+    if (days == null || days === '' || !Number.isFinite(Number(days))) return null;
+    const n = Number(days);
+    if (n >= AGING_DANGER_DAYS) return 'danger';
+    if (n >= AGING_WARN_DAYS) return 'warn';
+    return 'ok';
+  };
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
-  useEffect(() => {
-    setLoading(true);
+  // T-205 재고에서 바로 판매: 모달을 연 재고 행, 저장 알림
+  const [sellRow, setSellRow] = useState(null);
+  const [sellNotice, setSellNotice] = useState('');
+  // T-211 검색(서버: 품목·출처·최근 매입 거래처)과 페이지(화면에서 50건씩).
+  // 재고는 품목 수만큼만 행이 생겨 전체를 받아도 작고, 경과일 주의·경고 건수를 검색 결과 전체로 세기 위해 화면에서 나눈다.
+  const [partners, setPartners] = useState([]);
+  const [partnerFilter, setPartnerFilter] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [invOffset, setInvOffset] = useState(0);
+  const [appliedParams, setAppliedParams] = useState({});
+  const buildParams = () => {
+    const params = {};
+    if (partnerFilter) params.partner_id = partnerFilter;
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
+  };
+  const invReq = useLatestRequest(); // T-404: 늦게 온 이전 조건 응답이 새 조건 결과를 덮지 않게
+  const loadInventory = (quiet, params = appliedParams) => {
+    const t = invReq.next();
+    if (!quiet) setLoading(true);
     setErr('');
-    fetchInventory()
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    return fetchInventory(params)
+      .then((rows) => {
+        if (!invReq.isCurrent(t)) return;
+        setList(rows);
+        // 판매 뒤 행이 줄어 지금 쪽이 비면 마지막 쪽으로
+        setInvOffset((o) => (o >= rows.length ? Math.max(0, Math.floor((rows.length - 1) / PAGE_SIZE) * PAGE_SIZE) : o));
+      })
+      .catch((e) => invReq.isCurrent(t) && setErr(e.message))
+      .finally(() => invReq.isCurrent(t) && setLoading(false));
+  };
+  const runSearch = () => {
+    const params = buildParams();
+    setAppliedParams(params);
+    setInvOffset(0);
+    return loadInventory(false, params);
+  };
+  useEffect(() => {
+    loadInventory();
+    fetchPartners().then(setPartners).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 1회
   }, []);
-  if (loading) return <p className="main-loading">불러오는 중…</p>;
-  if (err) return <p className="main-error">{err}</p>;
-  if (list.length === 0) return <p className="main-empty">등록된 재고가 없습니다.</p>;
-  return (
-    <div className="main-table-wrap">
-      <table className="main-table">
-        <thead>
-          <tr>
-            <th className="main-col-product">상품명</th>
-            <th className="main-col-source">출처</th>
-            <th className="main-col-partner">매입 거래처</th>
-            <th className="main-col-qty">수량</th>
-            <th>단위</th>
-            <th className="main-col-date">매입일</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((row) => (
-            <tr key={row.id}>
-              <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-              <td className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
-              <td className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
-              <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-              <td>{row.unit}</td>
-              <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+  const filtered = Object.keys(appliedParams).length > 0;
+  const pageRows = list.slice(invOffset, invOffset + PAGE_SIZE);
+  const dangerCount = list.filter((row) => agingLevel(row.aging_days) === 'danger').length;
+  const warnCount = list.filter((row) => agingLevel(row.aging_days) === 'warn').length;
+  const filterBar = (
+    <div className="main-filters">
+      <label>매입 거래처 <select value={partnerFilter} onChange={(e) => setPartnerFilter(e.target.value)}><option value="">전체</option>{partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+      <SearchTextField id="inv-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·출처·거래처" />
+      <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+      <button type="button" className="main-btn main-btn--secondary" onClick={() => downloadListCsv('inventory', list)} disabled={loading || list.length === 0} title="검색 조건에 맞는 전체 재고(모든 페이지)를 저장합니다">엑셀(CSV) 다운로드</button>
     </div>
+  );
+  if (loading) return <>{filterBar}<p className="main-loading">불러오는 중…</p></>;
+  if (err) return <>{filterBar}<p className="main-error">{err}</p></>;
+  if (list.length === 0) return <>{filterBar}<p className="main-empty">{filtered ? '검색 조건에 맞는 재고가 없습니다.' : '등록된 재고가 없습니다.'}</p></>;
+  return (
+    <>
+      <CorrectionNotice text={sellNotice} onClear={() => setSellNotice('')} />
+      {sellRow && (
+        <FifoSaleModal
+          row={sellRow}
+          onClose={() => setSellRow(null)}
+          onDone={(msg) => {
+            setSellNotice(msg);
+            loadInventory(true);
+          }}
+        />
+      )}
+      {filterBar}
+      <div className="main-aging-summary" role="status">
+        <span className="main-aging-badge main-aging-badge--danger">{AGING_DANGER_DAYS}일 이상 {dangerCount}건</span>
+        <span className="main-aging-badge main-aging-badge--warn">{AGING_WARN_DAYS}일 이상 {warnCount}건</span>
+        <span className="main-modal-hint">경과일 = 오늘 − 남은 재고 중 가장 오래된 매입일 (먼저 들어온 물건부터 나간다고 보고 계산)</span>
+      </div>
+      <Pager total={list.length} offset={invOffset} count={pageRows.length} loading={loading} onPage={setInvOffset} />
+      <div className="main-table-wrap">
+        <table className="main-table main-table--cards">
+          <thead>
+            <tr>
+              <th className="main-col-product">상품명</th>
+              <th className="main-col-source">출처</th>
+              <th className="main-col-partner">매입 거래처</th>
+              <th className="main-col-qty">수량</th>
+              <th className="main-col-sellable">판매 가능</th>
+              <th className="main-col-inv-unit">단위</th>
+              <th className="main-col-date">최근 매입일</th>
+              <th className="main-col-aging">경과일</th>
+              <th className="main-col-sell">판매</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((row) => {
+              const level = agingLevel(row.aging_days);
+              const days = Number(row.aging_days);
+              return (
+                <tr
+                  key={row.id}
+                  className={level === 'danger' ? 'main-row-aging-danger' : level === 'warn' ? 'main-row-aging-warn' : undefined}
+                >
+                  <td data-card="title" data-label="상품명" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
+                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText></td>
+                  <td data-card="extra" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td data-card="extra" data-label="판매 가능" className="num main-col-sellable"><SellableCell row={row} /></td>
+                  <td data-card="key" data-label="단위" className="main-col-inv-unit">{row.unit}</td>
+                  <td data-card="key" data-label="최근 매입일" className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                  <td data-card="key" data-label="경과일" className="main-col-aging">
+                    {level ? (
+                      <span
+                        className={`main-aging-badge main-aging-badge--${level}`}
+                        title={`가장 오래된 남은 매입일 ${row.aging_base_date ? toYmd(row.aging_base_date) : '—'}`}
+                        aria-label={`경과 ${days}일${level === 'danger' ? ' (경고)' : level === 'warn' ? ' (주의)' : ''}`}
+                      >
+                        {days}일
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td data-card="action" className="main-col-sell"><FifoSellButton row={row} onClick={setSellRow} /></td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
-function TabPurchases() {
-  const [list, setList] = useState([]);
+function TabPurchases({ onNavigate } = {}) {
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('purchases');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
+  const [partnerFilter, setPartnerFilter] = useState('');
+  // 정정(T-103): { type: 'edit' | 'cancel', row } | null, 성공 알림
+  const [correction, setCorrection] = useState(null);
+  const [correctionNotice, setCorrectionNotice] = useState('');
   const [products, setProducts] = useState([]);
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [productId, setProductId] = useState('');
   const [selected, setSelected] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [showConvert, setShowConvert] = useState(false);
+  const [convertCreditWarn, setConvertCreditWarn] = useState(null); // T-207 외상 한도 경고
   const [purchaseRows, setPurchaseRows] = useState([newPurchaseRow()]);
   const [convertCustomer, setConvertCustomer] = useState('');
   const [convertDate, setConvertDate] = useState(today());
   const [convertRows, setConvertRows] = useState([]);
+  // 수량·단가·판매일을 고치면 이전 외상 한도 경고는 맞지 않으므로 지운다(T-207)
+  useEffect(() => setConvertCreditWarn(null), [convertRows, convertDate]);
   const [actionErr, setActionErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // 매입 등록·매출 전환 모달 위에서 바로 거래처 추가 (T-102): null | 'purchase' | 'sale'
+  const [partnerAddFor, setPartnerAddFor] = useState(null);
+  // T-216: 매입 모달에서 목록에 없는 품목을 개인 품목으로 바로 추가 — 추가 후 이 행에 선택해 둔다 (행 key | 'first-empty' | null)
+  const [productAddFor, setProductAddFor] = useState(null);
+  // T-210: 최근 매입 거래처 순서 [{ partner_id, last_date, cnt }] — 매입 거래처 목록을 최근 거래 순으로 정렬
+  const [recentPartners, setRecentPartners] = useState([]);
+  // T-210: 행별 최근 단가 조회 순번 — 상품·거래처를 빠르게 바꿀 때 늦게 온 이전 응답을 버린다
+  const priceReqSeq = useRef({});
+  /** T-404: 사용자가 들어가 있는 단가 칸(행 key) — 늦게 온 최근 단가 제안으로 그 칸을 덮지 않는다 */
+  const priceFocusKey = useRef(null);
+  // T-201 지급: 미지급만 보기, 지급 등록 모달 { partnerId?, purchaseIds? } | null
+  const [unpaidOnly, setUnpaidOnly] = useState(false);
+  const [includeOpening, setIncludeOpening] = useState(false); // T-403 U-403-06 기초 미지급(이관 기초) 보기
+  const [payModal, setPayModal] = useState(null);
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const loadRecentPartners = () => {
+    fetchRecentPurchasePartners().then(setRecentPartners).catch(() => setRecentPartners([]));
+  };
+
+  /** T-210: 행의 상품(·거래처)으로 최근 매입 단가를 찾아 단가 칸에 제안값을 채운다. 사용자가 고친 단가는 유지 */
+  const suggestUnitPrice = (key, productId, partnerId) => {
+    const seq = (priceReqSeq.current[key] || 0) + 1;
+    priceReqSeq.current[key] = seq;
+    if (!productId) {
+      setPurchaseRows((rows) =>
+        rows.map((r) => (r.key === key ? { ...r, price_hint: null, ...(r.unit_price_auto ? { unit_price: '', unit_price_auto: false } : {}) } : r)),
+      );
+      return;
+    }
+    fetchLastPurchasePrice(productId, partnerId)
+      .then((last) => {
+        if (priceReqSeq.current[key] !== seq) return;
+        setPurchaseRows((rows) =>
+          rows.map((r) => {
+            if (r.key !== key) return r;
+            const canFill = (r.unit_price_auto || r.unit_price === '') && priceFocusKey.current !== key;
+            if (!last) {
+              return { ...r, price_hint: { none: true }, ...(r.unit_price_auto ? { unit_price: '', unit_price_auto: false } : {}) };
+            }
+            return {
+              ...r,
+              price_hint: last,
+              ...(canFill ? { unit_price: String(last.unit_price), unit_price_auto: true } : {}),
+            };
+          }),
+        );
+      })
+      .catch(() => {
+        if (priceReqSeq.current[key] !== seq) return;
+        setPurchaseRows((rows) => rows.map((r) => (r.key === key ? { ...r, price_hint: null } : r)));
+      });
+  };
+
+  const onPartnerAdded = (saved) => {
+    const ctx = partnerAddFor;
+    setPartnerAddFor(null);
+    setPartners((prev) => [...prev, saved].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko')));
+    // 새 거래처를 바로 선택해 둔다 — 매입은 거래처가 비어 있는 행, 매출 전환은 판매처
+    if (ctx === 'purchase' && PURCHASE_ACCOUNT_TYPES.has(saved.type)) {
+      setPurchaseRows((rows) => rows.map((r) => (r.partner_id ? r : { ...r, partner_id: String(saved.id) })));
+    } else if (ctx === 'sale' && SALE_ACCOUNT_TYPES.has(saved.type)) {
+      setConvertCustomer(String(saved.id));
+    }
+  };
+
+  /** T-216: 새 개인 품목(또는 중복 안내에서 고른 공용 품목)을 목록에 넣고 대상 행에 선택 */
+  const onProductPicked = (p) => {
+    const target = productAddFor;
+    setProductAddFor(null);
+    setProducts((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p].sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'))));
+    setPurchaseRows((rows) => {
+      const key = target && target !== 'first-empty' ? target : rows.find((r) => !r.product_id)?.key;
+      return rows.map((r) => (r.key === key ? { ...r, product_id: String(p.id) } : r));
+    });
+    const row = purchaseRows.find((r) => (target && target !== 'first-empty' ? r.key === target : !r.product_id));
+    if (row) suggestUnitPrice(row.key, String(p.id), row.partner_id);
+  };
+
+  const buildParams = () => {
     const params = {
       from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
       to_date: sanitizeYmd(toDate, today()),
     };
     if (productId) params.product_id = productId;
-    fetchPurchases(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (unpaidOnly) params.unpaid_only = 1; // T-201: 기간과 상관없이 미지급·일부 매입 전체
+    if (includeOpening) params.include_opening = 1; // T-403
+    if (partnerFilter) params.partner_id = partnerFilter;
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  /** 검색 버튼·Enter — 새 조건으로 첫 페이지 */
+  const runSearch = () => {
+    setSelected({});
+    return paged.search(buildParams());
+  };
+  /** 등록·정정 뒤 — 마지막 검색 조건으로 지금 페이지 다시 */
+  const load = () => paged.reload();
   useEffect(() => {
     fetchProducts().then(setProducts).catch(() => {});
     fetchPartners().then(setPartners).catch(() => {});
+    loadRecentPartners();
   }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
   const purchasePartners = partners.filter((p) => PURCHASE_ACCOUNT_TYPES.has(p.type));
+  const producerPartners = partners.filter((p) => p.type === 'producer'); // T-401 생산자(출하주)
+  // T-210: 매입 등록 모달의 거래처 목록 — 최근 180일 매입한 거래처(최근 순)를 위, 나머지는 이름순
+  const purchasePartnerGroups = (() => {
+    const byId = new Map(purchasePartners.map((p) => [String(p.id), p]));
+    const recent = [];
+    const used = new Set();
+    for (const rp of recentPartners) {
+      const p = byId.get(String(rp.partner_id));
+      if (p && !used.has(String(p.id))) {
+        recent.push({ ...p, last_date: rp.last_date });
+        used.add(String(p.id));
+      }
+    }
+    const rest = purchasePartners.filter((p) => !used.has(String(p.id)));
+    return { recent, rest };
+  })();
   const salePartners = partners.filter((p) => SALE_ACCOUNT_TYPES.has(p.type));
 
   const toggleRow = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
@@ -552,7 +778,12 @@ function TabPurchases() {
       product_id: r.product_id,
       quantity: r.quantity,
       unit_price: r.unit_price,
+      unit_price_auto: !!r.unit_price_auto,
+      price_hint: r.price_hint ?? null,
       purchase_date: r.purchase_date,
+      producer_id: r.producer_id ?? '',
+      origin_region: r.origin_region ?? '',
+      payee: r.payee || 'supplier',
       selected: false,
     }));
     setPurchaseRows((prev) => [...prev, ...clones]);
@@ -597,6 +828,8 @@ function TabPurchases() {
       return;
     }
     setSubmitting(true);
+    /** 저장에 성공한 행 — 중간에 실패하면 이 행들을 입력표에서 빼서 다시 저장할 때 중복 등록되지 않게 한다 */
+    const savedKeys = new Set();
     try {
       for (const r of toSubmit) {
         await createPurchase({
@@ -606,20 +839,35 @@ function TabPurchases() {
           unit_price: parseMoneyToNumber(r.unit_price),
           purchase_date: r.purchase_date,
           source_name: String(r.source_name ?? '').trim() || undefined,
+          ...(r.producer_id ? { producer_id: parseInt(r.producer_id, 10) } : {}),
+          ...(String(r.origin_region ?? '').trim() ? { origin_region: String(r.origin_region).trim() } : {}),
+          ...(r.producer_id && r.payee === 'producer' ? { payee: 'producer' } : {}),
         });
+        savedKeys.add(r.key);
       }
       setShowForm(false);
       setPurchaseRows([newPurchaseRow()]);
       load();
+      loadRecentPartners();
     } catch (er) {
-      setActionErr(er.message || '매입 등록 실패');
+      const msg = er.message || '매입 등록 실패';
+      if (savedKeys.size > 0) {
+        setPurchaseRows((rows) => {
+          const rest = rows.filter((x) => !savedKeys.has(x.key));
+          return rest.length > 0 ? rest : [newPurchaseRow()];
+        });
+        setActionErr(`${savedKeys.size}건은 저장되어 입력표에서 뺐습니다. 남은 행: ${msg}`);
+        load();
+      } else {
+        setActionErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
-  const submitConvert = (e) => {
-    e.preventDefault();
+  const submitConvert = (e, confirmed = false) => {
+    e?.preventDefault();
     if (!convertCustomer) {
       setActionErr('판매처를 선택하세요.');
       return;
@@ -633,30 +881,56 @@ function TabPurchases() {
       unit_price: parseMoneyToNumber(r.unit_price),
       sale_date: convertDate,
     }));
-    convertPurchasesToSales(items)
-      .then(() => {
+    convertPurchasesToSales(items, confirmed ? { credit_confirmed: true } : {})
+      .then((saved) => {
         setShowConvert(false);
+        setConvertCreditWarn(null);
         setSelected({});
+        // 외상 한도를 넘겨 저장했으면 목록 위 알림으로 남긴다(T-207)
+        if (saved?.credit_warnings?.length) setCorrectionNotice(`매출 전환을 저장했습니다. 외상 한도를 넘겼습니다 — ${saved.credit_warnings.map(creditLine).join(' · ')}`);
         load();
       })
-      .catch((er) => setActionErr(er.message))
+      .catch((er) => {
+        const cw = creditWarningsOf(er);
+        if (cw) setConvertCreditWarn(cw);
+        else setActionErr(er.message);
+      })
       .finally(() => setSubmitting(false));
+  };
+
+  const onCorrectionDone = (msg) => {
+    setCorrection(null);
+    setSelected({});
+    setCorrectionNotice(msg);
+    load();
+  };
+  /** 매입 취소가 연결 매출로 막혔을 때 — 매출정보 탭에서 그 기간으로 보기 */
+  const goLinkedSales = (sales) => {
+    if (!onNavigate || !sales?.length) return;
+    const dates = sales.map((x) => String(x.sale_date).slice(0, 10)).sort();
+    setCorrection(null);
+    onNavigate('sales', { from_date: dates[0], to_date: dates[dates.length - 1], show_all: true });
   };
 
   return (
     <>
+      <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
       {actionErr && (
         <div className="main-alert-banner" role="alert">
           {actionErr}
         </div>
       )}
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <ExcelUploadBar kinds={['purchase', 'product']} onDone={load} />
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="pur-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="pur-to" />
         </label>
         <label>제품 <select value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">전체</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" className="main-btn" onClick={load}>검색</button>
+        <label>거래처 <select value={partnerFilter} onChange={(e) => setPartnerFilter(e.target.value)}><option value="">전체</option>{purchasePartners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <SearchTextField id="pur-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·출처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        {can('purchase.create') && (
         <button
           type="button"
           className="main-btn"
@@ -667,7 +941,34 @@ function TabPurchases() {
         >
           매입 등록
         </button>
-        <button type="button" className="main-btn" onClick={openConvert}>선택 매출 전환</button>
+        )}
+        {can('sale.convert') && <button type="button" className="main-btn main-btn--secondary" onClick={openConvert}>선택 매출 전환</button>}
+        <label className="ledger-check" title="기간과 상관없이 아직 다 주지 않은 매입만">
+          <input type="checkbox" checked={unpaidOnly} onChange={(e) => setUnpaidOnly(e.target.checked)} /> 미지급만
+        </label>
+        <label className="ledger-check" title="데이터 이관으로 넣은 기초 미지급(이관 기초) 줄도 함께 보기">
+          <input type="checkbox" checked={includeOpening} onChange={(e) => setIncludeOpening(e.target.checked)} /> 이관 기초 포함
+        </label>
+        {can('supplier_payment.create') && (
+        <button
+          type="button"
+          className="main-btn main-btn--secondary"
+          onClick={() => {
+            setActionErr('');
+            // T-201: 체크한 매입이 있으면 그 매입처·그 매입만 채운 상태로 연다(첫 번째 매입의 매입처 기준)
+            const picked = list.filter((r) => selected[r.id] && r.status !== 'cancelled' && Number(r.unpaid_amount) > 0);
+            // T-401 PR-05: 지급은 지급 대상(payee) 기준 — 생산자에게 직접 주는 매입이면 생산자
+            const payeeOf = (r) => r.payee_partner_id ?? r.partner_id;
+            const pid = picked[0] ? payeeOf(picked[0]) : undefined;
+            const ids = picked.filter((r) => payeeOf(r) === pid).map((r) => r.id);
+            if (picked.length > ids.length) setActionErr('지급 등록은 매입처 한 곳씩 합니다 — 첫 번째 매입처의 매입만 채웠습니다.');
+            setPayModal(pid ? { partnerId: pid, purchaseIds: ids } : {});
+          }}
+        >
+          지급 등록
+        </button>
+        )}
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('purchases', fetchPurchases)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       <Modal
         open={showForm}
@@ -678,11 +979,19 @@ function TabPurchases() {
         onClose={() => {
           setShowForm(false);
           setActionErr('');
+          // 취소·바깥 클릭으로 닫으면 입력표를 비운다(다른 모달과 같게, T-109). 저장 실패 시에는 모달이 닫히지 않으므로 입력이 남는다.
+          setPurchaseRows([newPurchaseRow()]);
         }}
         formId="form-purchase-modal"
         submitting={submitting}
       >
         <form id="form-purchase-modal" className="main-modal-form" onSubmit={submitPurchase}>
+          {/* 매뉴얼 8: 서버 검증 실패 메시지를 모달 안에 표시 (탭 상단 배너는 모달에 가려 보이지 않음) */}
+          {actionErr && (
+            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+              {actionErr}
+            </div>
+          )}
           <div className="main-modal-toolbar">
             <button type="button" className="main-modal-toolbar-btn" onClick={addPurchaseRow}>
               ＋ 행 추가
@@ -690,9 +999,19 @@ function TabPurchases() {
             <button type="button" className="main-modal-toolbar-btn" onClick={cloneSelectedPurchaseRows}>
               복제
             </button>
+            {can('partner.create') && (
+            <button type="button" className="main-modal-toolbar-btn" onClick={() => setPartnerAddFor('purchase')}>
+              ＋ 새 거래처
+            </button>
+            )}
+            {can('product.personal') && (
+            <button type="button" className="main-modal-toolbar-btn" onClick={() => setProductAddFor('first-empty')}>
+              ＋ 목록에 없는 품목
+            </button>
+            )}
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table main-table--purchase-modal">
+            <table className="main-table main-table--purchase-modal main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-check">
@@ -704,16 +1023,17 @@ function TabPurchases() {
                   <th className="main-col-qty main-col-qty--purchase-input">수량</th>
                   <th className="main-col-unit-price main-col-unit-price--purchase-input">단가</th>
                   <th className="main-col-date main-col-date--purchase-input">매입일</th>
+                  <th className="main-col-origin">생산자·산지·지급</th>
                   <th className="main-col-row-actions" aria-label="행 삭제" />
                 </tr>
               </thead>
               <tbody>
                 {purchaseRows.map((row) => (
                   <tr key={row.key}>
-                    <td className="main-col-check">
+                    <td data-card="check" className="main-col-check">
                       <input type="checkbox" checked={!!row.selected} onChange={() => togglePurchaseRowSelect(row.key)} />
                     </td>
-                    <td className="main-col-source main-col-source--purchase-input">
+                    <td data-card="wide" data-label="출처" className="main-col-source main-col-source--purchase-input">
                       <input
                         type="text"
                         className="main-input-source-name"
@@ -723,7 +1043,7 @@ function TabPurchases() {
                         onChange={(e) => updatePurchaseRow(row.key, { source_name: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-partner">
+                    <td data-card="wide" data-label="매입 거래처" className="main-col-partner">
                       <select
                         value={row.partner_id}
                         title={
@@ -734,48 +1054,98 @@ function TabPurchases() {
                               })()
                             : ''
                         }
-                        onChange={(e) => updatePurchaseRow(row.key, { partner_id: e.target.value })}
+                        onChange={(e) => {
+                          updatePurchaseRow(row.key, { partner_id: e.target.value });
+                          if (row.product_id) suggestUnitPrice(row.key, row.product_id, e.target.value);
+                        }}
                       >
                         <option value="">선택</option>
-                        {purchasePartners.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} ({p.type})
-                          </option>
-                        ))}
+                        {purchasePartnerGroups.recent.length > 0 ? (
+                          <>
+                            <optgroup label="최근 거래">
+                              {purchasePartnerGroups.recent.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} ({p.type})
+                                </option>
+                              ))}
+                            </optgroup>
+                            {purchasePartnerGroups.rest.length > 0 && (
+                              <optgroup label="그 외 (가나다순)">
+                                {purchasePartnerGroups.rest.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name} ({p.type})
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </>
+                        ) : (
+                          purchasePartners.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} ({p.type})
+                            </option>
+                          ))
+                        )}
                       </select>
                     </td>
-                    <td className="main-col-product">
+                    <td data-card="wide" data-label="상품" className="main-col-product">
                       <select
                         value={row.product_id}
                         title={row.product_id ? products.find((x) => String(x.id) === String(row.product_id))?.name || '' : ''}
-                        onChange={(e) => updatePurchaseRow(row.key, { product_id: e.target.value })}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') {
+                            setProductAddFor(row.key);
+                            return;
+                          }
+                          updatePurchaseRow(row.key, { product_id: e.target.value });
+                          suggestUnitPrice(row.key, e.target.value, row.partner_id);
+                        }}
                       >
                         <option value="">선택</option>
                         {products.map((p) => (
                           <option key={p.id} value={p.id}>
-                            {p.name}
+                            {productOptionLabel(p)}
                           </option>
                         ))}
+                        {can('product.personal') && <option value="__new__">＋ 목록에 없는 품목 추가…</option>}
                       </select>
                     </td>
-                    <td className="main-col-qty main-col-qty--purchase-input">
+                    <td data-card="field" data-label="수량" className="main-col-qty main-col-qty--purchase-input">
                       <input
                         className="main-input-qty main-input-qty--purchase"
                         type="number"
+                        inputMode="decimal"
                         step="0.001"
                         min="0"
                         value={row.quantity}
                         onChange={(e) => updatePurchaseRow(row.key, { quantity: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-unit-price main-col-unit-price--purchase-input">
+                    <td data-card="field" data-label="단가" className="main-col-unit-price main-col-unit-price--purchase-input">
                       <UnitPriceInput
-                        className="main-input-unit-price--purchase"
+                        className={'main-input-unit-price--purchase' + (row.unit_price_auto ? ' main-input-unit-price--suggested' : '')}
                         value={row.unit_price}
-                        onChange={(v) => updatePurchaseRow(row.key, { unit_price: v })}
+                        onChange={(v) => updatePurchaseRow(row.key, { unit_price: v, unit_price_auto: false })}
+                        onFocus={() => {
+                          priceFocusKey.current = row.key;
+                        }}
+                        onBlur={() => {
+                          if (priceFocusKey.current === row.key) priceFocusKey.current = null;
+                        }}
+                        title={row.unit_price_auto ? '최근 매입 단가로 채운 제안값입니다. 바꾸면 입력한 값을 씁니다.' : undefined}
+                        ariaDescribedBy={row.price_hint ? `price-hint-${row.key}` : undefined}
                       />
+                      {row.price_hint && (
+                        <div id={`price-hint-${row.key}`} className="main-price-hint" aria-live="polite">
+                          {row.price_hint.none
+                            ? '최근 매입 없음'
+                            : `최근: ${row.price_hint.purchase_date} · ${formatMoneyInputDisplay(String(row.price_hint.unit_price))}원${
+                                row.price_hint.scope === 'product' && row.partner_id ? ` (다른 거래처: ${row.price_hint.partner_name})` : ''
+                              }`}
+                        </div>
+                      )}
                     </td>
-                    <td className="main-col-date main-col-date--purchase-input">
+                    <td data-card="wide" data-label="매입일" className="main-col-date main-col-date--purchase-input">
                       <input
                         className="main-input-date main-input-date--purchase"
                         type="date"
@@ -783,7 +1153,45 @@ function TabPurchases() {
                         onChange={(e) => updatePurchaseRow(row.key, { purchase_date: e.target.value })}
                       />
                     </td>
-                    <td className="main-col-row-actions">
+                    <td data-card="wide" data-label="생산자·산지·지급" className="main-col-origin">
+                      <div className="main-origin-cell">
+                        <select
+                          aria-label="생산자(출하주)"
+                          value={row.producer_id}
+                          onChange={(e) => {
+                            const pr = producerPartners.find((x) => String(x.id) === e.target.value);
+                            updatePurchaseRow(row.key, {
+                              producer_id: e.target.value,
+                              origin_region: row.origin_region || pr?.origin_region || '',
+                              payee: e.target.value ? row.payee : 'supplier',
+                            });
+                          }}
+                        >
+                          <option value="">생산자 없음</option>
+                          {producerPartners.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}{p.origin_region ? ` (${p.origin_region})` : ''}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          aria-label="산지"
+                          placeholder="산지(예: 해남군)"
+                          maxLength={100}
+                          value={row.origin_region}
+                          onChange={(e) => updatePurchaseRow(row.key, { origin_region: e.target.value })}
+                        />
+                        <select
+                          aria-label="지급 대상"
+                          value={row.producer_id ? row.payee : 'supplier'}
+                          disabled={!row.producer_id}
+                          onChange={(e) => updatePurchaseRow(row.key, { payee: e.target.value })}
+                        >
+                          <option value="supplier">지급: 제공처</option>
+                          <option value="producer">지급: 생산자</option>
+                        </select>
+                      </div>
+                    </td>
+                    <td data-card="action" className="main-col-row-actions">
                       <button
                         type="button"
                         className="main-modal-row-del"
@@ -809,16 +1217,36 @@ function TabPurchases() {
         onClose={() => {
           setShowConvert(false);
           setActionErr('');
+          setConvertCreditWarn(null);
         }}
         formId="form-convert-modal"
         saveLabel="저장"
         submitting={submitting}
       >
         <form id="form-convert-modal" className="main-modal-form" onSubmit={submitConvert}>
+          <CreditLimitWarning
+            warnings={convertCreditWarn}
+            busy={submitting}
+            onConfirm={() => submitConvert(null, true)}
+            onCancel={() => setConvertCreditWarn(null)}
+          />
+          {/* 매뉴얼 8: 서버 검증 실패 메시지를 모달 안에 표시 (탭 상단 배너는 모달에 가려 보이지 않음) */}
+          {actionErr && (
+            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+              {actionErr}
+            </div>
+          )}
           <div className="main-modal-fields main-modal-fields--collect">
             <label className="main-modal-field-select-wide">
               판매처
-              <select required value={convertCustomer} onChange={(e) => setConvertCustomer(e.target.value)}>
+              <select
+                required
+                value={convertCustomer}
+                onChange={(e) => {
+                  setConvertCustomer(e.target.value);
+                  setConvertCreditWarn(null);
+                }}
+              >
                 <option value="">선택</option>
                 {salePartners.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -827,12 +1255,17 @@ function TabPurchases() {
                 ))}
               </select>
             </label>
+            {can('partner.create') && (
+            <button type="button" className="main-modal-toolbar-btn partner-inline-add" onClick={() => setPartnerAddFor('sale')}>
+              ＋ 새 거래처
+            </button>
+            )}
             <label>
               판매일 <input required className="main-input-date" type="date" value={convertDate} onChange={(e) => setConvertDate(e.target.value)} />
             </label>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table main-table--convert-modal">
+            <table className="main-table main-table--convert-modal main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-purchase-id">매입 ID</th>
@@ -845,13 +1278,14 @@ function TabPurchases() {
               <tbody>
                 {convertRows.map((r) => (
                   <tr key={r.purchase_id}>
-                    <td className="num main-col-purchase-id" title={`매입 ID ${r.purchase_id}`}>{r.purchase_id}</td>
-                    <td className="main-td-scroll main-col-product main-col-product--convert"><CellText>{r.product_name}</CellText></td>
-                    <td className="num main-col-qty main-col-qty--convert">{formatKoNumber(r.remaining_qty)}</td>
-                    <td className="main-col-qty main-col-qty--convert">
+                    <td data-card="sub" data-label="매입 ID" className="num main-col-purchase-id" title={`매입 ID ${r.purchase_id}`}>{r.purchase_id}</td>
+                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--convert"><CellText>{r.product_name}</CellText></td>
+                    <td data-card="key" data-label="남은 수량" className="num main-col-qty main-col-qty--convert">{formatKoNumber(r.remaining_qty)}</td>
+                    <td data-card="field" data-label="전환 수량" className="main-col-qty main-col-qty--convert">
                       <input
                         className="main-input-qty main-input-qty--convert"
                         type="number"
+                        inputMode="decimal"
                         step="0.001"
                         min="0"
                         max={r.remaining_qty}
@@ -861,7 +1295,7 @@ function TabPurchases() {
                         }
                       />
                     </td>
-                    <td className="main-col-unit-price main-col-unit-price--convert">
+                    <td data-card="field" data-label="판매 단가" className="main-col-unit-price main-col-unit-price--convert">
                       <UnitPriceInput
                         className="main-input-unit-price--convert"
                         value={r.unit_price}
@@ -877,9 +1311,10 @@ function TabPurchases() {
           </div>
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">매입 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-check">선택</th>
@@ -892,46 +1327,119 @@ function TabPurchases() {
                 <th className="main-col-qty">잔여</th>
                 <th className="main-col-unit-price">단가</th>
                 <th className="main-col-amount">총액</th>
+                <th>지급</th>
+                <th className="main-col-amount">미지급액</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => (
-                <tr key={row.id}>
-                  <td className="main-col-check">
+                <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
+                  <td data-card="check" className="main-col-check">
                     <input
                       type="checkbox"
                       checked={!!selected[row.id]}
                       onChange={() => toggleRow(row.id)}
-                      disabled={Number(row.remaining_qty) <= 0}
+                      disabled={row.status === 'cancelled' || Number(row.remaining_qty) <= 0}
+                      aria-label={`매입 #${row.id} 선택`}
                     />
                   </td>
-                  <td className="main-col-datetime">{formatPurchaseTableDateTime(row)}</td>
-                  <td className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText></td>
-                  <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                  <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
-                  <td className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
-                  <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
-                  <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                  <td data-card="sub" data-label="매입일" className="main-col-datetime">
+                    {formatPurchaseTableDateTime(row)}
+                    {row.status === 'cancelled' && (
+                      <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소된 매입'}>취소</span>
+                    )}
+                  </td>
+                  <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText>{row.producer_name || row.origin_region ? <small className="main-origin-note">{[row.producer_name, row.origin_region].filter(Boolean).join(' · ')}{row.payee_partner_id && row.payee_partner_id !== row.partner_id ? ' · 지급: 생산자' : ''}</small> : null}</td>
+                  <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /><MigrationBadge row={row} /></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                  <td data-card="extra" data-label="매출 반영" className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
+                  <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
+                  <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
+                  <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                  <td data-card="key" data-label="지급"><PurchasePayBadge row={row} /></td>
+                  <td data-card="key" data-label="미지급액" className="num main-col-amount">{row.status === 'cancelled' ? '—' : formatKoNumber(row.unpaid_amount ?? 0)}</td>
+                  <td data-card="action" className="main-col-manage">
+                    <RowActionMenu
+                      label={`매입 #${row.id}`}
+                      state={purchaseMenuState(row)}
+                      onEdit={() => setCorrection({ type: 'edit', row })}
+                      onCancel={() => setCorrection({ type: 'cancel', row })}
+                    />
+                  </td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      {correction?.type === 'cancel' && (
+        <CancelTradeModal
+          kind="purchase"
+          row={correction.row}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+          onGoSales={goLinkedSales}
+        />
+      )}
+      {correction?.type === 'edit' && (
+        <EditPurchaseModal
+          row={correction.row}
+          products={products}
+          partners={purchasePartners.some((p) => p.id === correction.row.partner_id) ? purchasePartners : [...purchasePartners, { id: correction.row.partner_id, name: correction.row.partner_name }]}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+          onGoSales={goLinkedSales}
+        />
+      )}
+      {payModal && (
+        <SupplierPaymentModal
+          partners={partners}
+          initial={payModal}
+          onClose={() => setPayModal(null)}
+          onDone={(msg) => {
+            setPayModal(null);
+            setSelected({});
+            setCorrectionNotice(msg);
+            fetchPartners().then(setPartners).catch(() => {});
+            load();
+          }}
+        />
+      )}
+      <PartnerFormModal
+        open={partnerAddFor !== null}
+        defaultType={partnerAddFor === 'sale' ? 'customer' : 'supplier'}
+        allowedTypes={partnerAddFor === 'sale' ? SALE_ACCOUNT_TYPES : PURCHASE_ACCOUNT_TYPES}
+        onClose={() => setPartnerAddFor(null)}
+        onSaved={onPartnerAdded}
+      />
+      <PersonalProductModal
+        open={productAddFor !== null}
+        onClose={() => setProductAddFor(null)}
+        onSaved={onProductPicked}
+        onUsePublic={onProductPicked}
+      />
     </>
   );
 }
 
-function TabSales() {
-  const [list, setList] = useState([]);
+function TabSales({ navFilter } = {}) {
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('sales');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
-  const [fromDate, setFromDate] = useState(firstDayOfMonth());
-  const [toDate, setToDate] = useState(today());
-  const [partnerId, setPartnerId] = useState('');
+  // 매입 취소가 연결 매출로 막혀 넘어온 경우(T-103) 그 기간·판매처로 시작
+  const [fromDate, setFromDate] = useState(() => navFilter?.from_date || firstDayOfMonth());
+  const [toDate, setToDate] = useState(() => navFilter?.to_date || today());
+  const [partnerId, setPartnerId] = useState(() => (navFilter?.partner_id ? String(navFilter.partner_id) : ''));
+  // 정정(T-103)
+  const [correction, setCorrection] = useState(null);
+  const [correctionNotice, setCorrectionNotice] = useState('');
   const [showCollect, setShowCollect] = useState(false);
   const [collectPartner, setCollectPartner] = useState('');
   const [collectDateTime, setCollectDateTime] = useState(() => defaultCollectDateTime());
@@ -939,10 +1447,13 @@ function TabSales() {
   const [loadingUnpaid, setLoadingUnpaid] = useState(false);
   const [collectSaleSelected, setCollectSaleSelected] = useState({});
   const [collectAlloc, setCollectAlloc] = useState({});
+  // T-401 구분: receive(현금 수금) | discount(정산 할인 — 현금 아님, 주인만)
+  const [collectKind, setCollectKind] = useState('receive');
   const [saleErr, setSaleErr] = useState('');
   const [submitting, setSubmitting] = useState(false);
   /** false: 최초·기본은 수금 완료 매출만 목록 */
-  const [showAllSales, setShowAllSales] = useState(false);
+  const [showAllSales, setShowAllSales] = useState(() => !!navFilter?.show_all);
+  const [includeOpening, setIncludeOpening] = useState(false); // T-403 U-403-06 기초 미수(이관 기초) 보기
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundableSales, setRefundableSales] = useState([]);
   const [loadingRefundable, setLoadingRefundable] = useState(false);
@@ -954,22 +1465,21 @@ function TabSales() {
   /** [saleId]: { quantity, reasonCode, reasonOther } */
   const [refundDraft, setRefundDraft] = useState({});
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
     if (partnerId) params.partner_id = partnerId;
     if (!showAllSales) params.paid_only = '1';
-    fetchSales(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (includeOpening) params.include_opening = '1'; // T-403
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
+  const load = () => paged.reload();
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
@@ -984,9 +1494,8 @@ function TabSales() {
   }, [refundableSales, refundPartnerSearch]);
 
   const newRefundDraft = (s) => {
-    const maxQ = computeRefundPossibleQty(s);
     return {
-      quantity: String(maxQ > 0 ? maxQ : ''),
+      quantity: defaultRefundQty(s),
       reasonCode: REFUND_REASON_CUSTOMER,
       reasonOther: '',
     };
@@ -997,8 +1506,9 @@ function TabSales() {
   const unpaidForPartner = unpaidSales.filter(
     (s) => String(s.partner_id) === String(collectPartner)
       && s.payment_status !== 'paid'
-      && s.status !== 'refunded'
-      && s.status !== 'cancelled',
+      && s.status !== 'cancelled'
+      // 미수는 금액으로 판단(T-219 R-06): 전량 반품이어도 이전 기록에 미수가 남았으면 받을 수 있게
+      && computeUnpaidAmount(s) > 0,
   );
 
   const allocSum = unpaidForPartner.reduce((acc, s) => {
@@ -1009,6 +1519,8 @@ function TabSales() {
 
   const openCollect = async () => {
     setSaleErr('');
+    setCollectKind('receive');
+    setCollectKind('receive');
     setCollectPartner(partnerId || '');
     setCollectDateTime(defaultCollectDateTime());
     setCollectAlloc({});
@@ -1043,13 +1555,13 @@ function TabSales() {
         return {
           sale_id: s.id,
           amount: Number.isNaN(n) ? 0 : n,
-          max_due: Math.max(0, Number(s.total_amount) - Number(s.paid_amount)),
+          max_due: computeUnpaidAmount(s), // 미수 = 총액 − 반품액 − 수금 (반품 규칙 B)
           max_total: Math.max(0, Number(s.total_amount)),
         };
       })
       .filter((a) => a.amount > 0);
     if (allocations.length === 0) {
-      setSaleErr('체크한 매출에 수금 금액을 입력하세요.');
+      setSaleErr(`체크한 매출에 ${collectKind === 'discount' ? '할인' : '수금'} 금액을 입력하세요.`);
       return;
     }
     const invalid = allocations.find((a) => a.amount > a.max_due + 1e-9 || a.amount > a.max_total + 1e-9);
@@ -1070,8 +1582,8 @@ function TabSales() {
       partner_id: parseInt(collectPartner, 10),
       amount: paySum,
       paid_at: paidAtPayload,
-      entry_kind: 'receive',
-      allocations,
+      entry_kind: collectKind === 'discount' ? 'discount' : 'receive',
+      allocations: allocations.map(({ sale_id, amount }) => ({ sale_id, amount })),
     })
       .then(() => {
         setShowCollect(false);
@@ -1110,34 +1622,33 @@ function TabSales() {
     setSaleErr('');
     setSubmitting(true);
     const refundedAt = today();
+    /** 환불이 끝난 매출 수 — 중간 실패 시 목록을 다시 불러와 같은 환불이 두 번 나가지 않게 한다 */
+    let doneCount = 0;
     try {
       for (const s of rows) {
         const d = refundDraft[s.id] || newRefundDraft(s);
-        const qtyStr = String(d.quantity ?? '').trim();
-        if (qtyStr.length < 3) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량은 최소 3자리로 입력하세요. (예: 0.001, 10.5)`);
-        }
-        const qty = Number(d.quantity);
+        // 수량은 형식(글자 수)이 아니라 범위로 검증 — 기본값(환불 가능 수량)을 그대로 저장할 수 있어야 한다 (T-107)
         const maxQ = computeRefundPossibleQty(s);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량을 입력하세요.`);
+        const qtyErr = validateRefundQty(d.quantity, maxQ, formatKoNumber(maxQ));
+        if (qtyErr) {
+          throw new Error(`매출 #${s.id}: ${qtyErr}`);
         }
-        if (qty > maxQ + 1e-9) {
-          throw new Error(`매출 #${s.id}: 환불 요청수량이 환불 가능 수량(${formatKoNumber(maxQ)})을 초과합니다.`);
-        }
+        const qty = Number(String(d.quantity).trim().replace(/,/g, ''));
         const rc = d.reasonCode || REFUND_REASON_CUSTOMER;
         if (rc === REFUND_REASON_CUSTOM && !String(d.reasonOther ?? '').trim()) {
           throw new Error(`매출 #${s.id}: 직접 기입 사유를 입력하세요.`);
         }
         const reasonText = buildRefundReasonFromDraft(d);
-        const autoAmt = computeAutoRefundAmount(s, qty);
+        // 반품 규칙 B: 화면에 보인 반품 금액을 그대로 보낸다. 미수 차감·환불금은 서버가 같은 식으로 정한다
+        const preview = computeReturnPreview(s, qty);
         const body = {
           quantity: qty,
+          return_amount: preview.returnAmount,
           refunded_at: refundedAt,
           reason: reasonText || undefined,
         };
-        if (autoAmt > 0) body.refund_amount = autoAmt;
         await refundSale(s.id, body);
+        doneCount += 1;
       }
       setShowRefundModal(false);
       setRefundableSales([]);
@@ -1146,15 +1657,52 @@ function TabSales() {
       setRefundReasonUnified(false);
       load();
     } catch (er) {
-      setSaleErr(er.message || '환불 실패');
+      const msg = er.message || '환불 실패';
+      if (doneCount > 0) {
+        // 처리된 매출은 환불 가능 수량·수금액이 바뀌었으므로 최신 값으로 다시 불러오고 선택·입력을 비운다
+        setSaleErr(`${doneCount}건은 환불 처리되었습니다. 목록을 새로 불러왔으니 남은 건을 다시 선택하세요. (${msg})`);
+        setRefundSaleSelected({});
+        setRefundDraft({});
+        try {
+          setRefundableSales(await fetchSales({ refundable_only: '1' }));
+        } catch {
+          /* 다시 불러오기 실패 시 기존 메시지만 표시 */
+        }
+        load();
+      } else {
+        setSaleErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
+  // 거래명세서 (T-105) — 위 필터의 거래처·기간으로 명세서 화면을 같은 탭에서 연다(로그인 정보가 탭 단위라 새 창 대신)
+  const openStatement = () => {
+    if (!partnerId) {
+      setSaleErr('거래명세서를 볼 거래처를 먼저 선택하세요.');
+      return;
+    }
+    setSaleErr('');
+    const q = new URLSearchParams({
+      partner_id: partnerId,
+      from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
+      to_date: sanitizeYmd(toDate, today()),
+    });
+    window.location.assign(`/statement?${q.toString()}`);
+  };
+
+  const onCorrectionDone = (msg) => {
+    setCorrection(null);
+    setCorrectionNotice(msg);
+    load();
+  };
+
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
+      <ExcelUploadBar kinds={['sale', 'convert']} onDone={load} />
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="sale-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="sale-to" />
@@ -1164,16 +1712,27 @@ function TabSales() {
           <input type="checkbox" checked={showAllSales} onChange={(e) => setShowAllSales(e.target.checked)} />
           미수·일부 포함
         </label>
-        <button type="button" onClick={load}>검색</button>
-        <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>
-        <button type="button" className="main-btn" onClick={openRefundModal}>
+        <label className="main-filter-checkbox" title="데이터 이관으로 넣은 기초 미수(이관 기초) 줄도 함께 보기 — 미수·일부 포함과 같이 켜세요">
+          <input type="checkbox" checked={includeOpening} onChange={(e) => setIncludeOpening(e.target.checked)} />
+          이관 기초 포함
+        </label>
+        <SearchTextField id="sale-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·메모·거래처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        {can('payment.create') && <button type="button" className="main-btn" onClick={openCollect}>수금 등록</button>}
+        {can('sale.refund') && (
+        <button type="button" className="main-btn main-btn--secondary" onClick={openRefundModal}>
           환불 처리
         </button>
+        )}
+        <button type="button" className="main-btn main-btn--secondary" onClick={openStatement}>
+          거래명세서
+        </button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('sales', fetchSales)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       {!showCollect && !showRefundModal && saleErr && <p className="main-error">{saleErr}</p>}
       <Modal
         open={showCollect}
-        title="수금 등록 (미수 매출 배분)"
+        title={collectKind === 'discount' ? '정산 할인 등록 (미수 매출 배분)' : '수금 등록 (미수 매출 배분)'}
         wide
         fill
         modalClassName="main-modal--collect"
@@ -1188,8 +1747,38 @@ function TabSales() {
       >
         <form id="form-collect-modal" className="main-modal-form" onSubmit={submitCollect}>
           {saleErr && (
-            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+            <div className="main-alert-banner" role="alert">
               {saleErr}
+            </div>
+          )}
+          {can('payment.discount') && (
+            <div className="main-collect-kind" role="radiogroup" aria-label="구분">
+              <span className="main-collect-kind-label">구분</span>
+              {[['receive', '현금 수금'], ['discount', '정산 할인']].map(([k, label]) => (
+                <label key={k} className={'main-collect-kind-opt' + (collectKind === k ? ' is-on' : '')}>
+                  <input type="radio" name="collect-kind" value={k} checked={collectKind === k} onChange={() => setCollectKind(k)} />
+                  {label}
+                </label>
+              ))}
+              {collectKind === 'discount' && (
+                <>
+                  <small className="main-modal-hint">깎아 준 금액만 미수에서 뺍니다. 현금 수금 합계에는 들어가지 않습니다.</small>
+                  <button
+                    type="button"
+                    className="main-btn main-btn--ghost main-btn--sm"
+                    disabled={unpaidForPartner.length === 0}
+                    onClick={() => {
+                      const next = {};
+                      unpaidForPartner.forEach((s) => {
+                        if (collectSaleSelected[s.id]) next[s.id] = String(computeUnpaidAmount(s));
+                      });
+                      setCollectAlloc(next);
+                    }}
+                  >
+                    남은 미수 할인 처리
+                  </button>
+                </>
+              )}
             </div>
           )}
           <div className="main-modal-fields">
@@ -1231,7 +1820,7 @@ function TabSales() {
           )}
           {!loadingUnpaid && unpaidForPartner.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap">
-              <table className="main-table">
+              <table className="main-table main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -1264,25 +1853,25 @@ function TabSales() {
                 </thead>
                 <tbody>
                   {unpaidForPartner.map((s) => {
-                    const due = Number(s.total_amount) - Number(s.paid_amount);
+                    const due = computeUnpaidAmount(s);
                     return (
                       <tr key={s.id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!collectSaleSelected[s.id]}
                             onChange={() => setCollectSaleSelected((m) => ({ ...m, [s.id]: !m[s.id] }))}
                           />
                         </td>
-                        <td className="main-col-datetime main-collect-datetime-cell">{formatSaleDateTime(s)}</td>
-                        <td className="main-td-scroll main-col-partner"><CellText>{s.partner_name}</CellText></td>
-                        <td className="main-td-scroll main-col-partner"><CellText>{s.partner_location || '—'}</CellText></td>
-                        <td className="main-td-scroll main-col-product"><CellText>{s.product_name}</CellText></td>
-                        <td className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(s.total_amount)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(due)}</td>
-                        <td className="main-col-amount">
+                        <td data-card="sub" data-label="매출일" className="main-col-datetime main-collect-datetime-cell">{formatSaleDateTime(s)}</td>
+                        <td data-card="extra" data-label="판매처" className="main-td-scroll main-col-partner"><CellText>{s.partner_name}</CellText></td>
+                        <td data-card="extra" data-label="납품/위치" className="main-td-scroll main-col-partner"><CellText>{s.partner_location || '—'}</CellText></td>
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{s.product_name}</CellText></td>
+                        <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
+                        <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(s.total_amount)}</td>
+                        <td data-card="extra" data-label="기수금" className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
+                        <td data-card="key" data-label="미수" className="num main-col-amount">{formatKoNumber(due)}</td>
+                        <td data-card="wide" data-label="현재 수금금액" className="main-col-amount">
                           <CollectAmountInput
                             disabled={!collectSaleSelected[s.id]}
                             placeholder={`최대 ${formatKoNumber(due)}`}
@@ -1291,6 +1880,7 @@ function TabSales() {
                             onChange={(v) => setCollectAlloc((m) => ({ ...m, [s.id]: v }))}
                           />
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -1302,7 +1892,7 @@ function TabSales() {
       </Modal>
       <Modal
         open={showRefundModal}
-        title="환불 처리 (수금 발생 매출)"
+        title="환불 처리 (반품)"
         wide
         fill
         modalClassName="main-modal--refund"
@@ -1319,7 +1909,7 @@ function TabSales() {
       >
         <form id="form-refund-batch-modal" className="main-modal-form" onSubmit={submitRefundBatch}>
           {saleErr && (
-            <div className="main-alert-banner" role="alert" style={{ marginBottom: '0.75rem' }}>
+            <div className="main-alert-banner" role="alert">
               {saleErr}
             </div>
           )}
@@ -1361,19 +1951,19 @@ function TabSales() {
               사유 통일
             </label>
             <span className="main-modal-hint main-modal-hint--refund">
-              수금이 한 번이라도 발생한 매출만 표시됩니다. 체크한 행만 순서대로 환불 처리됩니다. 환불일은 저장 시 오늘 날짜로 적용됩니다.
+              반품 금액은 미수에서 먼저 빠지고, 이미 받은 돈이 남은 매출액보다 많아지는 만큼만 환불금으로 돌려줍니다(외상 매출도 반품 가능). 체크한 행만 순서대로 처리되며 환불일은 저장 시 오늘 날짜입니다.
             </span>
           </div>
           {loadingRefundable && <p className="main-loading">환불 가능 매출 불러오는 중…</p>}
           {!loadingRefundable && refundableSales.length === 0 && (
-            <p className="main-empty">표시할 매출이 없습니다. (수금 발생·잔여 수량 필요)</p>
+            <p className="main-empty">표시할 매출이 없습니다. (반품 가능 수량이 남은 매출만 표시)</p>
           )}
           {!loadingRefundable && refundableSales.length > 0 && refundableFiltered.length === 0 && (
             <p className="main-empty">검색 조건에 맞는 거래처 매출이 없습니다.</p>
           )}
           {!loadingRefundable && refundableFiltered.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap main-modal-refund-wrap">
-              <table className="main-table main-table--refund-modal">
+              <table className="main-table main-table--refund-modal main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -1416,8 +2006,8 @@ function TabSales() {
                       환불 가능 수량
                     </th>
                     <th className="main-col-qty">환불 요청수량</th>
-                    <th className="main-col-amount">매출 금액</th>
-                    <th className="main-col-amount" title="(환불 요청수량 ÷ 총 수량) × 매출 금액">
+                    <th className="main-col-amount" title="반품 전 미수 = 총액 − 반품액 − 수금액">미수</th>
+                    <th className="main-col-amount" title="반품 금액 = 남은 매출액 × (환불 요청수량 ÷ 환불 가능 수량). 아래 줄: 미수에서 빼는 금액 · 현금으로 돌려줄 환불금">
                       반품 금액
                     </th>
                     <th className="main-th-refund-reason">사유</th>
@@ -1429,7 +2019,7 @@ function TabSales() {
                     const collected = computeCollectedQty(s);
                     const d = refundDraft[s.id] || newRefundDraft(s);
                     const reqQty = Number(d.quantity);
-                    const autoReturn = computeAutoRefundAmount(s, Number.isFinite(reqQty) ? reqQty : 0);
+                    const preview = computeReturnPreview(s, Number.isFinite(reqQty) ? reqQty : 0);
                     const applyReason = (patch) => {
                       setRefundDraft((prev) => {
                         if (!refundReasonUnified) {
@@ -1444,7 +2034,7 @@ function TabSales() {
                     };
                     return (
                       <tr key={s.id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!refundSaleSelected[s.id]}
@@ -1462,20 +2052,20 @@ function TabSales() {
                             }}
                           />
                         </td>
-                        <td className="main-col-partner main-td-partner">
+                        <td data-card="sub" data-label="거래처" className="main-col-partner main-td-partner">
                           <CellText>{s.partner_name}</CellText>
                         </td>
-                        <td className="main-col-datetime main-col-datetime-full">
+                        <td data-card="sub" data-label="매출일" className="main-col-datetime main-col-datetime-full">
                           <span className="main-sale-datetime-line">{formatSaleDateTime(s)}</span>
                         </td>
-                        <td className="main-td-scroll main-col-product">
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
                           <CellText>{s.product_name}</CellText>
                         </td>
-                        <td className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(collected)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(s.refunded_qty || 0)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(maxQ)}</td>
-                        <td className="main-col-qty">
+                        <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(s.quantity)}</td>
+                        <td data-card="extra" data-label="수금 수량" className="num main-col-qty">{formatKoNumber(collected)}</td>
+                        <td data-card="extra" data-label="환불된 수량" className="num main-col-qty">{formatKoNumber(s.refunded_qty || 0)}</td>
+                        <td data-card="key" data-label="환불 가능 수량" className="num main-col-qty">{formatKoNumber(maxQ)}</td>
+                        <td data-card="field" data-label="환불 요청수량" className="main-col-qty">
                           <input
                             className="main-input-qty main-input-qty-refund"
                             type="text"
@@ -1491,13 +2081,22 @@ function TabSales() {
                             }
                           />
                         </td>
-                        <td className="num main-col-amount">{formatKoNumber(s.paid_amount)}</td>
-                        <td className="num main-col-amount main-col-amount-readonly">
-                          {refundSaleSelected[s.id] && Number.isFinite(reqQty) && reqQty > 0
-                            ? formatKoNumber(autoReturn)
-                            : '—'}
+                        <td data-card="key" data-label="미수" className="num main-col-amount">{formatKoNumber(computeUnpaidAmount(s))}</td>
+                        <td data-card="wide" data-label="반품 금액" className="num main-col-amount main-col-amount-readonly">
+                          {refundSaleSelected[s.id] && Number.isFinite(reqQty) && reqQty > 0 ? (
+                            <>
+                              {formatKoNumber(preview.returnAmount)}
+                              <small className="main-refund-split">
+                                미수 차감 {formatKoNumber(preview.creditAmount)}
+                                {preview.discountReversal > 0 ? ` · 할인 되돌림 ${formatKoNumber(preview.discountReversal)}` : ''} · 환불 {formatKoNumber(preview.refundAmount)}
+                                {preview.blockedByOffset ? ' · 상계로 정리된 매출 — 상계 취소 후 반품' : ''}
+                              </small>
+                            </>
+                          ) : (
+                            '—'
+                          )}
                         </td>
-                        <td className="main-td-refund-reason">
+                        <td data-card="wide" data-label="사유" className="main-td-refund-reason">
                           <div className="main-refund-reason-cell">
                             <select
                               className="main-refund-reason-select"
@@ -1544,6 +2143,7 @@ function TabSales() {
                             )}
                           </div>
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -1553,6 +2153,7 @@ function TabSales() {
           )}
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? (
         <p className="main-loading">불러오는 중…</p>
       ) : err ? (
@@ -1564,7 +2165,7 @@ function TabSales() {
         </p>
       ) : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">매출일</th>
@@ -1576,22 +2177,46 @@ function TabSales() {
                 <th className="main-col-amount">총액</th>
                 <th>수금</th>
                 <th>상태</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => {
                 const rf = Number(row.refunded_qty || 0);
                 return (
-                  <tr key={row.id}>
-                    <td className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
-                    <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                    <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                    <td className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
-                    <td className="num main-col-qty">{formatKoNumber(rf)}</td>
-                    <td className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
-                    <td className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
-                    <td>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</td>
-                    <td>{row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}</td>
+                  <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
+                    <td data-card="sub" data-label="매출일" className="main-col-datetime main-col-datetime-full">{formatSaleDateTime(row)}</td>
+                    <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
+                    <td data-card="title" data-label="상품" className="main-td-scroll main-col-product">
+                      <CellText>{row.product_name}</CellText>
+                      <StaffEntryBadge row={row} />
+                      <MigrationBadge row={row} />
+                      {row.entry_mode === 'fifo' && (
+                        <span className="fifo-badge" title={`재고에서 오래된 매입부터 나간 판매${row.allocation_count > 1 ? ` (매입 ${row.allocation_count}건에서)` : ''}`}>재고 판매</span>
+                      )}
+                    </td>
+                    <td data-card="key" data-label="총 수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
+                    <td data-card="extra" data-label="환불된 수량" className="num main-col-qty">{formatKoNumber(rf)}</td>
+                    <td data-card="extra" data-label="단가" className="num main-col-unit-price">{formatKoNumber(row.unit_price)}</td>
+                    <td data-card="key" data-label="총액" className="num main-col-amount">{formatKoNumber(row.total_amount)}</td>
+                    <td data-card="key" data-label="수금"><span className={'main-status main-status--pay-' + (row.payment_status || 'unpaid')}>{row.payment_status === 'paid' ? '완료' : row.payment_status === 'partial' ? '일부' : '미수'}</span></td>
+                    <td data-card="key" data-label="상태">
+                      <span
+                        className={'main-status main-status--sale-' + (row.status || 'normal')}
+                        title={row.status === 'cancelled' && row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : undefined}
+                      >
+                        {row.status === 'refunded' ? '전액환불' : row.status === 'cancelled' ? '취소' : '정상'}
+                      </span>
+                    </td>
+                    <td data-card="action" className="main-col-manage">
+                      <RowActionMenu
+                        label={`매출 #${row.id}`}
+                        state={saleMenuState(row)}
+                        onEdit={() => setCorrection({ type: 'edit', row })}
+                        onCancel={() => setCorrection({ type: 'cancel', row })}
+                      />
+                    </td>
+                    <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                   </tr>
                 );
               })}
@@ -1599,65 +2224,129 @@ function TabSales() {
           </table>
         </div>
       )}
+      {correction?.type === 'cancel' && (
+        <CancelTradeModal kind="sale" row={correction.row} onClose={() => setCorrection(null)} onDone={onCorrectionDone} onReload={load} />
+      )}
+      {correction?.type === 'edit' && (
+        <EditSaleModal
+          row={correction.row}
+          partners={salePartners.some((p) => p.id === correction.row.partner_id) ? salePartners : [...salePartners, { id: correction.row.partner_id, name: correction.row.partner_name }]}
+          onClose={() => setCorrection(null)}
+          onDone={onCorrectionDone}
+          onReload={load}
+        />
+      )}
     </>
   );
 }
 
 function TabPayments() {
-  const [list, setList] = useState([]);
+  // T-211 목록 검색·페이지(서버 limit/offset)
+  const paged = usePagedList('payments');
+  const { list, loading, err } = paged;
+  // T-401 매출 할인 취소(주인만) — { row } 이면 사유 입력 창
+  const [cancelRow, setCancelRow] = useState(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelErr, setCancelErr] = useState('');
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const submitCancel = async (e) => {
+    e.preventDefault();
+    if (!cancelReason.trim()) { setCancelErr('취소 사유를 입력하세요.'); return; }
+    setCancelBusy(true);
+    setCancelErr('');
+    try {
+      await cancelPayment(cancelRow.id, { reason: cancelReason.trim(), expected_updated_at: cancelRow.updated_at || undefined });
+      setCancelRow(null);
+      paged.reload();
+    } catch (er) {
+      setCancelErr(er.message);
+    } finally {
+      setCancelBusy(false);
+    }
+  };
+  const [searchText, setSearchText] = useState('');
   const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [partnerId, setPartnerId] = useState('');
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
     if (partnerId) params.partner_id = partnerId;
-    fetchPayments(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
   useEffect(() => { fetchPartners().then(setPartners).catch(() => {}); }, []);
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
   return (
     <>
+      <ExcelUploadBar kinds={['payment', 'offset']} onDone={() => paged.reload()} />
       <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="pay-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="pay-to" />
         </label>
         <label>거래처 <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}><option value="">전체</option>{partners.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <button type="button" onClick={load}>검색</button>
+        <SearchTextField id="pay-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="메모·거래처" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('payments', fetchPayments)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
+      <Modal
+        open={!!cancelRow}
+        title="매출 할인 취소"
+        onClose={() => setCancelRow(null)}
+        formId="form-discount-cancel"
+        saveLabel="취소 실행"
+        saveLabel="취소 실행"
+        submitting={cancelBusy}
+        saveDisabled={!cancelReason.trim()}
+      >
+        <form id="form-discount-cancel" className="main-modal-form" onSubmit={submitCancel}>
+          {cancelErr && <div className="main-alert-banner" role="alert">{cancelErr}</div>}
+          {cancelRow && (
+            <p className="main-modal-hint">
+              {cancelRow.partner_name} · 할인 {formatKoNumber(cancelRow.amount)}원을 취소합니다. 지우지 않고 「취소」로 남기며, 그 금액만큼 미수가 다시 늘어납니다.
+            </p>
+          )}
+          <label className="main-modal-field-select-wide">
+            취소 사유
+            <input type="text" maxLength={200} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="예: 금액 오입력" required />
+          </label>
+        </form>
+      </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">수금 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">수금일</th>
                 <th>구분</th>
                 <th className="main-col-partner">거래처</th>
                 <th className="main-col-amount">금액</th>
-                <th>비고</th>
+                <th className="main-col-memo">비고</th>
+                <th className="main-col-manage">관리</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => (
-                <tr key={row.id}>
-                  <td className="main-col-datetime">{formatPaymentDateTime(row)}</td>
-                  <td>{(row.entry_kind || 'receive') === 'refund' ? '환불' : '수금'}</td>
-                  <td className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td className="num main-col-amount">{formatKoNumber(row.amount)}</td>
-                  <td>{row.memo || '-'}</td>
+                <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
+                  <td data-card="sub" data-label="수금일" className="main-col-datetime">{formatPaymentDateTime(row)}</td>
+                  <td data-card="key" data-label="구분"><span className={'main-status main-status--entry-' + (row.entry_kind || 'receive')}>{ENTRY_KIND_LABEL[row.entry_kind || 'receive'] || '수금'}</span>{row.status === 'cancelled' && <span className="tc-badge-cancelled" title={row.cancel_reason ? `취소 사유: ${row.cancel_reason}` : '취소됨'}>취소</span>}</td>
+                  <td data-card="title" data-label="거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText><StaffEntryBadge row={row} /></td>
+                  <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(row.amount)}</td>
+                  <td data-card="key" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
+                  <td data-card="action" className="main-col-manage">
+                    {row.entry_kind === 'discount' && row.status !== 'cancelled' && can('payment.discount_cancel') && (
+                      <button type="button" className="main-btn main-btn--secondary" onClick={() => { setCancelRow(row); setCancelReason(''); setCancelErr(''); }} aria-label={`할인 #${row.id} 취소`}>할인 취소</button>
+                    )}
+                    {row.entry_kind === 'offset' && row.status !== 'cancelled' && <span className="main-modal-hint" title="상계는 거래처 원장에서 지급 쪽과 함께 취소합니다">원장에서 상계 취소</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1684,7 +2373,8 @@ function TabProductMaster() {
   const load = () => {
     setLoading(true);
     setErr('');
-    const params = {};
+    // T-216: 상품 마스터는 공용 품목만 (관리자 본인의 개인 품목은 섞지 않는다)
+    const params = { scope: 'public' };
     if (categoryLarge) params.category_large = categoryLarge;
     if (categoryMid) params.category_mid = categoryMid;
     if (categorySmall) params.category_small = categorySmall;
@@ -1752,7 +2442,7 @@ function TabProductMaster() {
 
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+      <div className="main-filters">
         <label>대분류
           <select value={categoryLarge} onChange={(e) => setCategoryLarge(e.target.value)}>
             <option value="">전체</option>
@@ -1772,9 +2462,9 @@ function TabProductMaster() {
           </select>
         </label>
         <label>이름 검색
-          <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" style={{ width: '140px' }} />
+          <input type="text" value={nameSearch} onChange={(e) => setNameSearch(e.target.value)} placeholder="상품명" className="main-input-search" />
         </label>
-        <button type="button" className="main-btn" onClick={load}>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
           검색
         </button>
         <button
@@ -1790,6 +2480,9 @@ function TabProductMaster() {
         </button>
       </div>
 
+      {/* T-216: 중매인이 올린 개인 품목의 공용 등록 요청 — 승인하면 위 공용 목록에 들어온다 */}
+      <ProductRequestAdminPanel onChanged={load} />
+
       <Modal
         open={showForm}
         title="상품 등록"
@@ -1803,14 +2496,14 @@ function TabProductMaster() {
         submitting={submitting}
       >
         <form id="form-product-modal" className="main-modal-form product-master-form product-master-form--modal" onSubmit={submitProducts}>
-          {submitErr && <p className="main-error" style={{ marginBottom: '8px' }}>{submitErr}</p>}
+          {submitErr && <p className="main-error main-error--inline" role="alert">{submitErr}</p>}
           <div className="main-modal-toolbar">
             <button type="button" className="main-modal-toolbar-btn" onClick={addProductRow}>
               ＋ 행 추가
             </button>
           </div>
           <div className="main-table-wrap main-modal-table-wrap">
-            <table className="main-table">
+            <table className="main-table main-table--form">
               <thead>
                 <tr>
                   <th className="main-col-product">상품명 *</th>
@@ -1825,13 +2518,13 @@ function TabProductMaster() {
               <tbody>
                 {productRows.map((row) => (
                   <tr key={row.key}>
-                    <td className="main-col-product"><input value={row.name} onChange={(e) => updateProductRow(row.key, { name: e.target.value })} placeholder="필수" /></td>
-                    <td><input value={row.unit} onChange={(e) => updateProductRow(row.key, { unit: e.target.value })} /></td>
-                    <td><input value={row.category_large} onChange={(e) => updateProductRow(row.key, { category_large: e.target.value })} /></td>
-                    <td><input value={row.category_mid} onChange={(e) => updateProductRow(row.key, { category_mid: e.target.value })} /></td>
-                    <td><input value={row.category_small} onChange={(e) => updateProductRow(row.key, { category_small: e.target.value })} /></td>
-                    <td><input value={row.memo} onChange={(e) => updateProductRow(row.key, { memo: e.target.value })} /></td>
-                    <td className="main-col-row-actions">
+                    <td data-card="wide" data-label="상품명" className="main-col-product"><input value={row.name} onChange={(e) => updateProductRow(row.key, { name: e.target.value })} placeholder="필수" /></td>
+                    <td data-card="field" data-label="단위"><input value={row.unit} onChange={(e) => updateProductRow(row.key, { unit: e.target.value })} /></td>
+                    <td data-card="field" data-label="대분류"><input value={row.category_large} onChange={(e) => updateProductRow(row.key, { category_large: e.target.value })} /></td>
+                    <td data-card="field" data-label="중분류"><input value={row.category_mid} onChange={(e) => updateProductRow(row.key, { category_mid: e.target.value })} /></td>
+                    <td data-card="field" data-label="소분류"><input value={row.category_small} onChange={(e) => updateProductRow(row.key, { category_small: e.target.value })} /></td>
+                    <td data-card="wide" data-label="비고"><input value={row.memo} onChange={(e) => updateProductRow(row.key, { memo: e.target.value })} /></td>
+                    <td data-card="action" className="main-col-row-actions">
                       <button
                         type="button"
                         className="main-modal-row-del"
@@ -1852,7 +2545,7 @@ function TabProductMaster() {
 
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">등록된 상품이 없습니다. 검색 조건을 바꾸거나 상품 등록으로 추가하세요.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th>ID</th>
@@ -1862,22 +2555,23 @@ function TabProductMaster() {
                 <th>대분류</th>
                 <th>중분류</th>
                 <th>소분류</th>
-                <th>비고</th>
+                <th className="main-col-memo">비고</th>
                 <th className="main-col-date">등록일</th>
               </tr>
             </thead>
             <tbody>
               {list.map((row) => (
                 <tr key={row.id}>
-                  <td className="num">{row.id}</td>
-                  <td>{row.product_key || '-'}</td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.name}</CellText></td>
-                  <td>{row.unit}</td>
-                  <td>{row.category_large || '-'}</td>
-                  <td>{row.category_mid || '-'}</td>
-                  <td>{row.category_small || '-'}</td>
-                  <td>{row.memo || '-'}</td>
-                  <td className="main-col-date">{formatProductCreatedYmd(row)}</td>
+                  <td data-card="extra" data-label="ID" className="num">{row.id}</td>
+                  <td data-card="sub" data-label="상품 키">{row.product_key || '-'}</td>
+                  <td data-card="title" data-label="상품명" className="main-td-scroll main-col-product"><CellText>{row.name}</CellText></td>
+                  <td data-card="key" data-label="단위">{row.unit}</td>
+                  <td data-card="key" data-label="대분류">{row.category_large || '-'}</td>
+                  <td data-card="extra" data-label="중분류">{row.category_mid || '-'}</td>
+                  <td data-card="extra" data-label="소분류">{row.category_small || '-'}</td>
+                  <td data-card="extra" data-label="비고" className="main-col-memo">{row.memo || '-'}</td>
+                  <td data-card="key" data-label="등록일" className="main-col-date">{formatProductCreatedYmd(row)}</td>
+                  <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                 </tr>
               ))}
             </tbody>
@@ -1889,9 +2583,10 @@ function TabProductMaster() {
 }
 
 function TabDisposals() {
-  const [list, setList] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
+  // T-211 목록 검색·페이지(서버 limit/offset) — 폐기는 거래처가 없어 텍스트 검색만
+  const paged = usePagedList('disposals');
+  const { list, loading, err } = paged;
+  const [searchText, setSearchText] = useState('');
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [inventoryForDisposal, setInventoryForDisposal] = useState([]);
@@ -1905,19 +2600,17 @@ function TabDisposals() {
   const [submitting, setSubmitting] = useState(false);
   const [showDisposalModal, setShowDisposalModal] = useState(false);
 
-  const load = () => {
-    setLoading(true);
-    setErr('');
+  const buildParams = () => {
     const params = {};
     if (fromDate) params.from_date = sanitizeYmd(fromDate, firstDayOfMonth());
     if (toDate) params.to_date = sanitizeYmd(toDate, today());
-    fetchDisposals(params)
-      .then(setList)
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+    if (searchText.trim()) params.q = searchText.trim();
+    return params;
   };
+  const runSearch = () => paged.search(buildParams());
+  const load = () => paged.reload();
   useEffect(() => {
-    load();
+    runSearch();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 최초 진입 시 필터 기준 1회 검색만; 이후는 검색 버튼
   }, []);
 
@@ -2038,9 +2731,12 @@ function TabDisposals() {
       return;
     }
     setSubmitting(true);
+    /** 폐기 등록이 끝난 상품 — 중간 실패 시 재고를 다시 불러와 같은 폐기가 두 번 나가지 않게 한다 */
+    let doneCount = 0;
     try {
       for (const p of payload) {
         await createDisposal(p);
+        doneCount += 1;
       }
       setShowDisposalModal(false);
       setInventoryForDisposal([]);
@@ -2048,7 +2744,20 @@ function TabDisposals() {
       setDisposalDraft({});
       load();
     } catch (er) {
-      setActionErr(er.message || '폐기 등록 실패');
+      const msg = er.message || '폐기 등록 실패';
+      if (doneCount > 0) {
+        setActionErr(`${doneCount}건은 폐기 등록되었습니다. 재고를 새로 불러왔으니 남은 건을 다시 선택하세요. (${msg})`);
+        setDisposalSelected({});
+        setDisposalDraft({});
+        try {
+          setInventoryForDisposal(await fetchInventory());
+        } catch {
+          /* 다시 불러오기 실패 시 기존 메시지만 표시 */
+        }
+        load();
+      } else {
+        setActionErr(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2056,15 +2765,19 @@ function TabDisposals() {
 
   return (
     <>
-      <div className="main-filters" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters">
         <label className="main-date-filter">
           기간 <DateSearchField value={fromDate} onChange={setFromDate} id="disp-from" /> ~{' '}
           <DateSearchField value={toDate} onChange={setToDate} id="disp-to" />
         </label>
-        <button type="button" onClick={load}>검색</button>
+        <SearchTextField id="disp-q" value={searchText} onChange={setSearchText} onSubmit={runSearch} placeholder="품목·사유·메모" />
+        <button type="button" className="main-btn main-btn--secondary" onClick={runSearch}>검색</button>
+        {can('disposal.create') && (
         <button type="button" className="main-btn" onClick={openDisposalModal}>
           폐기 등록
         </button>
+        )}
+        <button type="button" className="main-btn main-btn--secondary" onClick={() => paged.downloadAll('disposals', fetchDisposals)} disabled={loading || paged.total === 0 || paged.downloading} aria-busy={paged.downloading} title="검색 조건에 맞는 전체 목록(모든 페이지)을 저장합니다">{paged.downloading ? '엑셀(CSV) 다운로드 중…' : '엑셀(CSV) 다운로드'}</button>
       </div>
       <Modal
         open={showDisposalModal}
@@ -2087,7 +2800,7 @@ function TabDisposals() {
         saveDisabled={loadingInventory || inventoryForDisposal.length === 0}
       >
         <form id="form-disposal-modal" className="main-modal-form" onSubmit={submitDisposals}>
-          {actionErr && <p className="main-error" style={{ marginBottom: '8px' }}>{actionErr}</p>}
+          {actionErr && <p className="main-error main-error--inline" role="alert">{actionErr}</p>}
           <div className="main-modal-fields main-modal-fields--disposal-search">
             <label className="main-modal-field-disposal-search">
               출처·매입 거래처 검색
@@ -2130,7 +2843,7 @@ function TabDisposals() {
           )}
           {!loadingInventory && invFiltered.length > 0 && (
             <div className="main-table-wrap main-modal-table-wrap main-modal-disposal-wrap">
-              <table className="main-table main-table--disposal-modal">
+              <table className="main-table main-table--disposal-modal main-table--form">
                 <thead>
                   <tr>
                     <th className="main-col-check">
@@ -2157,32 +2870,33 @@ function TabDisposals() {
                     const d = disposalDraft[pid] || newDisposalInventoryDraft();
                     return (
                       <tr key={row.product_id}>
-                        <td className="main-col-check">
+                        <td data-card="check" className="main-col-check">
                           <input
                             type="checkbox"
                             checked={!!disposalSelected[pid]}
                             onChange={() => toggleDisposalRowSelect(row.product_id)}
                           />
                         </td>
-                        <td className="main-td-scroll main-col-product main-col-product--disposal">
+                        <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--disposal">
                           <CellText>{row.product_name}</CellText>
                         </td>
-                        <td className="num main-col-qty">
+                        <td data-card="key" data-label="재고 수량" className="num main-col-qty">
                           <span className="main-qty-unit-inline">
                             {formatKoNumber(row.quantity)}
                           </span>
                         </td>
-                        <td className="main-td-scroll main-col-source">
+                        <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source">
                           <CellText>{(row.last_source_name && String(row.last_source_name).trim()) || '—'}</CellText>
                         </td>
-                        <td className="main-td-scroll main-col-partner">
+                        <td data-card="extra" data-label="매입 거래처" className="main-td-scroll main-col-partner">
                           <CellText>{(row.last_partner_name && String(row.last_partner_name).trim()) || '—'}</CellText>
                         </td>
-                        <td className="main-col-date">{formatInventoryDateOnly(row)}</td>
-                        <td className="main-col-qty main-col-disposal-qty-input">
+                        <td data-card="key" data-label="매입일" className="main-col-date">{formatInventoryDateOnly(row)}</td>
+                        <td data-card="field" data-label="폐기 수량" className="main-col-qty main-col-disposal-qty-input">
                           <input
                             className="main-input-qty main-input-qty--disposal"
                             type="number"
+                            inputMode="decimal"
                             step="0.001"
                             min="0"
                             disabled={!disposalSelected[pid]}
@@ -2195,7 +2909,7 @@ function TabDisposals() {
                             }
                           />
                         </td>
-                        <td className="main-col-date main-col-disposal-date-col">
+                        <td data-card="field" data-label="폐기일" className="main-col-date main-col-disposal-date-col">
                           <input
                             className="main-input-date main-input-date--disposal"
                             type="date"
@@ -2209,7 +2923,7 @@ function TabDisposals() {
                             }
                           />
                         </td>
-                        <td className="main-td-disposal-reason">
+                        <td data-card="wide" data-label="사유" className="main-td-disposal-reason">
                           <div className="main-disposal-reason-cell">
                             <select
                               value={d.reasonCode || DISPOSAL_REASON_SPOIL}
@@ -2244,6 +2958,7 @@ function TabDisposals() {
                             )}
                           </div>
                         </td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -2253,9 +2968,10 @@ function TabDisposals() {
           )}
         </form>
       </Modal>
+      <Pager total={paged.total} offset={paged.offset} count={list.length} loading={loading} onPage={paged.goPage} />
       {loading ? <p className="main-loading">불러오는 중…</p> : err ? <p className="main-error">{err}</p> : list.length === 0 ? <p className="main-empty">폐기 내역이 없습니다.</p> : (
         <div className="main-table-wrap">
-          <table className="main-table">
+          <table className="main-table main-table--cards">
             <thead>
               <tr>
                 <th className="main-col-datetime">폐기일</th>
@@ -2267,14 +2983,14 @@ function TabDisposals() {
             <tbody>
               {list.map((row) => (
                 <tr key={row.id}>
-                  <td className="main-col-datetime">{formatDisposalDateTime(row)}</td>
-                  <td className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText></td>
-                  <td className="num main-col-qty main-col-qty--singleline">
+                  <td data-card="sub" data-label="폐기일" className="main-col-datetime">{formatDisposalDateTime(row)}</td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /></td>
+                  <td data-card="key" data-label="수량" className="num main-col-qty main-col-qty--singleline">
                     <span className="main-qty-unit-inline">
                       {formatKoNumber(row.quantity)}
                     </span>
                   </td>
-                  <td className="main-td-scroll"><CellText>{row.reason || '—'}</CellText></td>
+                  <td data-card="key" data-label="사유" className="main-td-scroll"><CellText>{row.reason || '—'}</CellText></td>
                 </tr>
               ))}
             </tbody>
@@ -2292,22 +3008,36 @@ function TabDailyTrade() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [reportDate, setReportDate] = useState(today());
+  /** T-204 CSV 일자 = 마지막으로 검색한 일자(검색 후 달력만 바꾼 경우 화면 표와 달라지지 않게) */
+  const [loadedDate, setLoadedDate] = useState(today());
   /** 기본 전체: 빈 값이면 모든 거래처(구입처·판매처) 행 표시 */
   const [partnerId, setPartnerId] = useState('');
+  /** T-202 이익률(%) — 원가를 아는 매출액 대비. 원가 아는 매출이 없으면 null */
+  const marginPct = (profit, costedSales) => {
+    const cs = Number(costedSales) || 0;
+    if (!(cs > 0)) return null;
+    return ((Number(profit) || 0) / cs) * 100;
+  };
+  const formatPct = (v) => (v == null ? '—' : `${v.toFixed(1)}%`);
+  const profitClass = (v) => (v < 0 ? 'main-profit-negative' : '');
 
+  const dailyReq = useLatestRequest(); // T-404: 늦게 온 이전 조건 응답이 새 조건 결과를 덮지 않게
   const load = () => {
+    const t = dailyReq.next();
     setLoading(true);
     setErr('');
     const d = sanitizeYmd(reportDate, today());
+    setLoadedDate(d);
     const params = { from_date: d, to_date: d };
     if (partnerId) params.partner_id = partnerId;
     Promise.all([fetchDailyPurchaseSales(params), fetchDailyPurchaseSalesBreakdown(params)])
       .then(([summary, detail]) => {
+        if (!dailyReq.isCurrent(t)) return;
         setRows(summary);
         setBreakdown(detail);
       })
-      .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch((e) => dailyReq.isCurrent(t) && setErr(e.message))
+      .finally(() => dailyReq.isCurrent(t) && setLoading(false));
   };
 
   useEffect(() => {
@@ -2325,9 +3055,13 @@ function TabDailyTrade() {
         acc.sales += Number(r.sales_amount) || 0;
         acc.purchaseCount += Number(r.purchase_count) || 0;
         acc.salesCount += Number(r.sales_count) || 0;
+        acc.cost += Number(r.cost_amount) || 0;
+        acc.costedSales += Number(r.costed_sales_amount) || 0;
+        acc.profit += Number(r.profit_amount) || 0;
+        acc.costMissing += Number(r.cost_missing_count) || 0;
         return acc;
       },
-      { purchase: 0, sales: 0, purchaseCount: 0, salesCount: 0 },
+      { purchase: 0, sales: 0, purchaseCount: 0, salesCount: 0, cost: 0, costedSales: 0, profit: 0, costMissing: 0 },
     );
   }, [rows]);
 
@@ -2347,6 +3081,8 @@ function TabDailyTrade() {
           acc.salesAmt += amt;
           acc.salesLines += c;
           acc.receivable += rec;
+          acc.cost += Number(r.cost_sum) || 0;
+          acc.profit += Number(r.profit_sum) || 0;
         }
         return acc;
       },
@@ -2358,13 +3094,15 @@ function TabDailyTrade() {
         salesAmt: 0,
         salesLines: 0,
         receivable: 0,
+        cost: 0,
+        profit: 0,
       },
     );
   }, [breakdown]);
 
   return (
     <>
-      <div className="main-filters main-filters--daily-trade" style={{ flexWrap: 'wrap', gap: '8px' }}>
+      <div className="main-filters main-filters--daily-trade">
         <label className="main-date-filter">
           일자 <DateSearchField value={reportDate} onChange={setReportDate} id="daily-date" />
         </label>
@@ -2379,11 +3117,22 @@ function TabDailyTrade() {
             ))}
           </select>
         </label>
-        <button type="button" className="main-btn" onClick={load}>
+        <button type="button" className="main-btn main-btn--secondary" onClick={load}>
           검색
         </button>
+        <button
+          type="button"
+          className="main-btn main-btn--secondary"
+          disabled={loading || breakdown.length === 0}
+          title="지금 화면의 상품·거래처별 내역(마지막 검색 결과)을 저장합니다"
+          onClick={() => {
+            downloadListCsv('dailyTrade', breakdown.map((r) => ({ ...r, __date: loadedDate })), { date: loadedDate });
+          }}
+        >
+          엑셀(CSV) 다운로드
+        </button>
         <span className="main-modal-hint main-daily-trade-hint">
-          하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다.
+          하단 표는 <strong>상품 × 거래처</strong>별로 매입(구입처)·매출(판매처)을 나누어 표시합니다. 미수는 매출 행의 잔액(매출금−수금) 합계입니다. 취소 매출은 제외합니다. 원가는 그 매출에 배분된 매입의 단가 × 수량, 이익 = 매출액 − 원가, 이익률 = 이익 ÷ 매출액입니다(환불은 차감하지 않음).
         </span>
       </div>
       {loading ? (
@@ -2395,7 +3144,7 @@ function TabDailyTrade() {
           <div className="main-daily-section">
             <h2 className="main-daily-section-title">일자 요약</h2>
             <div className="main-table-wrap">
-              <table className="main-table main-table--daily-trade">
+              <table className="main-table main-table--daily-trade main-table--cards">
                 <thead>
                   <tr>
                     <th className="main-col-date main-col-date--daily-narrow">일자</th>
@@ -2403,6 +3152,9 @@ function TabDailyTrade() {
                     <th className="main-col-qty">매입 건수</th>
                     <th className="main-col-amount">매출액</th>
                     <th className="main-col-qty">매출 건수</th>
+                    <th className="main-col-amount">매출 원가</th>
+                    <th className="main-col-amount">이익</th>
+                    <th className="main-col-qty">이익률</th>
                     <th className="main-col-amount">차이(매출−매입)</th>
                   </tr>
                 </thead>
@@ -2411,14 +3163,28 @@ function TabDailyTrade() {
                     const pa = Number(r.purchase_amount) || 0;
                     const sa = Number(r.sales_amount) || 0;
                     const diff = sa - pa;
+                    const cost = Number(r.cost_amount) || 0;
+                    const profit = Number(r.profit_amount) || 0;
+                    const missing = Number(r.cost_missing_count) || 0;
                     return (
                       <tr key={toYmd(r.date) || 'row'}>
-                        <td className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(pa)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
-                        <td className="num main-col-amount">{formatKoNumber(sa)}</td>
-                        <td className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
-                        <td className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                        <td data-card="title" data-label="일자" className="main-col-date main-col-date--daily-narrow">{toYmd(r.date)}</td>
+                        <td data-card="key" data-label="매입액" className="num main-col-amount">{formatKoNumber(pa)}</td>
+                        <td data-card="extra" data-label="매입 건수" className="num main-col-qty">{formatKoNumber(r.purchase_count)}</td>
+                        <td data-card="key" data-label="매출액" className="num main-col-amount">{formatKoNumber(sa)}</td>
+                        <td data-card="extra" data-label="매출 건수" className="num main-col-qty">{formatKoNumber(r.sales_count)}</td>
+                        <td data-card="extra" data-label="매출 원가" className="num main-col-amount">
+                          {formatKoNumber(cost)}
+                          {missing > 0 && (
+                            <span className="main-cost-missing" title="매입 배분이 없어 원가를 알 수 없는 매출 — 이익·이익률 계산에서 뺐습니다">
+                              원가 미확인 {formatKoNumber(missing)}건
+                            </span>
+                          )}
+                        </td>
+                        <td data-card="key" data-label="이익" className={`num main-col-amount main-col-profit ${profitClass(profit)}`}>{formatKoNumber(profit)}</td>
+                        <td data-card="key" data-label="이익률" className={`num main-col-qty main-col-profit ${profitClass(profit)}`}>{formatPct(marginPct(profit, r.costed_sales_amount))}</td>
+                        <td data-card="extra" data-label="차이(매출−매입)" className="num main-col-amount main-daily-diff">{formatKoNumber(diff)}</td>
+                        <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                       </tr>
                     );
                   })}
@@ -2426,12 +3192,15 @@ function TabDailyTrade() {
                 {rows.length > 0 && (
                   <tfoot>
                     <tr className="main-table-foot-daily">
-                      <th className="main-col-date main-col-date--daily-narrow">합계</th>
-                      <td className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
-                      <td className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
-                      <td className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
-                      <td className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
-                      <td className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
+                      <th data-card="foot-title" className="main-col-date main-col-date--daily-narrow">합계</th>
+                      <td data-card="foot" data-label="매입액" className="num main-col-amount">{formatKoNumber(totals.purchase)}</td>
+                      <td data-card="foot" data-label="매입 건수" className="num main-col-qty">{formatKoNumber(totals.purchaseCount)}</td>
+                      <td data-card="foot" data-label="매출액" className="num main-col-amount">{formatKoNumber(totals.sales)}</td>
+                      <td data-card="foot" data-label="매출 건수" className="num main-col-qty">{formatKoNumber(totals.salesCount)}</td>
+                      <td data-card="foot" data-label="매출 원가" className="num main-col-amount">{formatKoNumber(totals.cost)}</td>
+                      <td data-card="foot" data-label="이익" className={`num main-col-amount main-col-profit ${profitClass(totals.profit)}`}>{formatKoNumber(totals.profit)}</td>
+                      <td data-card="foot" data-label="이익률" className={`num main-col-qty main-col-profit ${profitClass(totals.profit)}`}>{formatPct(marginPct(totals.profit, totals.costedSales))}</td>
+                      <td data-card="foot" data-label="차이(매출−매입)" className="num main-col-amount">{formatKoNumber(totals.sales - totals.purchase)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -2445,7 +3214,7 @@ function TabDailyTrade() {
               같은 날짜·필터 기준으로, 상품과 거래처가 겹치는 매입·매출은 각각 행으로 구분됩니다.
             </p>
             <div className="main-table-wrap main-table-wrap--daily-breakdown">
-              <table className="main-table main-table--daily-breakdown">
+              <table className="main-table main-table--daily-breakdown main-table--cards">
                 <thead>
                   <tr>
                     <th className="main-col-product main-col-product--daily">상품</th>
@@ -2455,12 +3224,14 @@ function TabDailyTrade() {
                     <th className="main-col-qty main-col-qty--daily">수량</th>
                     <th className="main-col-amount">금액</th>
                     <th className="main-col-amount main-col-receivable">미수</th>
+                    <th className="main-col-amount">원가</th>
+                    <th className="main-col-amount">이익(률)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {breakdown.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="main-empty-cell">
+                      <td colSpan={9} className="main-empty-cell">
                         해당 일자·조건에 집계할 내역이 없습니다.
                       </td>
                     </tr>
@@ -2468,27 +3239,52 @@ function TabDailyTrade() {
                     breakdown.map((r) => {
                       const isPur = r.line_kind === 'purchase';
                       const rec = Number(r.receivable_sum) || 0;
+                      const lineCount = Number(r.line_count) || 0;
+                      const lineMissing = Number(r.cost_missing_count) || 0;
+                      const allMissing = !isPur && lineMissing > 0 && lineMissing >= lineCount;
+                      const lineProfit = Number(r.profit_sum) || 0;
+                      // 원가 미확인 매출이 섞이면 행 단위 이익률은 계산하지 않는다(분모를 행에서 나눌 수 없음)
+                      const linePct = isPur || lineMissing > 0 ? null : marginPct(lineProfit, r.amount_sum);
                       return (
                         <tr key={`${r.product_id}-${r.partner_id}-${r.line_kind}`}>
-                          <td className="main-td-scroll main-col-product main-col-product--daily">
+                          <td data-card="title" data-label="상품" className="main-td-scroll main-col-product main-col-product--daily">
                             <CellText>{r.product_name || '—'}</CellText>
                           </td>
-                          <td className="main-td-scroll main-col-partner main-col-partner--daily">
+                          <td data-card="sub" data-label="거래처" className="main-td-scroll main-col-partner main-col-partner--daily">
                             <CellText>{r.partner_name || '—'}</CellText>
                           </td>
-                          <td className="main-col-kind">
+                          <td data-card="sub" data-label="구분" className="main-col-kind">
                             <span className={isPur ? 'main-kind-badge main-kind-badge--purchase' : 'main-kind-badge main-kind-badge--sale'}>
                               {isPur ? '매입' : '매출'}
                             </span>
                           </td>
-                          <td className="num main-col-qty main-col-qty--daily">{formatKoNumber(r.line_count)}</td>
-                          <td className="num main-col-qty main-col-qty--daily">
+                          <td data-card="extra" data-label="건수" className="num main-col-qty main-col-qty--daily">{formatKoNumber(r.line_count)}</td>
+                          <td data-card="key" data-label="수량" className="num main-col-qty main-col-qty--daily">
                             <span className="main-qty-unit-inline">{formatKoNumber(r.qty_sum)}</span>
                           </td>
-                          <td className="num main-col-amount">{formatKoNumber(r.amount_sum)}</td>
-                          <td className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
+                          <td data-card="key" data-label="금액" className="num main-col-amount">{formatKoNumber(r.amount_sum)}</td>
+                          <td data-card="key" data-label="미수" className={`num main-col-amount main-col-receivable ${!isPur && rec > 0 ? 'main-receivable-positive' : ''}`}>
                             {isPur ? '—' : formatKoNumber(rec)}
                           </td>
+                          <td data-card="extra" data-label="원가" className="num main-col-amount">
+                            {isPur ? '—' : allMissing ? (
+                              <span className="main-cost-missing">원가 미확인</span>
+                            ) : (
+                              <>
+                                {formatKoNumber(r.cost_sum)}
+                                {lineMissing > 0 && <span className="main-cost-missing">미확인 {formatKoNumber(lineMissing)}건 제외</span>}
+                              </>
+                            )}
+                          </td>
+                          <td data-card="key" data-label="이익(률)" className={`num main-col-amount main-col-profit ${isPur ? '' : profitClass(lineProfit)}`}>
+                            {isPur || allMissing ? '—' : (
+                              <>
+                                {formatKoNumber(lineProfit)}
+                                {linePct != null && <span className="main-profit-pct">{formatPct(linePct)}</span>}
+                              </>
+                            )}
+                          </td>
+                          <td className="main-card-more" data-card="more"><CardMoreToggle /></td>
                         </tr>
                       );
                     })
@@ -2497,18 +3293,22 @@ function TabDailyTrade() {
                 {breakdown.length > 0 && (
                   <tfoot>
                     <tr className="main-table-foot-daily main-table-foot-breakdown">
-                      <th colSpan={3}>합계 (매입 / 매출)</th>
-                      <td className="num main-col-qty main-col-qty--daily">
+                      <th data-card="foot-title" colSpan={3}>합계 (매입 / 매출)</th>
+                      <td data-card="foot" data-label="건수" className="num main-col-qty main-col-qty--daily">
                         {formatKoNumber(breakdownTotals.purchaseLines)} / {formatKoNumber(breakdownTotals.salesLines)}
                       </td>
-                      <td className="num main-col-qty main-col-qty--daily">
+                      <td data-card="foot" data-label="수량" className="num main-col-qty main-col-qty--daily">
                         {formatKoNumber(breakdownTotals.purchaseQty)} / {formatKoNumber(breakdownTotals.salesQty)}
                       </td>
-                      <td className="num main-col-amount">
+                      <td data-card="foot" data-label="금액" className="num main-col-amount">
                         {formatKoNumber(breakdownTotals.purchaseAmt)} / {formatKoNumber(breakdownTotals.salesAmt)}
                       </td>
-                      <td className="num main-col-amount main-col-receivable main-receivable-positive">
+                      <td data-card="foot" data-label="미수" className="num main-col-amount main-col-receivable main-receivable-positive">
                         {formatKoNumber(breakdownTotals.receivable)}
+                      </td>
+                      <td data-card="foot" data-label="원가" className="num main-col-amount">{formatKoNumber(breakdownTotals.cost)}</td>
+                      <td data-card="foot" data-label="이익(률)" className={`num main-col-amount main-col-profit ${profitClass(breakdownTotals.profit)}`}>
+                        {formatKoNumber(breakdownTotals.profit)}
                       </td>
                     </tr>
                   </tfoot>
@@ -2523,26 +3323,79 @@ function TabDailyTrade() {
 }
 
 const BASE_TABS = [
+  { id: 'today', label: '오늘', Component: TabDashboard }, // T-208 첫 화면
   { id: 'inventory', label: '재고현황', Component: TabReorder },
   { id: 'daily-trade', label: '일별 매입·매출', Component: TabDailyTrade },
+  { id: 'monthly', label: '월 정산', Component: TabMonthly }, // T-215
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
+  { id: 'supplier-payments', label: '지급정보', Component: TabSupplierPayments }, // T-201
   { id: 'disposals', label: '폐기정보', Component: TabDisposals },
+  { id: 'partners', label: '거래처', Component: TabPartners },
+  { id: 'history', label: '변경 이력', Component: TabHistory }, // T-212
 ];
 const ADMIN_TAB = { id: 'products', label: '상품 마스터', Component: TabProductMaster };
+const STAFF_TAB = { id: 'staff', label: '직원 관리', Component: TabStaff }; // T-213 주인만
+const MIGRATION_TAB = { id: 'migration', label: '데이터 이관', Component: TabMigration }; // T-403 주인만(직원에게는 탭이 없다 — 서버도 403)
+
+/** T-403 이관 행 배지 — 기초 미수(매출)·기초 미지급(매입)·이관 재고(매입) */
+function MigrationBadge({ row }) {
+  if (row?.entry_mode === 'opening' || row?.entry_kind === 'opening_ap') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 잔액(묶음 되돌리기로만 고칩니다)">이관 기초</span>;
+  if (row?.entry_kind === 'opening_stock') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 재고 로트">이관 재고</span>;
+  return null;
+}
+
+/** 직원이 넣은 행이면 입력자 배지 (주인이 넣은 행은 아무것도 안 보임) — T-213 */
+function StaffEntryBadge({ row }) {
+  if (!row?.created_by_name) return null;
+  return <span className="staff-entry-badge" title={`직원 ${row.created_by_name}이 입력`}>입력 {row.created_by_name}</span>;
+}
+
+/** 역할별 탭 — 직원: 변경 이력·상품 마스터·직원 관리 숨김 / 주인: 변경 이력 옆에 직원 관리 (설계 9장) */
+function tabsFor(user) {
+  if (user?.staff) return BASE_TABS.filter((t) => t.id !== 'history');
+  const out = [];
+  for (const t of BASE_TABS) {
+    out.push(t);
+    if (t.id === 'history') out.push(STAFF_TAB, MIGRATION_TAB);
+  }
+  return user?.is_admin ? [...out, ADMIN_TAB] : out;
+}
 
 export default function Main() {
   const user = getUser();
-  const tabs = user?.is_admin ? [...BASE_TABS, ADMIN_TAB] : BASE_TABS;
-  const [activeTab, setActiveTab] = useState('inventory');
-  const TabContent = tabs.find((t) => t.id === activeTab)?.Component;
+  const tabs = tabsFor(user);
+  const [activeTab, setActiveTab] = useState('today');
+  // 다른 탭에서 넘겨준 검색 조건(T-103: 매입 취소가 막혔을 때 연결 매출 보기)
+  const [navFilter, setNavFilter] = useState(null);
+  const navigateTab = (tabId, filter) => {
+    setNavFilter(filter || null);
+    setActiveTab(tabId);
+  };
+  const activeTabDef = tabs.find((t) => t.id === activeTab);
+  const TabContent = activeTabDef?.Component;
 
   return (
     <div className="main-page">
       <header className="main-header">
-        <h1 className="main-logo">판매툴</h1>
-        <span className="main-user">{user?.name}님</span>
+        <h1 className="main-logo">
+          <span className="main-logo-mark" aria-hidden="true" />
+          판매툴
+        </h1>
+        {isStaff() ? (
+          <span className="main-user" title={`${user.staff.name} (${ROLE_LABEL[user.staff.role] || ''} 직원) · ${user.name}`}>
+            <span className="main-user-avatar" aria-hidden="true">{(user.staff.name || '?').trim().charAt(0)}</span>
+            <span className="main-user-name">{user.staff.name}</span>
+            <span className="main-user-role">{ROLE_LABEL[user.staff.role] || '직원'}</span>
+            <span className="main-user-owner"> · {user.name}</span>
+          </span>
+        ) : (
+        <span className="main-user" title={user?.name ? `${user.name}님` : undefined}>
+          <span className="main-user-avatar" aria-hidden="true">{(user?.name || '?').trim().charAt(0)}</span>
+          <span className="main-user-name">{user?.name}님</span>
+        </span>
+        )}
         <button
           type="button"
           className="main-logout"
@@ -2554,21 +3407,25 @@ export default function Main() {
           로그아웃
         </button>
       </header>
-      <nav className="main-tabs">
+      <div className="main-shell">
+      <nav className="main-tabs" aria-label="업무 메뉴">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             className={'main-tab ' + (activeTab === t.id ? 'active' : '')}
-            onClick={() => setActiveTab(t.id)}
+            aria-current={activeTab === t.id ? 'page' : undefined}
+            onClick={() => navigateTab(t.id, null)}
           >
             {t.label}
           </button>
         ))}
       </nav>
       <main className="main-content">
-        {TabContent && <TabContent />}
+        {activeTabDef && <h2 className="main-page-title">{activeTabDef.label}</h2>}
+        {TabContent && <TabContent key={activeTab + (navFilter ? JSON.stringify(navFilter) : '')} onNavigate={navigateTab} navFilter={navFilter} />}
       </main>
+      </div>
     </div>
   );
 }

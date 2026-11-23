@@ -1,0 +1,19 @@
+# 무료 백엔드(Render Free 등)가 15분 쉬면 잠드는 것을 막는 핑 — GitHub Actions 무료(공개 저장소 무제한)
+# Repo → Settings → Secrets and variables → Actions → Variables 에 KEEPALIVE_URL 추가
+#   예) KEEPALIVE_URL = https://<render 주소>/   (끝이 / — DB를 깨우지 않는 주소. /health는 매번 DB를 조회해 Neon 무료 사용량을 씀)
+# 변수가 없으면 아무것도 하지 않는다. GitHub 예약 실행은 몇 분씩 늦을 수 있다.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    if: ${{ vars.KEEPALIVE_URL != '' }}
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -fsS --max-time 90 --retry 2 "${{ vars.KEEPALIVE_URL }}" || echo "::warning::health 응답 없음 (서버가 깨어나는 중일 수 있음)"

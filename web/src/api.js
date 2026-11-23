@@ -21,24 +21,64 @@ function getUser() {
   }
 }
 
+// 로그인 토큰 (T-101) — 로그인 응답의 token 을 sessionStorage 'user' 안에 함께 둔다.
+// 로그아웃이 'user' 를 지우면 토큰도 같이 지워진다.
+function getToken() {
+  return getUser()?.token || null;
+}
+
 function authHeaders() {
-  const user = getUser();
+  const token = getToken();
   return {
     'Content-Type': 'application/json',
-    ...(user?.agent_no ? { 'X-Agent-No': String(user.agent_no) } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+/** 토큰이 만료·위조돼 서버가 401을 주면 저장된 로그인 정보를 지우고 로그인 화면으로 보낸다 */
+function handleUnauthorized(status) {
+  if (status !== 401 || !getUser()) return;
+  try {
+    window.sessionStorage.removeItem('user');
+  } catch {
+    /* 저장소 접근 불가 — 무시 */
+  }
+  window.location.href = '/login';
+}
+
+// T-213: 직원이 403(권한 없음)을 받으면 역할이 바뀌었을 수 있으니 GET /api/me 로 저장값(역할·allow)을 다시 읽는다
+function refreshStaffRole(status) {
+  const u = getUser();
+  if (status !== 403 || !u?.staff) return;
+  fetch(`${API_BASE}/me`, { headers: authHeaders() })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((me) => {
+      if (!me?.ok) return;
+      const cur = getUser();
+      if (!cur) return;
+      window.sessionStorage.setItem('user', JSON.stringify({ ...cur, allow: me.allow, staff: me.staff ? { ...cur.staff, ...me.staff } : cur.staff }));
+    })
+    .catch(() => {});
+}
+
+async function apiFetch(url, options) {
+  const res = await fetch(url, options);
+  handleUnauthorized(res.status);
+  refreshStaffRole(res.status);
+  return res;
 }
 
 export async function fetchProducts(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/products${q ? '?' + q : ''}`);
+  // 로그인 토큰을 붙여야 내 개인 품목(T-216)도 함께 온다 — 토큰이 없으면 공용 품목만
+  const res = await apiFetch(`${API_BASE}/products${q ? '?' + q : ''}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
 }
 
 export async function createProduct(body) {
-  const res = await fetch(`${API_BASE}/products`, {
+  const res = await apiFetch(`${API_BASE}/products`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -49,7 +89,7 @@ export async function createProduct(body) {
 }
 
 export async function createProductsBulk(products) {
-  const res = await fetch(`${API_BASE}/products/bulk`, {
+  const res = await apiFetch(`${API_BASE}/products/bulk`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ products }),
@@ -59,23 +99,98 @@ export async function createProductsBulk(products) {
   return data;
 }
 
+/** 서버 오류 응답을 code·product 와 함께 던진다 (중복 품목 안내에 쓰임) */
+async function jsonOrThrow(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(data.message || fallback);
+    e.code = data.code;
+    e.product = data.product;
+    throw e;
+  }
+  return data;
+}
+
+// ---------- 개인 품목·공용 등록 요청 (T-216) ----------
+/** 목록에 없는 품목을 내 개인 품목으로 추가. request_public=true 면 관리자에게 공용 등록 요청도 함께 */
+export async function createPersonalProduct(body) {
+  const res = await apiFetch(`${API_BASE}/products/personal`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  return (await jsonOrThrow(res, '개인 품목 등록 실패')).data;
+}
+
+export async function requestProductPublic(productId, note) {
+  const res = await apiFetch(`${API_BASE}/products/requests`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ product_id: productId, note }),
+  });
+  return (await jsonOrThrow(res, '공용 등록 요청 실패')).data;
+}
+
+export async function fetchProductRequests(status) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : '';
+  const res = await apiFetch(`${API_BASE}/products/requests${q}`, { headers: authHeaders() });
+  return (await jsonOrThrow(res, '요청 목록 조회 실패')).data;
+}
+
+export async function approveProductRequest(id, body = {}) {
+  const res = await apiFetch(`${API_BASE}/products/requests/${id}/approve`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  return (await jsonOrThrow(res, '승인 실패')).data;
+}
+
+export async function rejectProductRequest(id, reason) {
+  const res = await apiFetch(`${API_BASE}/products/requests/${id}/reject`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ reason }) });
+  return (await jsonOrThrow(res, '반려 실패')).data;
+}
+
 export async function fetchPartners() {
-  const res = await fetch(`${API_BASE}/partners`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/partners`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
 }
 
-export async function fetchInventory() {
-  const res = await fetch(`${API_BASE}/inventory`, { headers: authHeaders() });
+export async function fetchInventory(params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await apiFetch(`${API_BASE}/inventory${q ? `?${q}` : ''}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
+}
+
+/**
+ * T-211 목록 한 페이지 조회 — resource: inventory·purchases·sales·payments·disposals
+ * params 에 limit(기본 50)·offset·q·partner_id 와 기존 필터를 넣는다. 반환 { data, total, limit, offset }
+ */
+export async function fetchListPage(resource, params = {}) {
+  const q = new URLSearchParams(params).toString();
+  const res = await apiFetch(`${API_BASE}/${resource}?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return { data: data.data, total: data.total ?? data.data.length, limit: data.limit ?? null, offset: data.offset ?? 0 };
 }
 
 export async function fetchPurchases(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/purchases?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/purchases?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return data.data;
+}
+
+/** 매입 등록 모달 — 같은 상품(+거래처)의 최근 매입 단가 (T-210). 기록이 없으면 null */
+export async function fetchLastPurchasePrice(productId, partnerId) {
+  const q = new URLSearchParams({ product_id: String(productId) });
+  if (partnerId) q.set('partner_id', String(partnerId));
+  const res = await apiFetch(`${API_BASE}/purchases/last-price?${q}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '조회 실패');
+  return data.data;
+}
+
+/** 매입 등록 모달 — 최근 매입한 거래처 순서 [{ partner_id, last_date, cnt }] (T-210) */
+export async function fetchRecentPurchasePartners() {
+  const res = await apiFetch(`${API_BASE}/purchases/recent-partners`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -83,7 +198,7 @@ export async function fetchPurchases(params = {}) {
 
 export async function fetchSales(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/sales?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/sales?${q}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -92,7 +207,7 @@ export async function fetchSales(params = {}) {
 /** 일별 매입·매출 집계: from_date, to_date 필수(같은 날짜면 당일만); partner_id 선택 시 매입=구입처·매출=판매처 기준 */
 export async function fetchDailyPurchaseSales(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/reports/daily-purchase-sales?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/reports/daily-purchase-sales?${q}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -101,7 +216,7 @@ export async function fetchDailyPurchaseSales(params = {}) {
 /** 상품·거래처별 매입/매출 건수·수량·금액·미수(매출 행만) — 동일 query 규칙 */
 export async function fetchDailyPurchaseSalesBreakdown(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/reports/daily-purchase-sales-breakdown?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/reports/daily-purchase-sales-breakdown?${q}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -109,14 +224,14 @@ export async function fetchDailyPurchaseSalesBreakdown(params = {}) {
 
 export async function fetchPayments(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/payments?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/payments?${q}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
 }
 
 export async function createPurchase(body) {
-  const res = await fetch(`${API_BASE}/purchases`, {
+  const res = await apiFetch(`${API_BASE}/purchases`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -126,19 +241,26 @@ export async function createPurchase(body) {
   return data.data;
 }
 
-export async function convertPurchasesToSales(items) {
-  const res = await fetch(`${API_BASE}/purchases/convert-to-sales`, {
+/**
+ * 매출 전환. opts.credit_confirmed=true 는 외상 한도 경고를 보고 저장하는 경우(T-207).
+ * 실패 오류에는 서버 code·detail 을 붙인다(409 CREDIT_LIMIT 이면 detail.credit_warnings).
+ * 돌려주는 값은 예전과 같은 data 배열이고, 한도를 넘겨 저장했으면 배열에 credit_warnings 속성이 붙는다.
+ */
+export async function convertPurchasesToSales(items, opts = {}) {
+  const res = await apiFetch(`${API_BASE}/purchases/convert-to-sales`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items, ...(opts.credit_confirmed ? { credit_confirmed: true } : {}) }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.message || '매출 전환 실패');
-  return data.data;
+  if (!res.ok) throw Object.assign(new Error(data.message || '매출 전환 실패'), { status: res.status, code: data.code || null, detail: data.detail || null });
+  const out = data.data;
+  if (Array.isArray(out) && data.credit_warnings) out.credit_warnings = data.credit_warnings;
+  return out;
 }
 
 export async function createPayment(body) {
-  const res = await fetch(`${API_BASE}/payments`, {
+  const res = await apiFetch(`${API_BASE}/payments`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -149,7 +271,7 @@ export async function createPayment(body) {
 }
 
 export async function refundSale(saleId, body) {
-  const res = await fetch(`${API_BASE}/sales/${saleId}/refund`, {
+  const res = await apiFetch(`${API_BASE}/sales/${saleId}/refund`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -160,7 +282,7 @@ export async function refundSale(saleId, body) {
 }
 
 export async function createDisposal(body) {
-  const res = await fetch(`${API_BASE}/disposals`, {
+  const res = await apiFetch(`${API_BASE}/disposals`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
@@ -172,7 +294,7 @@ export async function createDisposal(body) {
 
 export async function fetchDisposals(params = {}) {
   const q = new URLSearchParams(params).toString();
-  const res = await fetch(`${API_BASE}/disposals?${q}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/disposals?${q}`, { headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || '조회 실패');
   return data.data;
@@ -187,8 +309,8 @@ export async function uploadSalesforceContentVersion({ file, title, first_publis
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${API_BASE}/file-transfer/salesforce/content-version`, true);
-    if (user?.agent_no) {
-      xhr.setRequestHeader('X-Agent-No', String(user.agent_no));
+    if (user?.token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${user.token}`);
     }
     xhr.onerror = () => reject(new Error('Salesforce 파일 전송 실패'));
     xhr.onload = () => {
@@ -198,6 +320,7 @@ export async function uploadSalesforceContentVersion({ file, title, first_publis
       } catch (_) {
         data = {};
       }
+      handleUnauthorized(xhr.status);
       if (xhr.status < 200 || xhr.status >= 300) {
         reject(new Error(data.message || 'Salesforce 파일 전송 실패'));
         return;
@@ -208,4 +331,92 @@ export async function uploadSalesforceContentVersion({ file, title, first_publis
   });
 }
 
-export { getUser, API_BASE };
+/** 거래처 원장 (T-104) — params: from, to(YYYY-MM-DD, 선택), include_cancelled(1) */
+export async function fetchPartnerLedger(partnerId, params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+  const res = await apiFetch(`${API_BASE}/partners/${encodeURIComponent(partnerId)}/ledger${q ? '?' + q : ''}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '원장을 불러오지 못했습니다.');
+  return data.data;
+}
+
+/** 미수 연령 (T-104) — params: partner_id(주면 매출별 상세 sales 포함), min_days */
+export async function fetchReceivablesAging(params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+  const res = await apiFetch(`${API_BASE}/receivables/aging${q ? '?' + q : ''}`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '미수 연령을 불러오지 못했습니다.');
+  return data.data;
+}
+
+/** 첫 화면 "오늘" (T-208) — 오늘 매입·매출·수금, 총미수·연령, 오래된 재고·미수 거래처 상위 5 */
+export async function fetchDashboard() {
+  const res = await apiFetch(`${API_BASE}/dashboard`, { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || '오늘 현황을 불러오지 못했습니다.');
+  return data.data;
+}
+
+export { getUser, getToken, API_BASE };
+
+// ---------- T-401 정산 할인 취소 · 상계 ----------
+async function settleReq(method, path, body, failMsg) {
+  const res = await apiFetch(`${API_BASE}${path}`, {
+    method,
+    headers: authHeaders(),
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.message || failMsg), { status: res.status, code: data.code || null, body: data });
+  return data.data;
+}
+/** 매출 할인(entry_kind=discount) 취소 — 주인만 */
+export const cancelPayment = (id, body) => settleReq('POST', `/payments/${encodeURIComponent(id)}/cancel`, body, '할인 취소 실패');
+/** 상계 등록 { partner_id, amount, memo? } — 주인만 */
+export const createOffset = (body) => settleReq('POST', '/offsets', body, '상계 등록 실패');
+/** 상계 취소 { reason } — 수금 쪽·지급 쪽을 함께 취소 */
+export const cancelOffset = (id, body) => settleReq('POST', `/offsets/${encodeURIComponent(id)}/cancel`, body, '상계 취소 실패');
+/** 상계 목록 { partner_id?, from_date?, to_date? } */
+export const fetchOffsets = (params = {}) => settleReq('GET', `/offsets?${new URLSearchParams(params).toString()}`, null, '상계 목록 조회 실패');
+
+// ---- T-402 엑셀 업로드 + 템플릿 ----
+/** 템플릿(.xlsx) 내려받기 — 파일 이름은 서버가 정한 한국어 이름 */
+export async function downloadExcelTemplate(kind) {
+  const token = getToken();
+  const res = await apiFetch(`${API_BASE}/excel/${encodeURIComponent(kind)}/template`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message || '템플릿을 내려받지 못했습니다.');
+  }
+  const blob = await res.blob();
+  const disp = res.headers.get('content-disposition') || '';
+  const m = disp.match(/filename\*=UTF-8''([^;]+)/i);
+  const name = m ? decodeURIComponent(m[1]) : `template_${kind}.xlsx`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 엑셀 올리기 — step: 'preview'(검증만) | 'commit'(오류 0일 때 전부 저장). 응답 본문 그대로(오류 응답도 rows 를 담아 돌려줌) */
+export async function uploadExcel(kind, step, file) {
+  const token = getToken();
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const res = await apiFetch(`${API_BASE}/excel/${encodeURIComponent(kind)}/${step}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && !Array.isArray(data.rows)) {
+    throw Object.assign(new Error(data.message || '엑셀을 올리지 못했습니다.'), { status: res.status, code: data.code || null, body: data });
+  }
+  return { status: res.status, ...data };
+}

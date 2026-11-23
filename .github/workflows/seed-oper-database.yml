@@ -1,29 +1,22 @@
-# Render Shell 없이 운영 DB에 마이그레이션 + 대량 시드 실행
-# 사용: Repo → Actions → "Seed oper database (Render)" → Run workflow
-# 필수: Settings → Secrets and variables → Actions → Repository secrets → DATABASE_URL
-#        (Render Postgres 또는 Web Service에 설정된 값과 동일한 postgres://… URL)
+# 운영 DB 마이그레이션 + (선택) 관리자 계정 생성 — Render Shell 없이
+# 사용: Repo → Actions → "Seed oper database" → Run workflow
+# 필수 Secrets: DATABASE_URL (Neon 등 운영 DB URL)
+# 관리자 생성 시 필수 Secret: SEED_ADMIN_PASSWORD (12자 이상) — 없으면 seed-admin이 운영 모드에서 거부한다(T-114)
+# 2026-11-20(T-115): 운영 데모 시드 단계 제거, 관리자 생성은 기본 꺼짐(공개 저장소의 기본 비밀번호로 초기화되던 문제 방지)
 
-name: Seed oper database (Render)
+name: Seed oper database
 
 on:
   workflow_dispatch:
     inputs:
-      run_seed_admin:
-        description: 'admin001 계정 생성(seed-admin) — 최초 1회 권장, 이미 있으면 갱신만'
-        type: boolean
-        default: true
       run_migrate:
         description: '마이그레이션 실행 (스키마 최신화)'
         type: boolean
         default: true
-      run_seed:
-        description: '운영 데모 시드 (seed-oper-april-flow-2026)'
+      run_seed_admin:
+        description: '관리자 계정 생성 (SEED_ADMIN_PASSWORD secret 필요, 이미 있으면 비밀번호 유지)'
         type: boolean
-        default: true
-      agent_no:
-        description: '중매인 번호 (시드 대상)'
-        type: string
-        default: 'admin001'
+        default: false
 
 jobs:
   migrate-and-seed:
@@ -34,7 +27,7 @@ jobs:
       - name: Require DATABASE_URL secret
         run: |
           if [ -z "${{ secrets.DATABASE_URL }}" ]; then
-            echo "::error::Repository secret DATABASE_URL is not set. Render → PostgreSQL → External Database URL 을 복사해 GitHub Repo → Settings → Secrets → Actions 에 추가하세요."
+            echo "::error::Repository secret DATABASE_URL 이 없습니다. GitHub → Settings → Secrets → Actions 에 운영 DB URL을 추가하세요."
             exit 1
           fi
 
@@ -56,19 +49,11 @@ jobs:
           NODE_ENV: production
         run: npm run migrate
 
-      - name: Seed admin (admin001)
+      - name: Seed admin
         if: ${{ inputs.run_seed_admin }}
         working-directory: server
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
         run: npm run seed-admin
-
-      - name: Seed oper april flow 2026
-        if: ${{ inputs.run_seed }}
-        working-directory: server
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          NODE_ENV: production
-          SAMPLE_AGENT_NO: ${{ inputs.agent_no }}
-        run: npm run seed-oper-april-flow-2026
