@@ -237,7 +237,7 @@ function registerPurchaseDocRoutes(app, deps) {
         const r = await client.query(
           `INSERT INTO purchase_doc_line (doc_id, user_id, line_no, source_line_no, trade_date, arrival_date, item_name_raw, item_key, grade_raw, grade_norm, pkg_raw, pkg_norm,
                                           unit_qty_kg, weight_source, qty, unit_price, amount, origin_name, shipper_name_masked, auction_ref, buyer_code, product_id, line_fingerprint)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, COALESCE($17::bigint, ROUND($15::numeric * $16::numeric)::bigint), $18,$19,$20,$21,$22,$23)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::numeric,$14,$15::numeric,$16::bigint, COALESCE($17::bigint, ROUND($15::numeric * $16::bigint)::bigint), $18,$19,$20,$21,$22,$23)
            RETURNING id`,
           [docId, cx.userId, no, l.source_line_no || null, l.trade_date, l.arrival_date, l.item_name_raw, l.item_key, l.grade_raw, l.grade_norm, l.pkg_raw, l.pkg_norm,
             l.unit_qty_kg, l.weight_source, l.qty, l.unit_price, l.amount, l.origin_name, l.shipper_name_masked, l.auction_ref, l.buyer_code, l.product_id, l.line_fingerprint]
@@ -591,7 +591,7 @@ function registerPurchaseDocRoutes(app, deps) {
       const n = v.line;
       await client.query(
         `UPDATE purchase_doc_line SET trade_date = $2, arrival_date = $3, item_name_raw = $4, item_key = $5, grade_raw = $6, grade_norm = $7, pkg_raw = $8, pkg_norm = $9,
-                unit_qty_kg = $10, weight_source = $11, qty = $12, unit_price = $13, amount = COALESCE($14::bigint, ROUND($12::numeric * $13::numeric)::bigint),
+                unit_qty_kg = $10::numeric, weight_source = $11, qty = $12::numeric, unit_price = $13::bigint, amount = COALESCE($14::bigint, ROUND($12::numeric * $13::bigint)::bigint),
                 origin_name = $15, auction_ref = $16, buyer_code = $17, product_id = $18, line_fingerprint = $19,
                 match_result = NULL, match_score = NULL, best_trade_id = NULL, candidate_count = NULL, reason_codes = '{}', warning_flags = '{}',
                 status = CASE WHEN status = 'REJECTED' THEN 'PENDING' ELSE status END, rejected_at = NULL, version = version + 1, updated_at = NOW()

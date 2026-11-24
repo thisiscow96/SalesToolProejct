@@ -238,7 +238,7 @@ async function remapStored(client, { dateFrom = null } = {}) {
   const fam = await client.query(
     `SELECT DISTINCT ON (t.item_m_code) t.item_m_code, mi.family_name
        FROM auction_trade t JOIN market_item mi ON mi.item_key = t.item_key
-      WHERE t.item_m_code IS NOT NULL
+      WHERE t.item_m_code IS NOT NULL AND right(t.item_key, 2) <> '._' -- 품종까지 정해진 건만(품종 모름으로 매핑된 건이 스스로를 근거로 삼지 않게)
       GROUP BY t.item_m_code, mi.family_name ORDER BY t.item_m_code, COUNT(*) DESC`
   );
   for (const r of fam.rows) if (!mName.has(r.item_m_code)) mName.set(r.item_m_code, r.family_name);

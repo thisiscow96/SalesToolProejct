@@ -96,15 +96,15 @@ async function failure(pool, source, kind) {
     if (s.state === 'HALF_OPEN') {
       const cd = Math.min(s.cooldown_sec * 2, 3600);
       await c.query(
-        `UPDATE ext_circuit_state SET state = 'OPEN', consecutive_failures = $2, opened_at = NOW(), cooldown_sec = $3,
-                next_probe_at = NOW() + make_interval(secs => $3), last_error_kind = $4, updated_at = NOW() WHERE source = $1`,
+        `UPDATE ext_circuit_state SET state = 'OPEN', consecutive_failures = $2, opened_at = NOW(), cooldown_sec = $3::int,
+                next_probe_at = NOW() + make_interval(secs => $3::int), last_error_kind = $4, updated_at = NOW() WHERE source = $1`,
         [source, fails, cd, kind]
       );
     } else if (fails >= threshold()) {
       const cd = baseCooldown();
       await c.query(
-        `UPDATE ext_circuit_state SET state = 'OPEN', consecutive_failures = $2, opened_at = NOW(), cooldown_sec = $3,
-                next_probe_at = NOW() + make_interval(secs => $3), last_error_kind = $4, updated_at = NOW() WHERE source = $1`,
+        `UPDATE ext_circuit_state SET state = 'OPEN', consecutive_failures = $2, opened_at = NOW(), cooldown_sec = $3::int,
+                next_probe_at = NOW() + make_interval(secs => $3::int), last_error_kind = $4, updated_at = NOW() WHERE source = $1`,
         [source, fails, cd, kind]
       );
     } else {

@@ -151,8 +151,8 @@ async function buildLine(raw, lk) {
   const txt = (v) => (v == null ? '' : textOf(v));
   // 날짜
   const td = readDate(raw.trade_date);
-  if (td == null) errors.push(E('trade_date', 'REQUIRED', '거래일(경락일)을 입력하세요.'));
-  else if (td === undefined) errors.push(E('trade_date', 'BAD_DATE', '거래일 형식이 올바르지 않습니다(예: 2026-11-23).'));
+  if (td === undefined) errors.push(E('trade_date', 'BAD_DATE', '거래일 형식이 올바르지 않습니다(예: 2026-11-23).'));
+  else if (td == null) errors.push(E('trade_date', 'REQUIRED', '거래일(경락일)을 입력하세요.'));
   else if (td > addDays(lk.today, 1)) errors.push(E('trade_date', 'FUTURE_DATE', '거래일이 미래입니다.'));
   let ad = null;
   if (raw.arrival_date != null && raw.arrival_date !== '') {

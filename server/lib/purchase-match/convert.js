@@ -126,7 +126,7 @@ async function convertOne(client, cx, a) {
     const conv = await client.query(
       `INSERT INTO purchase_doc_conversion (user_id, doc_id, line_id, trade_id, purchase_id, mode, status, match_result, match_score, doc_amount, purchase_total,
                                             amount_diff, price_diff, purchase_qty, purchase_unit_price, warning_flags, approve_reason, idempotency_key, actor_staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,'ACTIVE',$7,$8,$9,$10, ($10::numeric - $9::numeric), $11, $12, $13, $14::text[], $15, $16, $17) RETURNING id, amount_diff`,
+       VALUES ($1,$2,$3,$4,$5,$6,'ACTIVE',$7,$8,$9::bigint,$10::numeric, ($10::numeric - $9::bigint), $11, $12, $13, $14::text[], $15, $16, $17) RETURNING id, amount_diff`,
       [cx.userId, line.doc_id, line.id, trade ? trade.trade_id : null, purchaseId, mode, line.match_result || 'UNMATCHED', line.match_score ?? null, line.amount,
         tot.rows[0].total_amount, trade ? trade.price_diff : null, tot.rows[0].quantity, tot.rows[0].unit_price, warnings,
         a.approveReason || null, cx.idemKey || null, actorStaff(cx)]

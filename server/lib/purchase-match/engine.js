@@ -151,9 +151,12 @@ async function baseReadiness(db, lines, tolOf, market) {
       const d = addDays(l.trade_date, i);
       if (d <= today) days.push(d);
     }
-    if (!days.length || days.some((d) => !ok.has(d))) return 'BASE_NOT_READY';
-    if (days.every((d) => ok.get(d) === 'EMPTY')) return 'NO_BASE_DATA';
-    return null;
+    // 자동 범위 안에 정상 수집(COMPLETE)이 있는 날이 있으면 기준 데이터는 있다 → 사유는 다른 데서
+    if (days.some((d) => ok.get(d) === 'COMPLETE')) return null;
+    // 거래일 자체를 아직 못 받았으면(또는 범위 전부 없음) 기준 데이터 준비 전
+    if (!days.length || !ok.has(l.trade_date) || days.every((d) => !ok.has(d))) return 'BASE_NOT_READY';
+    // 거래일은 받았는데 비었거나 휴장 — 원인 모를 빈 데이터(경락 없음과 구분)
+    return 'NO_BASE_DATA';
   };
 }
 
