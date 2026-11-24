@@ -41,7 +41,7 @@ const marketCode = (env = process.env) => env.AUCTION_MARKET_CODE || '110001';
 
 /** 목업 시나리오 주입은 목업 모드 + 테스트 DB(AUCTION_MOCK_CONTROL=true)에서만 */
 function mockScenarioOf(job, env = process.env) {
-  if (String(env.AUCTION_MOCK_CONTROL || '').toLowerCase() !== 'true') return undefined;
+  if (env.NODE_ENV === 'production' || String(env.AUCTION_MOCK_CONTROL || '').toLowerCase() !== 'true') return undefined;
   const s = job.params && job.params.mock_scenario;
   return s ? String(s).slice(0, 200) : undefined;
 }

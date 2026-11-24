@@ -231,7 +231,7 @@ const UNION_SQL = `
    WHERE py.user_id = $1 AND py.created_by_staff_id IS NOT NULL
   UNION ALL
   -- T-203 매입서 대조·매입전환 사건(추가만 하는 이력 표 — 이중 기록 없음)
-  SELECT 'purchase_match_event', e.id::bigint, 'purchase_match', e.created_at, 'purchase_doc', e.doc_id,
+  SELECT 'purchase_match_event', e.id::bigint, 'purchase_match', e.created_at, 'purchase_doc', e.doc_id::int, -- int: 다른 갈래의 target_id 형(정수)을 넓히지 않게
          COALESCE(pd.doc_no, '매입서 #' || e.doc_id::text) || COALESCE('-' || pl.line_no::text, '') || ' ' ||
            CASE e.event_type WHEN 'UPLOAD' THEN '업로드' WHEN 'MANUAL_INPUT' THEN '직접 입력' WHEN 'MATCH' THEN '대조' WHEN 'REMATCH' THEN '재대조'
                 WHEN 'AUTO_CONVERT' THEN '자동 매입 등록' WHEN 'CONVERT' THEN '매입 등록' WHEN 'MANUAL_CONFIRM' THEN '수동 확정' WHEN 'FORCE_CONFIRM' THEN '강제 확정'

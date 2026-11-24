@@ -284,7 +284,7 @@ function registerAuctionRoutes(app, deps) {
     const phaseIn = b.phase ? String(b.phase).toUpperCase() : null;
     if (phaseIn && !['INTRADAY', 'FINAL'].includes(phaseIn)) return vErr(res, 'phase', '단계는 INTRADAY 또는 FINAL 입니다.');
     const force = b.force === true;
-    const mockControl = String(process.env.AUCTION_MOCK_CONTROL || '').toLowerCase() === 'true';
+    const mockControl = process.env.NODE_ENV !== 'production' && String(process.env.AUCTION_MOCK_CONTROL || '').toLowerCase() === 'true';
     try {
       const cs = await pool.query(`SELECT state, next_probe_at, disabled_reason FROM ext_circuit_state WHERE source = $1`, [source]);
       const c = cs.rows[0];

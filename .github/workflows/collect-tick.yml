@@ -1,0 +1,28 @@
+# T-203 가락 경락 수집 tick — 외부 무료 cron 이 서버의 POST /api/internal/collect/tick 을 부른다(잠든 무료 호스트도 깨움)
+# 서버는 슬롯(collect_schedule)대로 작업을 만들고, 최근 7일 FINAL 누락을 메우고, 대기 작업을 최대 3건·25초 실행한다.
+# 겹쳐 불려도 dedupe_key·FOR UPDATE SKIP LOCKED 로 한 번만 실행되고, GitHub 예약 실행이 몇 분 늦어도 "슬롯 이후 첫 tick" 이 처리한다.
+# 설정(지휘 AI·사용자가 등록 — 값은 이 파일·로그에 남기지 않음):
+#   Variables: COLLECT_TICK_URL = https://<백엔드 주소>/api/internal/collect/tick
+#   Secrets:   COLLECT_TRIGGER_TOKEN = 서버 환경변수 COLLECT_TRIGGER_TOKEN 과 같은 값(16자 이상)
+# 변수·비밀이 없으면 아무것도 하지 않는다. 토큰이 틀리면 서버는 404 를 준다(라우트를 숨김).
+name: Collect auction tick
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'   # UTC 기준 30분마다(7분·37분). 서버 슬롯은 KST cron(collect_schedule)
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    if: ${{ vars.COLLECT_TICK_URL != '' }}
+    steps:
+      - name: Call collect tick
+        env:
+          TICK_URL: ${{ vars.COLLECT_TICK_URL }}
+          TICK_TOKEN: ${{ secrets.COLLECT_TRIGGER_TOKEN }}
+        run: |
+          if [ -z "$TICK_TOKEN" ]; then echo "::warning::COLLECT_TRIGGER_TOKEN 비밀이 없어 건너뜀"; exit 0; fi
+          code=$(curl -s -o /tmp/tick.json -w '%{http_code}' --max-time 90 --retry 2 -X POST -H "X-Collect-Token: $TICK_TOKEN" -H 'Content-Type: application/json' -d '{}' "$TICK_URL" || echo 000)
+          echo "HTTP $code"
+          if [ "$code" = "200" ]; then node -e "const j=require('/tmp/tick.json');console.log('planned',(j.planned||[]).length,'recovered',(j.recovered||[]).length,'ran',JSON.stringify((j.ran||[]).map(r=>[r.id,r.job_type,r.status])),'ms',j.elapsed_ms)"; else echo "::warning::tick 응답 $code (서버가 깨어나는 중이거나 토큰 불일치)"; fi

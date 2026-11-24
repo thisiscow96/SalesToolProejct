@@ -16,7 +16,8 @@ const N = require('./normalize');
 const TOL_FIELDS = ['price_pct_auto', 'price_pct_review', 'qty_pct_auto', 'qty_pct_review', 'amount_abs_auto', 'date_before_auto', 'date_after_auto',
   'date_before_review', 'date_after_review', 'auto_convert', 'auto_min_score', 'ambiguity_margin'];
 
-const allowMockConvert = (env = process.env) => String(env.ALLOW_MOCK_CONVERT || '').toLowerCase() === 'true';
+// 목업 경락으로 자동 전환 — 테스트 DB 전용. 운영(NODE_ENV=production)에서는 값이 있어도 끈다
+const allowMockConvert = (env = process.env) => env.NODE_ENV !== 'production' && String(env.ALLOW_MOCK_CONVERT || '').toLowerCase() === 'true';
 
 async function loadTolerances(db, userId) {
   const r = await db.query(`SELECT * FROM match_tolerance WHERE user_id IS NULL OR user_id = $1`, [userId]);

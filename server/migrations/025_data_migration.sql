@@ -143,12 +143,16 @@ WHERE NOT EXISTS (SELECT 1 FROM product WHERE is_system);
 -- 3. 변경 이력(019) 값 목록 넓힘 — 024 와 같은 방식
 -- ======================================================================
 ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_entity_type_chk;
-ALTER TABLE audit_log ADD  CONSTRAINT audit_log_entity_type_chk CHECK (entity_type IN ('account', 'auth', 'staff', 'upload', 'migration'));
+-- T-203: 027 이 넓힌 값(purchase_doc·match_setting·market_mapping·market_sync / cancel·sync)도 함께 둔다 — 027 뒤에 이 파일을 다시 실행해도
+--        이미 쌓인 T-203 기록과 충돌하지 않게(재실행 안전). 운영은 schema_migrations 이름으로 건너뛰므로 영향 없음
+ALTER TABLE audit_log ADD  CONSTRAINT audit_log_entity_type_chk CHECK (entity_type IN ('account', 'auth', 'staff', 'upload', 'migration',
+  'purchase_doc', 'match_setting', 'market_mapping', 'market_sync'));
 ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_action_chk;
 ALTER TABLE audit_log ADD  CONSTRAINT audit_log_action_chk CHECK (action IN (
   'create', 'update', 'login',
   'suspend', 'resume', 'delete', 'password_reset', 'password_set', 'invite',
-  'upload', 'migrate', 'rollback'
+  'upload', 'migrate', 'rollback',
+  'cancel', 'sync'
 ));
 
 -- ======================================================================

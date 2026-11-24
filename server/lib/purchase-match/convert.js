@@ -203,7 +203,7 @@ async function convertBatch(client, cx, lineIds) {
     if (!productId) { const link = productOf(l.item_key, l.grade_norm); productId = link ? link.product_id : null; }
     if (!productId) { results.push({ line_id: id, result: 'NO_PRODUCT_LINK', code: 'NO_PRODUCT_LINK', message: '판매툴 품목 연결이 없습니다(대조 설정 → 품목 연결).' }); continue; }
     if (!c.base_final) { results.push({ line_id: id, result: 'NEEDS_CONFIRM', code: 'BASE_NOT_FINAL', message: '그 날 확정 경락 데이터가 아직 없습니다(확정 수집 뒤 자동 재대조, 또는 주인 수동 확정).' }); continue; }
-    if (c.source === 'MOCK' && !(String(process.env.ALLOW_MOCK_CONVERT || '').toLowerCase() === 'true')) {
+    if (c.source === 'MOCK' && !(process.env.NODE_ENV !== 'production' && String(process.env.ALLOW_MOCK_CONVERT || '').toLowerCase() === 'true')) {
       results.push({ line_id: id, result: 'NEEDS_CONFIRM', code: 'MOCK_SOURCE', message: '목업 경락으로는 매입 등록하지 않습니다.' }); continue;
     }
     // eslint-disable-next-line no-await-in-loop
