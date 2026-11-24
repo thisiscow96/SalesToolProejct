@@ -449,7 +449,7 @@ async function main() {
   const ev14 = await q(`SELECT * FROM purchase_match_event WHERE line_id = $1 AND event_type = 'AUTO_CONVERT'`, [l14.id]);
   check('AC-14 이력 AUTO_CONVERT(행위자 주인·tolerance)', ev14.length === 1 && ev14[0].actor_kind === 'OWNER' && ev14[0].detail.tolerance && Number(ev14[0].detail.tolerance.auto_min_score) === 85, ev14);
   r = await api('GET', `/api/purchases?from_date=${S0}&to_date=${S0}`, null, A);
-  check('B1-12 매입 목록 응답에 purchase_doc_line_id', r.status === 200 && r.json.data.some((x) => x.id === l14.purchase_id && Number(x.purchase_doc_line_id) === l14.id), '');
+  check('B1-12 매입 목록 응답에 purchase_doc_line_id·purchase_doc_id', r.status === 200 && r.json.data.some((x) => x.id === l14.purchase_id && Number(x.purchase_doc_line_id) === l14.id && Number(x.purchase_doc_id) === doc14.id), '');
 
   // ---------- AC-16·17·19·21 보류 / AC-20 ④⑤ 미매칭 사유 (S0) ----------
   r = await postDoc(A, { supplier_partner_id: PA, lines: [
@@ -483,7 +483,7 @@ async function main() {
   // ---------- AC-27 수동 확정 (AC-16 줄: 단가 +5%) ----------
   r = await api('GET', `/api/purchase-docs/lines/${L[0].id}/candidates`, null, SV);
   const cand0 = r.json?.data?.candidates?.[0];
-  check('R-122 후보(조회 직원) 1위 경락·점수·차이', r.status === 200 && cand0 && cand0.diff.price === 1200 && cand0.trade.unit_price === 24000, r.json);
+  check('R-122 후보(조회 직원) 1위 경락·점수·차이(+ 화면 별칭 strict·diff.days)', r.status === 200 && cand0 && cand0.diff.price === 1200 && cand0.trade.unit_price === 24000 && cand0.strict === cand0.strict_pass && cand0.diff.days === cand0.diff.date, r.json);
   const lv = async (lid) => (await q(`SELECT version FROM purchase_doc_line WHERE id = $1`, [lid]))[0].version;
   r = await api('POST', `/api/purchase-docs/lines/${L[0].id}/confirm`, { trade_id: cand0.trade_id, version: await lv(L[0].id) }, A, { 'idempotency-key': key() });
   check('AC-27 허용오차 밖 accept_diff 없이 → 400 DIFF_NOT_ACCEPTED(diff)', r.status === 400 && r.json.code === 'DIFF_NOT_ACCEPTED' && r.json.detail.diff.price === 1200, r.json);
@@ -608,7 +608,8 @@ async function main() {
   const upd = (await q(`SELECT (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS e FROM purchase WHERE id = $1`, [pidCorr]))[0];
   const corr = await api('PATCH', `/api/purchases/${pidCorr}`, { changes: { memo: '정정 메모' }, reason: '메모 정정' }, A);
   r = await api('GET', `/api/purchase-docs/${I.id}`, null, A);
-  check('AC-31 전환 매입을 매입정보에서 정정 → 상세 "전환 뒤 정정됨"·매입서 값 그대로', corr.status === 200 && r.json.data.lines.find((x) => x.id === I.lines[1].id).corrected_after_convert === true
+  check('AC-31 전환 매입을 매입정보에서 정정 → 상세 "전환 뒤 정정됨"(+ 경고 CORRECTED_AFTER_CONVERT)·매입서 값 그대로', corr.status === 200 && r.json.data.lines.find((x) => x.id === I.lines[1].id).corrected_after_convert === true
+    && r.json.data.lines.find((x) => x.id === I.lines[1].id).warning_flags.includes('CORRECTED_AFTER_CONVERT')
     && r.json.data.lines.find((x) => x.id === I.lines[1].id).unit_price === 24000, { corr: corr.json, upd });
   r = await postDoc(A, { supplier_partner_id: PA, doc_no: `Z-${tag}`, auto_convert: false, lines: [{ trade_date: S2, item_name: '청양고추', grade: '특', spec: '10kg', qty: 12, unit_price: 38000 }] });
   const z = r.json.data.docs[0];
@@ -715,7 +716,7 @@ async function main() {
   r = await api('GET', `/api/purchase-docs/${doc14.id}`, null, A);
   check('R-120 상세: 줄·purchase_id·best 후보', r.status === 200 && r.json.data.lines[0].purchase_id === l14.purchase_id && r.json.data.lines[0].best.unit_price === 45000, r.json.data && r.json.data.lines[0]);
   r = await api('GET', `/api/purchase-docs/review?reason=MULTI_CANDIDATE`, null, A);
-  check('R-121 검토 대기 사유 필터', r.status === 200 && Array.isArray(r.json.data), r.json);
+  check('R-121 검토 대기 사유 필터(+ doc_id·top_diff)', r.status === 200 && Array.isArray(r.json.data) && r.json.data.every((x) => x.doc_id && 'top_diff' in x), r.json);
   r = await api('GET', `/api/purchase-docs/review`, null, A);
   check('R-121 검토 대기에 HOLD·CANCELLED 줄', r.status === 200 && r.json.data.some((x) => x.status === 'HOLD') && r.json.data.some((x) => x.status === 'CANCELLED'), r.json.total);
 
@@ -746,7 +747,7 @@ async function main() {
   r = await api('POST', '/api/purchase-docs/convert', { lines: [{ line_id: l15a.id }] }, OT, { 'idempotency-key': key() });
   check('AC-33 다른 회원 R-127 → 줄 결과 NOT_FOUND', r.status === 200 && r.json.data.results[0].result === 'NOT_FOUND', r.json);
   r = await api('POST', '/api/purchase-docs', { supplier_partner_id: PA, lines: [{ trade_date: S0, item_name: '청양고추', qty: 1, unit_price: 1 }] }, OT, { 'idempotency-key': key() });
-  check('AC-33 남의 거래처로 매입서 → 400 PARTNER_NOT_FOUND', r.status === 400 && r.json.errors[0].code === 'PARTNER_NOT_FOUND', r.json);
+  check('AC-33 남의 거래처로 매입서 → 400 PARTNER_NOT_FOUND(field lines.0.supplier_partner_id)', r.status === 400 && r.json.errors[0].code === 'PARTNER_NOT_FOUND' && r.json.errors[0].field === 'lines.0.supplier_partner_id', r.json);
   r = await api('GET', `/api/purchase-docs/abc`, null, A);
   check(':id 양의 정수 아님 → 404', r.status === 404, r.status);
 
@@ -790,7 +791,7 @@ async function main() {
   r = await api('GET', '/api/auction/sync/status', null, SV);
   check('R-96 수집 현황(조회 직원) circuits·days·queue·source_mode', r.status === 200 && r.json.circuits.length >= 4 && Array.isArray(r.json.days) && r.json.source_mode === 'MOCK', Object.keys(r.json));
   r = await api('GET', '/api/auction/jobs?status=DEAD', null, SV);
-  check('R-97 작업 목록 상태 필터', r.status === 200 && r.json.data.every((x) => x.status === 'DEAD'), r.json.total);
+  check('R-97 작업 목록 상태 필터·error_message', r.status === 200 && r.json.data.every((x) => x.status === 'DEAD') && r.json.data.every((x) => 'error_message' in x), r.json.total);
   r = await api('PUT', '/api/auction/schedules', { job_type: 'COLLECT_FINAL', source: 'AT_REALTIME', cron_text: '0 25 * * *' }, ADM.tok);
   check('R-135 cron 형식 오류 → 400 BAD_CRON', r.status === 400 && r.json.code === 'BAD_CRON', r.json);
   r = await api('PUT', '/api/auction/schedules', { job_type: 'COLLECT_FINAL', source: 'AT_REALTIME', cron_text: '0 11,16 * * *', active: false }, ADM.tok);

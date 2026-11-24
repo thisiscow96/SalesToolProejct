@@ -264,7 +264,7 @@ function registerAuctionRoutes(app, deps) {
                       FROM collect_job j LEFT JOIN "user" u ON u.id = j.requested_by_user_id WHERE ${where.join(' AND ')}`;
       const out = await runList(pool, base, params, ' ORDER BY j.id DESC', opts);
       out.data = out.data.map((x) => ({ ...x, id: Number(x.id), run_after: iso(x.run_after), created_at: iso(x.created_at), started_at: iso(x.started_at), finished_at: iso(x.finished_at),
-        requested_by_name: x.requested_by_name ? maskName(x.requested_by_name) : null }));
+        requested_by_name: x.requested_by_name ? maskName(x.requested_by_name) : null, error_message: x.last_error }));
       return res.json(out);
     } catch (err) { return fail(res, err, '작업 목록을 불러오지 못했습니다.'); }
   });

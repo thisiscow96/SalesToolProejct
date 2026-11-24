@@ -313,7 +313,8 @@ function registerPurchaseDocRoutes(app, deps) {
       const v = await validateRows(lk, raw, { headerDoc: { supplier_partner_id: b.supplier_partner_id, doc_no: b.doc_no ? String(b.doc_no).trim() || null : null } });
       const bad = v.rows.filter((r) => !r.ok);
       if (bad.length) {
-        const errors = bad.flatMap((r) => r.errors.map((e) => ({ ...e, line: r.line })));
+        // field = lines.{배열 위치}.{칸} (화면이 그 줄 칸 옆에 붙임), column = 칸 이름, line = 1부터 줄 번호
+        const errors = bad.flatMap((r) => r.errors.map((e) => ({ ...e, column: e.field, field: `lines.${r.line - 1}.${e.field}`, line: r.line })));
         return { status: 400, body: { ok: false, code: 'VALIDATION', message: `입력 오류 ${errors.length}건`, errors, rows: v.rows } };
       }
       const g = v.groups[0];
@@ -351,8 +352,10 @@ function registerPurchaseDocRoutes(app, deps) {
                       LEFT JOIN purchase_match_candidate c ON c.run_id = l.last_run_id AND c.line_id = l.id AND c.rank = 1
                      WHERE ${where.join(' AND ')}`;
       const out = await runList(pool, base, params, ' ORDER BY l.trade_date DESC, l.doc_id DESC, l.line_no', opts);
-      out.data = out.data.map((r) => ({ ...lineView(r), doc_no: r.doc_no, doc_date: r.doc_date, supplier_name: r.supplier_name,
-        diff: r.price_diff == null ? null : { price: Number(r.price_diff), price_pct: r.price_diff_pct, qty: r.qty_diff, amount: r.cand_amount_diff != null ? Number(r.cand_amount_diff) : null } }));
+      out.data = out.data.map((r) => {
+        const diff = r.price_diff == null ? null : { price: Number(r.price_diff), price_pct: r.price_diff_pct, qty: r.qty_diff, amount: r.cand_amount_diff != null ? Number(r.cand_amount_diff) : null };
+        return { ...lineView(r), doc_no: r.doc_no, doc_date: r.doc_date, supplier_name: r.supplier_name, diff, top_diff: diff }; // top_diff = diff (B② 이름)
+      });
       return res.json(out);
     } catch (err) {
       console.error('[purchase-doc] review:', err.message);
@@ -431,6 +434,7 @@ function registerPurchaseDocRoutes(app, deps) {
       return res.json({ ok: true, data: { ...docView(d.rows[0]), lines: l.rows.map((r) => ({ ...lineView(r), purchase_id: r.purchase_id, conversion_id: r.conversion_id ? Number(r.conversion_id) : null,
         conversion_mode: r.conversion_mode, conversion_amount_diff: r.conversion_amount_diff, product_name: r.product_name, product_unit: r.product_unit,
         corrected_after_convert: !!r.corrected_after_convert,
+        warning_flags: r.corrected_after_convert ? [...(r.warning_flags || []), 'CORRECTED_AFTER_CONVERT'] : (r.warning_flags || []), // 화면 경고 문구(B②)
         best: r.best_trade_id ? { trade_id: Number(r.best_trade_id), trade_date: r.best_trade_date, corp_name: r.best_corp_name, unit_price: r.best_unit_price != null ? Number(r.best_unit_price) : null,
           qty: r.best_qty, unit_qty_kg: r.best_unit_qty_kg, grade_norm: r.best_grade_norm, source: r.best_source } : null })) } });
     } catch (err) {
@@ -530,8 +534,8 @@ function registerPurchaseDocRoutes(app, deps) {
            FROM purchase_match_candidate c JOIN auction_trade t ON t.id = c.trade_id
           WHERE c.run_id = $1 AND c.line_id = $2 AND c.user_id = $3 ORDER BY c.rank`, [runId, lineId, auth.userId]) : { rows: [] };
       return res.json({ ok: true, data: { line: lineView(l.rows[0]), run_id: runId ? Number(runId) : null, candidates: c.rows.map((x) => ({
-        rank: x.rank, trade_id: Number(x.trade_id), score: x.score, strict_pass: x.strict_pass, breakdown: x.breakdown, flags: x.flags, taken: x.taken,
-        diff: { price: x.price_diff != null ? Number(x.price_diff) : null, price_pct: x.price_diff_pct, qty: x.qty_diff, amount: x.amount_diff != null ? Number(x.amount_diff) : null, date: x.date_diff },
+        rank: x.rank, trade_id: Number(x.trade_id), score: x.score, strict_pass: x.strict_pass, strict: x.strict_pass, breakdown: x.breakdown, flags: x.flags, taken: x.taken,
+        diff: { price: x.price_diff != null ? Number(x.price_diff) : null, price_pct: x.price_diff_pct, qty: x.qty_diff, amount: x.amount_diff != null ? Number(x.amount_diff) : null, date: x.date_diff, days: x.date_diff },
         trade: { source: x.source, trade_date: x.trade_date, auction_at: x.auction_at, corp_code: x.corp_code, corp_name: x.corp_name, item_key: x.item_key, item_name_raw: x.item_name_raw,
           grade_norm: x.grade_norm, grade_name: x.grade_name, pkg_name: x.pkg_name, unit_qty_kg: x.unit_qty_kg, qty: x.qty, unit_price: Number(x.unit_price), amount: Number(x.amount),
           price_per_kg: x.price_per_kg, origin_name: x.origin_name, shipper_name_masked: x.shipper_name_masked, buyer_code: x.buyer_code, auction_seq: x.auction_seq, revision: x.revision, withdrawn_at: x.withdrawn_at },

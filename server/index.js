@@ -1068,6 +1068,7 @@ app.get('/api/purchases', async (req, res) => {
              pu.paid_amount, pu.payment_status,
              pu.entry_kind, pu.external_ref, pu.migration_batch_id, -- T-403 이관 표시
              pu.purchase_doc_line_id, -- T-203 매입서 매입전환으로 만든 매입(화면 "매입서" 배지)
+             (SELECT pdl.doc_id FROM purchase_doc_line pdl WHERE pdl.id = pu.purchase_doc_line_id AND pdl.user_id = pu.user_id) AS purchase_doc_id,
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
