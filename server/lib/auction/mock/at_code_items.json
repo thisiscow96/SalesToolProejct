@@ -1,0 +1,89 @@
+{
+  "response": {
+    "header": {
+      "resultCode": "00",
+      "resultMsg": "NORMAL SERVICE."
+    },
+    "body": {
+      "items": {
+        "item": [
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "11",
+            "gds_mclsf_nm": "고추",
+            "gds_sclsf_cd": "01",
+            "gds_sclsf_nm": "청양"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "11",
+            "gds_mclsf_nm": "고추",
+            "gds_sclsf_cd": "02",
+            "gds_sclsf_nm": "꽈리"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "11",
+            "gds_mclsf_nm": "고추",
+            "gds_sclsf_cd": "03",
+            "gds_sclsf_nm": "오이맛"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "11",
+            "gds_mclsf_nm": "고추",
+            "gds_sclsf_cd": "04",
+            "gds_sclsf_nm": "풋고추(일반)"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "11",
+            "gds_mclsf_nm": "고추",
+            "gds_sclsf_cd": "05",
+            "gds_sclsf_nm": "홍고추"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "12",
+            "gds_mclsf_nm": "파프리카",
+            "gds_sclsf_cd": "01",
+            "gds_sclsf_nm": "파프리카(적)"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "12",
+            "gds_mclsf_nm": "파프리카",
+            "gds_sclsf_cd": "02",
+            "gds_sclsf_nm": "파프리카(황)"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "12",
+            "gds_mclsf_nm": "파프리카",
+            "gds_sclsf_cd": "03",
+            "gds_sclsf_nm": "파프리카(주황)"
+          },
+          {
+            "gds_lclsf_cd": "06",
+            "gds_lclsf_nm": "과채류",
+            "gds_mclsf_cd": "13",
+            "gds_mclsf_nm": "피망",
+            "gds_sclsf_cd": "01",
+            "gds_sclsf_nm": "피망(청)"
+          }
+        ]
+      },
+      "numOfRows": 1000,
+      "pageNo": 1,
+      "totalCount": 9
+    }
+  }
+}

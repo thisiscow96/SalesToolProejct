@@ -47,7 +47,8 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Idempotency-Key'); // T-203 매입전환 멱등 키
+  res.setHeader('Access-Control-Expose-Headers', 'Idempotent-Replay');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -1066,6 +1067,7 @@ app.get('/api/purchases', async (req, res) => {
              pu.status, pu.cancelled_at, pu.cancel_reason, pu.updated_at,
              pu.paid_amount, pu.payment_status,
              pu.entry_kind, pu.external_ref, pu.migration_batch_id, -- T-403 이관 표시
+             pu.purchase_doc_line_id, -- T-203 매입서 매입전환으로 만든 매입(화면 "매입서" 배지)
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
@@ -3184,9 +3186,20 @@ app.get('/api/disposals', async (req, res) => {
 require('./lib/excel-upload').registerExcelRoutes(app, { pool, authorize, getUserId, recordAudit });
 // T-403 데이터 이관 — 엑셀 업로드 뒤(같은 한 연결 실행·핸들러 호출을 쓴다)
 require('./lib/migration-routes').registerMigrationRoutes(app, { pool, authorize, getUserId, recordAudit, kstToday, getUserWarehouseLabel });
+// T-203 가락 경락 수집(공용) + 매입서 대조·매입전환(회원별) — 매입 등록·취소 라우트가 등록된 뒤(전환이 기존 핸들러를 그대로 부른다)
+const auctionHooks = {};
+require('./lib/auction/routes').registerAuctionRoutes(app, { pool, getUserId, getUserIdAndAdmin, recordAudit, hooks: auctionHooks });
+require('./lib/purchase-match/settings-routes').registerMatchSettingsRoutes(app, { pool, getUserIdAndAdmin, recordAudit });
+require('./lib/purchase-match/doc-routes').registerPurchaseDocRoutes(app, { pool, authorize, getUserIdAndAdmin, recordAudit });
+auctionHooks.rematchForDate = require('./lib/purchase-match/rematch').createRematch({
+  app, authorize, pool,
+  // 자동 재대조(SYSTEM)가 매입 등록 핸들러를 부를 때만 쓰는 짧은 주인 토큰(5분) — 응답·로그에 남기지 않는다
+  signOwnerToken: (u) => authToken.signToken(AUTH.secret, { userId: u.id, agentNo: u.agent_no }, 300),
+});
 
 module.exports = { app, pool };
 const host = process.env.HOST || '0.0.0.0';
+if (require.main === module) require('./lib/auction/scheduler').startTimer(pool, auctionHooks); // COLLECT_TIMER_ENABLED=true 일 때만
 if (require.main === module) app.listen(port, host, () => {
   console.log(`Server listening on http://${host}:${port}`);
   console.log('  Health: GET /health   Capabilities: GET /api/capabilities (최신 빌드 확인용)');
