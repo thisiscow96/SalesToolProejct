@@ -232,3 +232,14 @@
   .pm-table--scroll td, .pm-table--scroll th { white-space: nowrap; }
   .pm-col-ref { display: none; }
 }
+
+/* 경락 조회 표 — 날짜·시각·규격·번호·법인은 한 줄(사용자 지시 2026-11-25: 2026-11-25가 꺾이지 않게) */
+@media (min-width: 768px) {
+  [data-testid="auction-table"] td[data-label="경락일"],
+  [data-testid="auction-table"] td[data-label="낙찰시각"],
+  [data-testid="auction-table"] td[data-label="법인"],
+  [data-testid="auction-table"] td[data-label="원표번호"],
+  [data-testid="auction-table"] td[data-label="경매번호"],
+  [data-testid="auction-table"] td[data-label="규격"],
+  [data-testid="auction-table"] th { white-space: nowrap; }
+}
