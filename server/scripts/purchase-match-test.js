@@ -341,6 +341,27 @@ async function main() {
   const tk = await tick();
   check('AC-36 RUNNING 11분 멈춘 작업 → 회수·실행', (tk.json.recovered || []).includes(Number(stuck)) && (await job(stuck)).status === 'DONE', tk.json);
   await drain();
+  // ---------- 큐 회수 최대 시도·옛 실행 (I 검토 D-05·D-06) ----------
+  {
+    const Q = require('../lib/auction/queue');
+    const jDead = await enqueue(addDays(E4, -5), 'FINAL', 'normal');
+    await q(`UPDATE collect_job SET status = 'RUNNING', locked_by = 'dead-worker', locked_at = NOW() - interval '11 minutes', attempts = max_attempts WHERE id = $1`, [jDead]);
+    const tkd = await tick();
+    const jd = await job(jDead);
+    check('D-05 최대 시도에 닿은 멈춘 RUNNING → 회수 뒤 DEAD(finished_at·recovered_dead)·다시 실행 안 함', jd.status === 'DEAD' && jd.finished_at && (tkd.json.recovered_dead || []).includes(Number(jDead))
+      && !(tkd.json.recovered || []).includes(Number(jDead)) && !(tkd.json.ran || []).some((x) => x.id === Number(jDead)), { jd: { status: jd.status, attempts: jd.attempts, finished_at: jd.finished_at }, tk: tkd.json });
+    const fd = await Q.finish(pool, jDead, { status: 'DONE', lockedBy: 'dead-worker' });
+    const jOld = await enqueue(addDays(E4, -6), 'FINAL', 'normal');
+    await q(`UPDATE collect_job SET status = 'RUNNING', locked_by = 'old-worker', locked_at = NOW() - interval '11 minutes', attempts = 1 WHERE id = $1`, [jOld]);
+    await Q.recoverStale(pool);
+    const before = await job(jOld);
+    const fo = await Q.finish(pool, jOld, { status: 'DONE', lockedBy: 'old-worker' });
+    await Q.requeue(pool, { id: jOld, attempts: 1, locked_by: 'old-worker' }, { at: new Date(Date.now() + 86400000) });
+    const after = await job(jOld);
+    check('D-06 회수 뒤 옛 실행의 finish·requeue → 상태 안 바뀜(DEAD 그대로·QUEUED 그대로)', fd === false && (await job(jDead)).status === 'DEAD' && fo === false
+      && before.status === 'QUEUED' && after.status === 'QUEUED' && after.finished_at === null && new Date(after.run_after).getTime() === new Date(before.run_after).getTime(), { fd, fo, before: before.status, after: after.status });
+    await q(`UPDATE collect_job SET status = 'CANCELLED', finished_at = NOW() WHERE id = $1 AND status = 'QUEUED'`, [jOld]);
+  }
   const syncDate = addDays(E4, -3);
   const [m1, m2] = await Promise.all([api('POST', '/api/auction/sync', { date_from: syncDate, date_to: syncDate, mock_scenario: 'normal' }, A), api('POST', '/api/auction/sync', { date_from: syncDate, date_to: syncDate }, A)]);
   const queuedN = [m1, m2].reduce((t, x) => t + ((x.json.data && x.json.data.queued.length) || 0), 0);
@@ -601,6 +622,8 @@ async function main() {
   const l30 = (await q(`SELECT status FROM purchase_doc_line WHERE id = $1`, [I.lines[2].id]))[0];
   const ev30 = await q(`SELECT actor_kind FROM purchase_match_event WHERE line_id = $1 AND event_type = 'CANCEL_VIA_PURCHASE'`, [I.lines[2].id]);
   check('AC-30 기존 매입 취소 → 전환·줄 CANCELLED·이력 CANCEL_VIA_PURCHASE(SYSTEM) 1건', r.status === 200 && l30.status === 'CANCELLED' && ev30.length === 1 && ev30[0].actor_kind === 'SYSTEM', { r: r.json, l30, ev30 });
+  const cancelledActive = await q(`SELECT d.id FROM purchase_doc d JOIN purchase_doc_conversion c ON c.doc_id = d.id AND c.status = 'ACTIVE' WHERE d.status = 'CANCELLED'`);
+  check('AC-30 확인 SQL(취소된 매입서의 활성 전환) 0행', cancelledActive.length === 0, cancelledActive);
   // AC-31
   r = await api('POST', `/api/purchase-docs/${I.id}/cancel`, { reason: '중복 업로드' }, A, { 'idempotency-key': key() });
   check('AC-31 활성 전환 있는 매입서 취소 → 409 DOC_HAS_CONVERSIONS(줄 목록)', r.status === 409 && r.json.code === 'DOC_HAS_CONVERSIONS' && r.json.detail.lines.length >= 1, r.json);
@@ -631,6 +654,35 @@ async function main() {
   const ex = await q(`SELECT kind FROM excel_upload WHERE user_id = $1 AND kind = 'purchase_doc'`, [O.id]);
   check('excel_upload kind purchase_doc 재사용', ex.length === 1, ex);
 
+  // ---------- R-131 매입서 취소 ↔ R-128 수동 확정 같은 매입서 동시 20회 (I 검토 D-01) ----------
+  {
+    const RACE_N = 20;
+    const st = { cancel: {}, confirm: {} };
+    for (let i = 0; i < RACE_N; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const rd = await postDoc(A, { supplier_partner_id: PB, auto_convert: false, lines: [{ trade_date: S2, item_name: '오이고추', grade: '특', spec: '10kg 상자', qty: 1, unit_price: 1000 + i }] });
+      const dd = rd.json?.data?.docs?.[0];
+      if (!dd) { check(`D-01 경합 준비 ${i}`, false, rd.json); break; }
+      const lid = dd.lines[0].id;
+      // eslint-disable-next-line no-await-in-loop
+      const ver = await lv(lid);
+      // eslint-disable-next-line no-await-in-loop
+      const [rc, rf] = await Promise.all([
+        api('POST', `/api/purchase-docs/${dd.id}/cancel`, { reason: '동시성 검사' }, A, { 'idempotency-key': key() }),
+        api('POST', `/api/purchase-docs/lines/${lid}/confirm`, { version: ver, accept_diff: true, reason: '동시성 검사', product_id: P.오이.id }, A, { 'idempotency-key': key() }),
+      ]);
+      st.cancel[`${rc.status}${rc.json && rc.json.code ? ':' + rc.json.code : ''}`] = (st.cancel[`${rc.status}${rc.json && rc.json.code ? ':' + rc.json.code : ''}`] || 0) + 1;
+      st.confirm[`${rf.status}${rf.json && rf.json.code ? ':' + rf.json.code : ''}`] = (st.confirm[`${rf.status}${rf.json && rf.json.code ? ':' + rf.json.code : ''}`] || 0) + 1;
+      if (rc.status >= 500 || rf.status >= 500) st.err = (st.err || 0) + 1;
+    }
+    const bad = await q(`SELECT d.id FROM purchase_doc d WHERE d.user_id = $1 AND d.status = 'CANCELLED' AND (
+                           EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.doc_id = d.id AND c.status = 'ACTIVE')
+                        OR EXISTS (SELECT 1 FROM purchase_doc_line l WHERE l.doc_id = d.id AND l.status = 'CONVERTED')
+                        OR EXISTS (SELECT 1 FROM purchase p JOIN purchase_doc_line l ON l.id = p.purchase_doc_line_id WHERE l.doc_id = d.id AND p.status = 'active'))`, [O.id]);
+    console.log(`[D-01 경합] 취소 ${JSON.stringify(st.cancel)} / 확정 ${JSON.stringify(st.confirm)}`);
+    check(`D-01 매입서 취소 ↔ 수동 확정 동시 ${RACE_N}회 → 취소된 매입서의 활성 전환·CONVERTED 줄·활성 매입 0건`, bad.length === 0, bad);
+    check(`D-01 동시 ${RACE_N}회 → 500 0건·한쪽만 성공(취소 200 + 확정 200 동시 0건)`, !st.err && (st.cancel[200] || 0) + (st.confirm[200] || 0) === RACE_N, st);
+  }
   // ---------- AC-25 같은 경락 건을 두 줄이 노림 / 동시 확정 (S3) ----------
   const S3 = slot(3);
   await collect(S3, 'FINAL', 'normal');
