@@ -340,3 +340,88 @@ thead .pm-col-pick { z-index: 2; background: inherit; }
   .pm-sort-mobile { width: 100%; }
   .pm-col-pick { box-shadow: 1px 0 0 var(--c-border); }
 }
+
+/* ---- H 2026-11-25 T-203 경매 직후 수집: 수집 상태 줄 · [지금 받기] · 표 한 줄 · 환산 근거 ---- */
+/* 수집 상태 줄 — 넓은 화면: [정산분][상태 칩 · 시각] …… [메시지][지금 받기] / 휴대폰: 상태 한 줄, 선택+버튼 한 줄 */
+.pm-live {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: 'date state msg act';
+  align-items: center; gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border: 1px solid var(--c-border); border-radius: var(--radius-lg); background: var(--c-surface-2);
+}
+.pm-live--view { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'date state msg'; }
+.pm-live-date { grid-area: date; }
+.pm-live-date select {
+  height: 36px; padding: 0 var(--sp-8) 0 var(--sp-3); border: 1px solid var(--c-border-strong); border-radius: var(--radius-md);
+  background-color: var(--c-surface); color: var(--c-text); font: inherit; font-size: var(--fs-14); font-variant-numeric: tabular-nums;
+}
+.pm-live-date select:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
+.pm-live-date select:disabled { color: var(--c-text-3); cursor: not-allowed; }
+.pm-live-state { grid-area: state; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); min-width: 0; font-size: var(--fs-13); color: var(--c-text-2); }
+.pm-live-times, .pm-live-rows { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pm-live-rows { color: var(--c-text-3); }
+.pm-live-act { grid-area: act; }
+.pm-live-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2); height: 36px; min-width: 112px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pm-live-msg { grid-area: msg; margin: 0; font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42ch; }
+.pm-live-msg--ok { color: var(--c-success-text); font-weight: var(--fw-semibold); }
+.pm-live-msg--info { color: var(--c-info-text); }
+.pm-live-msg--warn { color: var(--c-warning-text); }
+.pm-live-msg--bad { color: var(--c-danger-text); }
+
+/* 상태 칩 — 점 + 글자(색만으로 구분하지 않음). 진행 중만 점이 천천히 깜빡인다 */
+.pm-live-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--radius-full);
+  font-size: var(--fs-12); font-weight: var(--fw-semibold); white-space: nowrap; background: var(--c-neutral-soft); color: var(--c-neutral-text);
+}
+.pm-live-chip--ok { background: var(--c-success-soft); color: var(--c-success-text); }
+.pm-live-chip--info { background: var(--c-info-soft); color: var(--c-info-text); }
+.pm-live-chip--warn { background: var(--c-warning-soft); color: var(--c-warning-text); }
+.pm-live-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.85; }
+.pm-live-chip.is-live .pm-live-dot { animation: pm-live-pulse 1.6s var(--ease) infinite; }
+@keyframes pm-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+.pm-spin {
+  width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: pm-spin 0.8s linear infinite; opacity: 0.8;
+}
+@keyframes pm-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .pm-live-chip.is-live .pm-live-dot, .pm-spin { animation: none; }
+}
+.pm-circuits .pm-live-chip { margin: 0; }
+
+/* 경락 표 — 품종(배지 포함)은 한 줄, 산지는 말줄임 + title(사용자 로컬 1366: 체크 열이 생기며 2~3줄로 꺾임) */
+[data-testid="auction-table"] td.pm-col-item { white-space: nowrap; }
+[data-testid="auction-table"] td.pm-col-item .pm-tone { margin: 0 0 0 4px; }
+.pm-ellip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 표는 자동 칸 너비라 td max-width 가 듣지 않는다 → 글자 상자 자체에 상한 */
+[data-testid="auction-table"] td.pm-col-origin .pm-ellip { max-width: 7.5em; }
+
+/* 768~1599(1366·1440 노트북): 체크 열 + 배지 2개 + 긴 산지가 들어와도 가로 스크롤 없이 한 화면(칸 좌우 여백 12 → 8px). 1600 이상은 기본 여백 */
+@media (min-width: 768px) and (max-width: 1599px) {
+  [data-testid="auction-table"].main-table td:not(.pm-col-pick) { padding-left: var(--sp-2); padding-right: var(--sp-2); }
+  [data-testid="auction-table"].main-table th .pm-sort { padding: 0 var(--sp-2); }
+  [data-testid="auction-table"].main-table td:last-child, [data-testid="auction-table"].main-table th:last-child .pm-sort { padding-right: var(--sp-3); }
+}
+/* 전환 모달 — 환산 근거 한 줄 */
+.pm-tc-basis {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin-top: var(--sp-1); padding: 2px var(--sp-2);
+  border-radius: var(--radius-sm); background: var(--c-surface-2); font-size: var(--fs-12); color: var(--c-text-2); font-variant-numeric: tabular-nums;
+}
+.pm-tc-basis .pm-num { text-align: left; color: var(--c-text); }
+.pm-tc-basis-k { color: var(--c-text-3); }
+.pm-tc-basis-arrow { color: var(--c-accent); font-weight: var(--fw-semibold); }
+.pm-tc-oks li { border-color: var(--c-success-soft); }
+
+@media (max-width: 767px) {
+  .pm-live, .pm-live--view {
+    grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'state state' 'date act' 'msg msg';
+    padding: var(--sp-3);
+  }
+  .pm-live--view { grid-template-areas: 'state state' 'date date' 'msg msg'; }
+  .pm-live-date select { width: 100%; height: 44px; font-size: var(--fs-16); }
+  .pm-live-btn { height: 44px; min-width: 88px; }
+  .pm-live-msg { white-space: normal; max-width: none; }
+  .pm-live-msg:empty { display: none; }
+}
+@media (max-width: 420px) {
+  .pm-live-btn-tail { display: none; } /* 휴대폰: "5분 뒤"만 보이고 전체 문구는 aria-label·title */
+}

@@ -1,6 +1,10 @@
 // T-203 개발용 목업 — 서버(B①)가 아직 없을 때 화면만 확인하려고 /api 응답을 브라우저 안에서 흉내 낸다.
 // 켜는 법: `VITE_DEV_MOCK=1 npx vite --port 5181` (개발 서버에서만. main.jsx 가 import.meta.env.DEV && VITE_DEV_MOCK==='1' 일 때만 불러온다 → 빌드에는 들어가지 않음)
 // 역할 바꾸기: 주소 뒤 ?mock_role=owner|admin|input|view  · 응답 지연: ?mock_delay=ms (기본 350)
+// 경매 직후 수집(H 2026-11-25): ?mock_live=WAITING|LIVE|SETTLED|CONFIRMED|HOLIDAY|NO_TRADE(오늘 정산분 상태, 기본 LIVE)
+//   ?mock_running=1 (스케줄 폴링이 오늘 정산분을 받는 중 → ALREADY_RUNNING) · ?mock_job_ms=8000(수동 작업이 끝나는 시간)
+//   ?mock_conv=1 (청양 경락을 6kg 상자로 — 판매툴 품목 10kg 단위와 달라 환산 근거가 보임)
+//   ?mock_long=1 (실데이터처럼 긴 산지·매매방법 배지·값 바뀜 배지 — 1366 한 줄 검수용)
 // 데이터는 전부 가명(A청과·B청과, 출하자 마스킹) — 설계서 4장 응답 형식을 따른다. 실제 거래가 아니다.
 
 const TODAY = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -35,7 +39,8 @@ const trades = [];
   let id = 800;
   for (const [day, n] of [[Y1, 30], [TODAY, 24]]) {
     for (let i = 0; i < n; i++) {
-      const [k, raw, kg, price] = kinds[i % kinds.length];
+      const [k, raw, kg0, price] = kinds[i % kinds.length];
+      const kg = k === 'PEPPER.CHEONGYANG' && new URLSearchParams(window.location.search).get('mock_conv') === '1' ? 6 : kg0;
       const g = ['SPECIAL', 'HIGH', 'MID'][i % 3];
       const p = price - (i % 3) * 2000 + (i % 4) * 500;
       const qty = 5 + ((i * 7) % 20);
@@ -46,10 +51,13 @@ const trades = [];
         market_name: '서울가락', corp_code: cc, corp_name: cn, item_key: k, item_label: label(k), item_name_raw: raw,
         grade_norm: g, grade_name: GN[g], pkg_name: '상자', unit_qty_kg: `${kg}.000`, weight_source: 'SOURCE',
         qty: `${qty}.000`, unit_price: p, price_per_kg: (p / kg).toFixed(2), amount: p * qty,
-        origin_name: ['충남 청양', '경남 밀양', '전남 화순', '강원 철원'][i % 4], shipper_name_masked: ['김*수', '이*희', '박*진'][i % 3], buyer_code: null,
+        origin_name: new URLSearchParams(window.location.search).get('mock_long') === '1'
+          ? ['경상북도 안동시 풍산읍', '경상남도 밀양시 삼랑진읍', '전라남도 화순군', '충청남도 청양군 비봉면'][i % 4]
+          : ['충남 청양', '경남 밀양', '전남 화순', '강원 철원'][i % 4],
+        ...(new URLSearchParams(window.location.search).get('mock_long') === '1' && i % 3 === 0 ? { trade_type: '정가·수의' } : {}), shipper_name_masked: ['김*수', '이*희', '박*진'][i % 3], buyer_code: null,
         shipment_no: cc === 'C03' ? `0${30200 + Math.floor(i / 3)}` : String(9 + Math.floor(i / 3) + (day === Y1 ? 0 : 40)), auction_seq: String(1 + (i % 3) + (i > 9 ? 9 : 0)),
         map_status: k ? 'MAPPED' : 'UNMAPPED',
-        revision: i === 2 ? 2 : 1, first_seen_at: iso(day, '03:00'), last_seen_at: iso(day, '09:10'), withdrawn_at: i === 5 && day === Y1 ? iso(day, '10:00') : null,
+        revision: i === 2 || (new URLSearchParams(window.location.search).get('mock_long') === '1' && i % 3 === 0) ? 2 : 1, first_seen_at: iso(day, '03:00'), last_seen_at: iso(day, '09:10'), withdrawn_at: i === 5 && day === Y1 ? iso(day, '10:00') : null,
         history: i === 2 ? [{ revision: 1, qty: `${qty + 1}.000`, unit_price: p + 1000, changed_at: iso(day, '09:10') }] : [],
       });
     }
@@ -63,6 +71,30 @@ let jobs = [
 ];
 let nextJob = 90;
 let lastSync = 0;
+// 하루 상태(R-96 live[] [가정] 계약 — A 설계 5.2). 수동 작업이 끝나면 오늘 정산분 rows 가 늘어난다
+const LP = new URLSearchParams(window.location.search);
+const JOB_MS = Number(LP.get('mock_job_ms') || 8000);
+const liveDays = {
+  [TODAY]: { settle_date: TODAY, label: 'today', state: LP.get('mock_live') || 'LIVE', rows: 24, last_polled_at: iso(TODAY, '22:40'), last_change_at: iso(TODAY, '22:40'), next_run_at: iso(TODAY, '22:50'), settled_at: null, confirmed_at: null },
+  [Y1]: { settle_date: Y1, label: 'yesterday', state: 'CONFIRMED', rows: 30, last_polled_at: iso(TODAY, '06:00'), last_change_at: iso(TODAY, '00:23'), next_run_at: null, settled_at: iso(TODAY, '01:10'), confirmed_at: iso(TODAY, '06:02') },
+};
+(function shapeLive() {
+  const t = liveDays[TODAY];
+  if (t.state === 'SETTLED') Object.assign(t, { settled_at: iso(TODAY, '01:10'), next_run_at: iso(TODAY, '06:00') });
+  if (t.state === 'CONFIRMED') Object.assign(t, { settled_at: iso(TODAY, '01:10'), confirmed_at: iso(TODAY, '06:02'), next_run_at: null });
+  if (t.state === 'WAITING') Object.assign(t, { rows: 0, last_polled_at: iso(TODAY, '21:10'), next_run_at: iso(TODAY, '21:20') });
+  if (t.state === 'HOLIDAY' || t.state === 'NO_TRADE') Object.assign(t, { rows: 0, next_run_at: null });
+})();
+if (LP.get('mock_running') === '1') jobs.unshift({ id: 89, job_type: 'COLLECT', source: 'AT_REALTIME', trade_date: TODAY, phase: 'INTRADAY', attempts: 1, max_attempts: 5, status: 'RUNNING', live: true, done_at: Date.now() + JOB_MS + 4000, gain: 2, requested_by_name: null });
+function tickJobs() {
+  for (const j of jobs) {
+    if (j.live && (j.status === 'QUEUED' || j.status === 'RUNNING') && Date.now() >= j.done_at) {
+      j.status = 'DONE';
+      const d = liveDays[j.trade_date];
+      if (d) Object.assign(d, { rows: d.rows + (j.gain || 0), last_polled_at: new Date().toISOString(), ...(j.gain ? { last_change_at: new Date().toISOString() } : {}) });
+    } else if (j.live && j.status === 'QUEUED') j.status = 'RUNNING';
+  }
+}
 
 const tol = {
   default_row: { id: 1, user_id: null, item_family: null, item_key: null, price_pct_auto: '0.00', price_pct_review: '10.00', qty_pct_auto: '0.00', qty_pct_review: '20.00', amount_abs_auto: 0, date_before_auto: 1, date_after_auto: 0, date_before_review: 3, date_after_review: 1, auto_convert: true, auto_min_score: 85, ambiguity_margin: 10 },
@@ -271,8 +303,11 @@ async function route(method, path, q, body, headers) {
       return ok({ meta: { as_of: iso(TODAY, '09:12'), snapshot_status: 'COMPLETE', phase: onlyToday ? 'INTRADAY' : 'FINAL', stale: P.get('mock_stale') === '1', source_mode: 'MOCK', sort: sk, dir, shipment_no: ship }, ...page(rows, q), days });
     }
     if (b === 'daily-prices') return ok({ data: [{ price_date: q.get('date'), item_key: 'PEPPER.CHEONGYANG', item_name_raw: '청양', grade_name: '특', unit_name: '10kg', avg_price: 34800, prev_price: 34100, diff: 700, diff_pct: '2.1' }] });
-    if (b === 'sync' && c === 'status')
+    if (b === 'sync' && c === 'status') {
+      tickJobs();
       return ok({
+        settle_today: TODAY,
+        live: [liveDays[TODAY], liveDays[Y1]].map((x) => ({ ...x })),
         circuits: [
           { source: 'AT_REALTIME', state: 'OPEN', consecutive_failures: 5, next_probe_at: iso(TODAY, '10:20'), disabled_reason: null, last_error_kind: 'SERVER_ERROR', last_success_at: iso(TODAY, '06:31') },
           { source: 'AT_SETTLE', state: 'CLOSED', consecutive_failures: 0, disabled_reason: null, last_success_at: iso(TODAY, '07:02') },
@@ -284,11 +319,17 @@ async function route(method, path, q, body, headers) {
           { trade_date: addDays(TODAY, -2), source: 'MOCK', phase: 'FINAL', status: 'PARTIAL', total_count: 16, fetched_count: 15, unmapped: 0, verify_warning: '건수 불일치' },
           { trade_date: addDays(TODAY, -3), source: 'MOCK', phase: 'FINAL', status: 'HOLIDAY', fetched_count: 0 },
         ],
-        queue: jobs.filter((j) => j.status === 'QUEUED'),
+        queue: jobs.filter((j) => j.status === 'QUEUED' || (j.live && j.status === 'RUNNING')).map(({ live, done_at, gain, ...j }) => j), // eslint-disable-line no-unused-vars
         source_mode: 'MOCK',
       });
+    }
     if (b === 'sync' && W) {
       if (need('owner')) return forbid();
+      tickJobs();
+      // 같은 날짜를 이미 받는 중(스케줄 폴링·직전 수동) → 새 작업 없이 그 작업 번호(A 설계 5.1 ALREADY_RUNNING)
+      const running = jobs.find((j) => j.live && (j.status === 'QUEUED' || j.status === 'RUNNING') && j.trade_date >= body.date_from && j.trade_date <= body.date_to);
+      if (running && body.date_from === body.date_to) return json(202, { ok: true, data: { queued: [], skipped: [{ target_date: running.trade_date, reason: 'ALREADY_RUNNING', job_id: running.id }] } });
+      if (body.date_to > TODAY) return fail(400, 'VALIDATION', '아직 오지 않은 정산일은 받을 수 없습니다.', { field: 'date_to' });
       if (Date.now() - lastSync < 5 * 60e3) return fail(429, 'SYNC_RATE_LIMIT', '수동 동기화는 5분에 한 번만 할 수 있습니다.', { detail: { retry_after_sec: Math.ceil((5 * 60e3 - (Date.now() - lastSync)) / 1000) } });
       lastSync = Date.now();
       const queued = [];
@@ -297,7 +338,9 @@ async function route(method, path, q, body, headers) {
         if (dd === Y1 && !body.force) skipped.push({ target_date: dd, reason: 'ALREADY_COMPLETE' });
         else if (dd === addDays(TODAY, -3)) skipped.push({ target_date: dd, reason: 'HOLIDAY' });
         else {
-          const j = { id: nextJob++, job_type: 'COLLECT', source: body.source, trade_date: dd, phase: body.phase, attempts: 0, max_attempts: 5, status: 'QUEUED', run_after: new Date().toISOString(), requested_by_name: who().name };
+          const st0 = liveDays[dd]?.state;
+          const ph = body.phase || (st0 === 'WAITING' || st0 === 'LIVE' ? 'INTRADAY' : 'FINAL');
+          const j = { id: nextJob++, job_type: 'COLLECT', source: body.source, trade_date: dd, phase: ph, attempts: 0, max_attempts: 5, status: 'QUEUED', run_after: new Date().toISOString(), requested_by_name: who().name, live: true, done_at: Date.now() + JOB_MS, gain: dd === TODAY ? 3 : 0 };
           jobs.unshift(j);
           queued.push({ id: j.id, target_date: dd });
         }
@@ -401,9 +444,16 @@ async function route(method, path, q, body, headers) {
       if (!cl?.partner_id) return { trade_id: id, result: 'NO_CORP_LINK', message: `법인 ${t.corp_name}과 거래처 연결이 없습니다(대조 설정 → 법인 연결).` };
       const pl = plinks.find((x) => x.item_key === t.item_key);
       if (!pl) return { trade_id: id, result: 'NO_PRODUCT_LINK', message: `${t.item_label || t.item_name_raw} 품목 연결이 없습니다(대조 설정 → 품목 연결).` };
+      const W = Number(String(pl.product_unit || '').replace(/kg$/i, '')) || null;
+      const K = Number(t.unit_qty_kg) || null;
+      const conv = W && K && W !== K;
+      const quantity = conv ? String(Number((Number(t.qty) * K / W).toFixed(3))) : t.qty;
+      const unitPrice = conv ? (t.unit_price * W / K).toFixed(2) : `${t.unit_price}.00`;
       return {
-        trade_id: id, result: 'WILL_CONVERT', partner: { id: cl.partner_id, name: cl.corp_name }, product: { id: pl.product_id, name: pl.product_name },
-        purchase_date: t.trade_date, quantity: t.qty, unit_price: `${t.unit_price}.00`, total: `${t.amount}.00`, shipment_no: t.shipment_no, auction_seq: t.auction_seq,
+        trade_id: id, result: 'WILL_CONVERT', partner: { id: cl.partner_id, name: cl.corp_name }, product: { id: pl.product_id, name: pl.product_name, unit: pl.product_unit },
+        purchase_date: t.trade_date, quantity, unit_price: unitPrice, total: `${t.amount}.00`, shipment_no: t.shipment_no, auction_seq: t.auction_seq,
+        source: { qty: t.qty, unit_price: t.unit_price, amount: t.amount, unit_qty_kg: t.unit_qty_kg, pkg_name: t.pkg_name },
+        conversion: { product_unit: pl.product_unit, unit_kg: W, line_kg: K, factor: conv ? String(K / W) : '1' },
         warnings: t.trade_date === TODAY ? ['BASE_NOT_FINAL'] : [], _t: t, _pl: pl, _cl: cl,
       };
     };
@@ -434,7 +484,7 @@ async function route(method, path, q, body, headers) {
         quantity: t.qty, allocated_qty: '0', remaining_qty: t.qty, unit_price: t.unit_price, total_amount: t.amount, unpaid_amount: t.amount, status: 'active',
         source_name: t.corp_name, origin_region: t.origin_name, memo: `경락 #${t.id} · 원표 ${t.shipment_no} · 경매 ${t.auction_seq}`, purchase_doc_line_id: nextLine++, purchase_doc_id: nextDoc, purchase_doc_kind: 'AUCTION',
       });
-      return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid };
+      return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid, quantity: r.quantity, unit_price: r.unit_price, total: r.total, product: r.product, source: r.source, conversion: r.conversion };
     });
     const conv = results.filter((r) => r.result === 'CONVERTED');
     if (conv.length) {

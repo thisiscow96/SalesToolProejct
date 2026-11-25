@@ -1,18 +1,19 @@
 // T-203 ② 수집 현황 (설계 6.3) — R-96 현황 · R-97 작업 / 쓰기 R-98 지금 받기(주인) · R-132 다시 실행(주인) · R-99 대기 취소(관리자)
 // DB 사용량(R-136, 관리자만): DB 크기·한도 대비 %·경락 행 수·가장 오래된 날짜·보관 기간 — 한도 80% 넘으면 경고 문구
 // 잠금(T-404): [지금 받기] 응답까지 버튼·기간 잠금, 429 SYNC_RATE_LIMIT 은 남은 시간 표시, 행별 버튼은 useBusyIds
+// 2026-11-25 경매 직후 수집(A 설계 5.2·5.3): 정산분 상태 카드(live[] — 경락 조회 수집 상태 줄과 같은 문구), 날짜 상한 = settle_today, 5분 제한 값을 경락 조회와 공유
 import { useCallback, useEffect, useId, useState } from 'react';
 import { auctionApi } from '../lib/auctionApi';
 import { getUser } from '../api';
 import { can } from '../lib/staffAccess';
 import { useBusyIds, useLatestRequest } from '../components/Busy';
 import { ErrorLine, MockBadge, Tone } from '../components/MatchBits';
+import { SYNC_GAP_MS, syncGate } from './AuctionLiveStrip';
 import {
-  CIRCUIT, DISABLED_REASON, ERROR_KIND, JOB_STATUS, PHASE_SHORT, SNAPSHOT_STATUS, SOURCE_LABEL,
-  kstAddDays, kstTime, kstToday, md, won,
+  CIRCUIT, DISABLED_REASON, ERROR_KIND, JOB_STATUS, LIVE_STATE, PHASE_SHORT, SETTLE_LABEL, SNAPSHOT_STATUS, SOURCE_LABEL,
+  kstAddDays, kstTime, kstToday, liveTimes, md, won,
 } from '../lib/matchLabels';
 
-const SYNC_GAP_MS = 5 * 60 * 1000;
 const mb = (b) => (b == null ? '-' : `${(Number(b) / 1048576).toLocaleString('ko-KR', { maximumFractionDigits: 1 })} MB`);
 
 function StorageCard({ data, error }) {
@@ -66,7 +67,11 @@ export default function AuctionSyncStatus() {
   const [form, setForm] = useState({ source: 'AT_REALTIME', date_from: kstAddDays(today, -4), date_to: today, phase: 'FINAL', force: false });
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null); // { tone, text }
-  const [rateUntil, setRateUntil] = useState(0);
+  const [rateUntil, setRateUntilState] = useState(syncGate.until);
+  const setRateUntil = (v) => {
+    syncGate.until = v; // 경락 조회 [지금 받기]와 같은 5분 제한
+    setRateUntilState(v);
+  };
   const [now, setNow] = useState(Date.now());
   const rowBusy = useBusyIds();
   const latest = useLatestRequest();
@@ -107,9 +112,11 @@ export default function AuctionSyncStatus() {
   }, [rateUntil, now]);
 
   const waitLeft = Math.max(0, rateUntil - now);
+  // 날짜 상한 = 서버 정산일(밤 21시 뒤면 다음 날 정산분까지 받을 수 있다, L-D4). 서버가 안 주면 달력 날짜
+  const maxDate = st?.settle_today && st.settle_today > today ? st.settle_today : today;
   const syncNow = async () => {
     if (syncing || waitLeft > 0) return;
-    if (form.date_from > form.date_to || form.date_to > today) {
+    if (form.date_from > form.date_to || form.date_to > maxDate) {
       setSyncMsg({ tone: 'bad', text: '기간을 바르게 지정하세요(미래 날짜 안 됨).' });
       return;
     }
@@ -119,7 +126,7 @@ export default function AuctionSyncStatus() {
       const r = await auctionApi.sync(form);
       const q = r.data?.queued || [];
       const sk = r.data?.skipped || [];
-      const skipText = sk.map((s) => `${md(s.target_date)} ${s.reason === 'ALREADY_COMPLETE' ? '이미 받음' : s.reason === 'HOLIDAY' ? '휴장' : s.reason === 'ALREADY_QUEUED' ? '이미 대기 중' : s.reason}`).join(', ');
+      const skipText = sk.map((s) => `${md(s.target_date)} ${s.reason === 'ALREADY_COMPLETE' ? '이미 받음' : s.reason === 'HOLIDAY' ? '휴장' : s.reason === 'ALREADY_QUEUED' ? '이미 대기 중' : s.reason === 'ALREADY_RUNNING' ? '이미 받는 중' : s.reason}`).join(', ');
       setSyncMsg({ tone: 'ok', text: `${q.length}건을 수집 대기열에 넣었습니다.${skipText ? ` 건너뜀: ${skipText}` : ''}` });
       setRateUntil(Date.now() + SYNC_GAP_MS);
       setNow(Date.now());
@@ -153,6 +160,7 @@ export default function AuctionSyncStatus() {
 
   const circuits = st?.circuits || [];
   const days = st?.days || [];
+  const live = Array.isArray(st?.live) ? st.live : [];
 
   return (
     <section className="pm-section" aria-label="수집 현황" data-testid="auction-sync">
@@ -163,6 +171,27 @@ export default function AuctionSyncStatus() {
         </button>
       </div>
       <ErrorLine error={err} />
+
+      {live.length > 0 && (
+        <div className="pm-card">
+          <h3 className="pm-h3">정산분 수집 상태</h3>
+          <ul className="pm-circuits" data-testid="auction-sync-live">
+            {live.map((x) => {
+              const info = LIVE_STATE[x.state] || { label: x.state, tone: 'neutral' };
+              return (
+                <li key={x.settle_date} data-testid={`auction-sync-live-${x.label || x.settle_date}`}>
+                  <strong>{SETTLE_LABEL[x.label] || '정산분'} {x.settle_date}</strong>
+                  <span className={`pm-live-chip pm-live-chip--${info.tone}` + (x.state === 'LIVE' ? ' is-live' : '')} data-state={x.state}>
+                    <span className="pm-live-dot" aria-hidden="true" />{info.label}
+                  </span>
+                  {x.rows != null && x.state !== 'WAITING' && <span>{won(x.rows)}건</span>}
+                  {liveTimes(x) && <span className="pm-muted">· {liveTimes(x)}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="pm-card">
         <h3 className="pm-h3">소스 상태</h3>
@@ -217,12 +246,12 @@ export default function AuctionSyncStatus() {
           </label>
           <label htmlFor={ids.from}>
             기간
-            <input id={ids.from} type="date" value={form.date_from} max={today} disabled={syncing} onChange={(e) => setForm({ ...form, date_from: e.target.value })} data-testid="auction-sync-from" />
+            <input id={ids.from} type="date" value={form.date_from} max={maxDate} disabled={syncing} onChange={(e) => setForm({ ...form, date_from: e.target.value })} data-testid="auction-sync-from" />
           </label>
           <span aria-hidden="true">~</span>
           <label htmlFor={ids.to}>
             <span className="pm-sr">끝 날짜</span>
-            <input id={ids.to} type="date" value={form.date_to} max={today} disabled={syncing} onChange={(e) => setForm({ ...form, date_to: e.target.value })} data-testid="auction-sync-to" />
+            <input id={ids.to} type="date" value={form.date_to} max={maxDate} disabled={syncing} onChange={(e) => setForm({ ...form, date_to: e.target.value })} data-testid="auction-sync-to" />
           </label>
           <label htmlFor={ids.phase}>
             단계

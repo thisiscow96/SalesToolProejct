@@ -2,6 +2,7 @@
 // 데이터: R-92(목록·meta·days) · R-93(상세) · R-94(참고 시세) · R-95(품종 선택지) · R-138/R-139(경락 → 매입 전환)
 // 잠금(T-404): 조건을 바꾸면 useLatestRequest().invalidate() — 늦은 응답 버림, [조회] 요청 중 비활성
 // 2026-11-25 원표번호 검색·열 정렬(서버)·체크 → 매입 전환 → 매입정보 이동 (A 설계서 1·2·4절)
+// 2026-11-25 수집 상태 줄·[지금 받기](AuctionLiveStrip) · 첫 진입 날짜 = 서버 settle_today(경매 직후 수집 설계 5.3·L-D5)
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { auctionApi } from '../lib/auctionApi';
 import { tradeConvertApi } from '../lib/purchaseDocApi';
@@ -11,6 +12,7 @@ import { useLatestRequest } from '../components/Busy';
 import { Pager } from '../components/ListPaging';
 import { ErrorLine, MatchModal, MockBadge, SubNav, Tone } from '../components/MatchBits';
 import AuctionSyncStatus from './AuctionSyncStatus';
+import AuctionLiveStrip from './AuctionLiveStrip';
 import {
   EMPTY_REASON, FAMILY, GRADE, GRADE_LABEL, NOT_CONVERTIBLE, PHASE_LABEL, SNAPSHOT_STATUS, SOURCE_LABEL,
   TRADE_CONVERT_RESULT, TRADE_CONVERT_WARN, reasonText,
@@ -103,6 +105,8 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
   const [picked, setPicked] = useState(() => new Set()); // 매입 전환할 경락 id(지금 쪽만)
   const [convertIds, setConvertIds] = useState(null); // 미리보기 모달을 연 대상
   const latest = useLatestRequest();
+  const [settleToday, setSettleToday] = useState(today); // 서버 정산일(21시 경계) — 받기 전에는 달력 날짜
+  const touched = useRef(false); // 사용자가 조건을 바꿨으면 정산일이 와도 날짜를 덮지 않는다
   const canConvert = can('purchase.convert_from_trade');
   const shipMode = cleanShipment(form.shipment_no) !== '';
 
@@ -166,6 +170,7 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
   }, []);
 
   const change = (patch) => {
+    touched.current = true;
     latest.invalidate(); // 조건을 바꾸면 진행 중 응답은 버린다
     setLoading(false);
     setForm((f) => ({ ...f, ...patch }));
@@ -204,6 +209,18 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
     run(applied, 0, limit, next);
   };
   const clickSort = (col) => applySort(sort.key === col.key ? { key: col.key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key: col.key, dir: col.dir });
+  /** R-96 settle_today 도착 — 첫 진입 그대로면(오늘 하루 조회) 그 날짜로 다시 조회(밤 21시 뒤 = 다음 정산일) */
+  const adoptSettleToday = (d) => {
+    setSettleToday(d);
+    if (touched.current || d === today || form.date_from !== today || form.date_to !== today) return;
+    const c = { ...form, date_from: d, date_to: d };
+    setForm(c);
+    setApplied(c);
+    setOffset(0);
+    run(c, 0, limit, sort);
+  };
+  /** [지금 받기]가 끝나면 지금 조회 조건 그대로 1회 다시 조회 */
+  const refreshAfterCollect = () => (applied ? run(applied, offset, limit, sort) : undefined);
   const toggleVariety = (key) =>
     change({ item_key: form.item_key.includes(key) ? form.item_key.filter((k) => k !== key) : [...form.item_key, key] });
 
@@ -268,10 +285,10 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
           <div className="pm-field pm-field--range">
             <label className="pm-field-label" htmlFor={ids.from}>기간</label>
             <div className="pm-range">
-              <input id={ids.from} type="date" value={form.date_from} max={today} onChange={(e) => change({ date_from: e.target.value })} data-testid="auction-date-from" />
+              <input id={ids.from} type="date" value={form.date_from} max={settleToday > today ? settleToday : today} onChange={(e) => change({ date_from: e.target.value })} data-testid="auction-date-from" />
               <span aria-hidden="true">~</span>
               <label htmlFor={ids.to} className="pm-sr">끝 날짜</label>
-              <input id={ids.to} type="date" value={form.date_to} max={kstAddDays(today, 1)} onChange={(e) => change({ date_to: e.target.value })} data-testid="auction-date-to" />
+              <input id={ids.to} type="date" value={form.date_to} max={kstAddDays(settleToday > today ? settleToday : today, 1)} onChange={(e) => change({ date_to: e.target.value })} data-testid="auction-date-to" />
             </div>
           </div>
           <div className="pm-field pm-field--ship">
@@ -373,6 +390,8 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
         </div>
         {formErr && <p className="pm-error pm-error--inline" role="alert">{formErr}</p>}
       </form>
+
+      <AuctionLiveStrip onSettleToday={adoptSettleToday} onCollected={refreshAfterCollect} />
 
       <div className="pm-result-bar" ref={topRef}>
       {res ? (
@@ -529,7 +548,7 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
                 </td>
                 <td className="pm-mono pm-col-ref" data-label="원표번호">{r.shipment_no || <span className="pm-muted">-</span>}</td>
                 <td className="pm-mono pm-col-ref" data-label="경매번호">{r.auction_seq || <span className="pm-muted">-</span>}</td>
-                <td data-label="품종">
+                <td className="pm-col-item" data-label="품종">
                   {r.item_label ? r.item_label.split('·').pop().trim() : <span className="pm-muted" title="품목 매핑 없음">{r.item_name_raw}</span>}
                   {r.converted_purchase_id && (
                     <span className="pm-tone pm-tone--ok" title={`매입 #${r.converted_purchase_id}로 등록됨`} data-testid={`auction-converted-${r.id}`}>매입됨</span>
@@ -542,7 +561,9 @@ function AuctionTrades({ onNavigate, onTabBusy }) {
                 <td className="pm-num" data-label="수량">{dec(r.qty)}</td>
                 <td className="pm-num" data-label="단가">{won(r.unit_price)}</td>
                 <td className="pm-num" data-label="kg단가">{dec(r.price_per_kg, 0)}</td>
-                <td data-label="산지">{r.origin_name || '-'}</td>
+                <td className="pm-col-origin" data-label="산지">
+                  {r.origin_name ? <span className="pm-ellip" title={r.origin_name}>{r.origin_name}</span> : '-'}
+                </td>
               </tr>
               );
             })}
@@ -742,6 +763,7 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
                           </td>
                           <td data-label="거래처 · 품목">
                             {will ? <><div>{x.partner?.name || '-'}</div><div className="pm-muted">{x.product?.name || '-'}</div></> : <span className="pm-muted">{label(x.trade_id, x)}</span>}
+                            {(will || x.result === 'UNIT_CHECK_NEEDED') && <BasisLine b={convBasis(x, byId.get(x.trade_id))} testid={`tc-basis-${x.trade_id}`} />}
                           </td>
                           <td className="pm-num" data-label="수량">{will ? dec(x.quantity) : ''}</td>
                           <td className="pm-num" data-label="단가">{will ? won(x.unit_price) : ''}</td>
@@ -770,6 +792,20 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
           ) : (
             <p className="pm-error" role="alert" data-testid="tc-done-fail">한 건도 등록하지 못했습니다. 아래 이유를 확인하세요.</p>
           )}
+          {okResults.length > 0 && (
+            <ul className="pm-tc-fails pm-tc-oks" data-testid="tc-ok-list">
+              {okResults.map((x) => {
+                const st = TRADE_CONVERT_RESULT[x.result] || { label: x.result, tone: 'ok' };
+                return (
+                  <li key={x.trade_id}>
+                    <Tone tone={st.tone}>{st.label}</Tone> <span>{label(x.trade_id, x)}</span>
+                    {x.purchase_id && <span className="pm-muted"> · 매입 #{x.purchase_id}</span>}
+                    <BasisLine b={convBasis(x, byId.get(x.trade_id))} testid={`tc-done-basis-${x.trade_id}`} />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <ul className="pm-tc-fails" data-testid="tc-fail-list">
             {badResults.map((x) => {
               const st = TRADE_CONVERT_RESULT[x.result] || { label: x.result, tone: 'bad' };
@@ -784,6 +820,41 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
         </>
       )}
     </MatchModal>
+  );
+}
+
+/**
+ * 환산 근거 한 줄 — "경락 1상자(6kg) × 33,600원 → 매입 0.6(10kg 단위) × 56,000원"
+ * [가정] 계약(B 병합 전): 미리보기·결과 행의 source{qty,unit_price,unit_qty_kg,pkg_name}·conversion{product_unit,unit_kg}.
+ * 없으면 표의 경락 행 값과 product.unit 으로 채운다. 화면은 표시만 하고 계산하지 않는다(서버 값 그대로).
+ */
+function convBasis(x, t = {}) {
+  const src = x.source || x.trade_source || {};
+  const cv = x.conversion || {};
+  const qty = src.qty ?? t.qty;
+  const price = src.unit_price ?? t.unit_price;
+  const kg = src.unit_qty_kg ?? t.unit_qty_kg;
+  const pkg = src.pkg_name ?? t.pkg_name ?? '';
+  const q2 = x.quantity ?? x.detail?.quantity;
+  const p2 = x.unit_price ?? x.detail?.unit_price;
+  if (qty == null || q2 == null || p2 == null) return null;
+  const unit = cv.product_unit ?? x.product?.unit ?? (cv.unit_kg != null ? `${dec(cv.unit_kg)}kg` : null);
+  const same = Number(qty) === Number(q2) && Number(price) === Number(p2);
+  return {
+    from: `${dec(qty)}${pkg}${kg != null && kg !== '' ? `(${dec(kg)}kg)` : ''} × ${won(price)}원`,
+    to: `${dec(q2)}${unit ? `(${unit} 단위)` : ''} × ${won(p2)}원`,
+    same,
+  };
+}
+function BasisLine({ b, testid }) {
+  if (!b) return null;
+  return (
+    <div className="pm-tc-basis" data-testid={testid}>
+      <span className="pm-tc-basis-k">경락</span> <span className="pm-num">{b.from}</span>
+      <span className="pm-tc-basis-arrow" aria-label="환산하면">→</span>
+      <span className="pm-tc-basis-k">매입</span> <span className="pm-num">{b.to}</span>
+      {b.same && <span className="pm-muted"> (환산 없음)</span>}
+    </div>
   );
 }
 

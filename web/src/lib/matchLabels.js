@@ -258,3 +258,33 @@ export const TRADE_CONVERT_WARN = {
   BASE_NOT_FINAL: '확정 전(당일 집계) 값 — 나중에 값이 바뀔 수 있음',
   DOC_LINE_PENDING: '대기 중인 매입서 줄이 이 경락 건을 후보로 갖고 있음(그 줄은 나중에 "이미 씀"이 됨)',
 };
+
+/* ---- T-203 경매 직후 수집(A 설계 2.1·5.3) — 경락 조회 "수집 상태 줄"과 수집 현황이 같은 문구를 쓴다 ---- */
+/** 하루 상태(collect_day_state.state) → 칩 문구·색. 색만으로 구분하지 않게 문구가 곧 상태다 */
+export const LIVE_STATE = {
+  WAITING: { label: '경매 전', tone: 'neutral' },
+  LIVE: { label: '경매 진행 중', tone: 'info' },
+  SETTLED: { label: '완료 판정', tone: 'ok' },
+  CONFIRMED: { label: '확정', tone: 'ok' },
+  HOLIDAY: { label: '휴장', tone: 'neutral' },
+  NO_TRADE: { label: '거래 없음', tone: 'neutral' },
+};
+/** 정산분 이름(R-96 live[].label) */
+export const SETTLE_LABEL = { today: '오늘 정산분', yesterday: '어제 정산분' };
+/** R-98 skipped[].reason → 짧은 문구(경락 조회·수집 현황 공용) */
+export const SYNC_SKIP = {
+  ALREADY_COMPLETE: '이미 받음',
+  ALREADY_QUEUED: '이미 대기 중',
+  ALREADY_RUNNING: '이미 받는 중',
+  HOLIDAY: '휴장',
+};
+/** 남은 시간(ms) → "N분" / 1분 미만 "N초" */
+export const leftText = (ms) => (ms >= 60000 ? `${Math.ceil(ms / 60000)}분` : `${Math.max(1, Math.ceil(ms / 1000))}초`);
+/** 하루 상태의 시각 설명 — "마지막 수집 22:40 · 다음 22:50" / "01:10 판정 · 06:00 확인 예정" / "06:02 확정" */
+export function liveTimes(x) {
+  if (!x) return '';
+  const t = (v) => kstTime(v, false);
+  if (x.state === 'CONFIRMED') return x.confirmed_at ? `${t(x.confirmed_at)} 확정` : '';
+  if (x.state === 'SETTLED') return [x.settled_at && `${t(x.settled_at)} 판정`, x.next_run_at && `${t(x.next_run_at)} 확인 예정`].filter(Boolean).join(' · ');
+  return [x.last_polled_at ? `마지막 수집 ${t(x.last_polled_at)}` : '아직 수집 전', x.next_run_at && `다음 ${t(x.next_run_at)}`].filter(Boolean).join(' · ');
+}
