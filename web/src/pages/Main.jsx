@@ -49,6 +49,8 @@ import { can, isStaff, ROLE_LABEL } from '../lib/staffAccess'; // T-213 역할�
 import './Main.css';
 import '../styles/mobile.css';
 import ExcelUploadBar from '../components/ExcelUpload'; // T-402
+import TabAuction from './TabAuction'; // T-203 경락 시세
+import TabPurchaseDocs from './TabPurchaseDocs'; // T-203 매입서 대조·매입 등록(매입전환)
 
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 오늘 날짜 yyyy-mm-dd (로컬) */
@@ -1352,7 +1354,7 @@ function TabPurchases({ onNavigate } = {}) {
                   </td>
                   <td data-card="extra" data-label="출처" className="main-td-scroll main-col-source"><CellText>{(row.source_name && String(row.source_name).trim()) || '—'}</CellText>{row.producer_name || row.origin_region ? <small className="main-origin-note">{[row.producer_name, row.origin_region].filter(Boolean).join(' · ')}{row.payee_partner_id && row.payee_partner_id !== row.partner_id ? ' · 지급: 생산자' : ''}</small> : null}</td>
                   <td data-card="sub" data-label="매입 거래처" className="main-td-scroll main-col-partner"><CellText>{row.partner_name}</CellText></td>
-                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /><MigrationBadge row={row} /></td>
+                  <td data-card="title" data-label="상품" className="main-td-scroll main-col-product"><CellText>{row.product_name}</CellText><StaffEntryBadge row={row} /><MigrationBadge row={row} /><PurchaseDocBadge row={row} onNavigate={onNavigate} /></td>
                   <td data-card="key" data-label="수량" className="num main-col-qty">{formatKoNumber(row.quantity)}</td>
                   <td data-card="extra" data-label="매출 반영" className="num main-col-qty">{formatKoNumber(row.allocated_qty || 0)}</td>
                   <td data-card="key" data-label="잔여" className="num main-col-qty">{formatKoNumber(row.remaining_qty != null ? row.remaining_qty : row.quantity)}</td>
@@ -3328,6 +3330,8 @@ const BASE_TABS = [
   { id: 'daily-trade', label: '일별 매입·매출', Component: TabDailyTrade },
   { id: 'monthly', label: '월 정산', Component: TabMonthly }, // T-215
   { id: 'purchases', label: '매입정보', Component: TabPurchases },
+  { id: 'auction', label: '경락 시세', Component: TabAuction }, // T-203 — 매입 업무 옆(설계 6.1)
+  { id: 'purchase-docs', label: '매입서 대조', Component: TabPurchaseDocs }, // T-203
   { id: 'sales', label: '매출정보', Component: TabSales },
   { id: 'payments', label: '수금정보', Component: TabPayments },
   { id: 'supplier-payments', label: '지급정보', Component: TabSupplierPayments }, // T-201
@@ -3344,6 +3348,27 @@ function MigrationBadge({ row }) {
   if (row?.entry_mode === 'opening' || row?.entry_kind === 'opening_ap') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 잔액(묶음 되돌리기로만 고칩니다)">이관 기초</span>;
   if (row?.entry_kind === 'opening_stock') return <span className="mg-badge" title="데이터 이관으로 넣은 기준일 재고 로트">이관 재고</span>;
   return null;
+}
+
+/** T-203 매입서 대조로 만든 매입이면 "매입서" 배지 — 누르면 매입서 대조 탭의 그 매입서로(다른 탭에 검색 조건 넘기기 방식) */
+function PurchaseDocBadge({ row, onNavigate }) {
+  if (!row?.purchase_doc_line_id) return null;
+  const docId = row.purchase_doc_id || null; // 서버와 맞출 것: 매입 목록에 purchase_doc_id 도 함께
+  if (!onNavigate || !docId) return <span className="mg-badge" title="매입서 대조로 만든 매입" data-testid="pdoc-purchase-badge">매입서</span>;
+  return (
+    <button
+      type="button"
+      className="mg-badge pdoc-badge"
+      title="매입서 대조 결과로 이동"
+      onClick={(e) => {
+        e.stopPropagation();
+        onNavigate('purchase-docs', { doc_id: docId });
+      }}
+      data-testid="pdoc-purchase-badge"
+    >
+      매입서
+    </button>
+  );
 }
 
 /** 직원이 넣은 행이면 입력자 배지 (주인이 넣은 행은 아무것도 안 보임) — T-213 */
