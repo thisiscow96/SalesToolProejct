@@ -307,7 +307,13 @@ async function route(method, path, q, body, headers) {
       tickJobs();
       return ok({
         settle_today: TODAY,
-        live: [liveDays[TODAY], liveDays[Y1]].map((x) => ({ ...x })),
+        live: [liveDays[TODAY], liveDays[Y1]].map((x) => {
+          // B 계약(f4492ab): running = 그 날짜 대기·실행 작업, last_job = 마지막으로 끝난 작업(inserted = 새로 받은 건)
+          const run = jobs.find((j) => j.live && j.trade_date === x.settle_date && (j.status === 'QUEUED' || j.status === 'RUNNING'));
+          const last = jobs.find((j) => j.live && j.trade_date === x.settle_date && j.status === 'DONE');
+          return { ...x, state_recorded: true, running: run ? { job_id: run.id, status: run.status, phase: run.phase } : null,
+            last_job: last ? { job_id: last.id, status: 'DONE', phase: last.phase, reason: last.requested_by_name ? 'MANUAL' : 'LIVE_POLL', finished_at: new Date().toISOString(), snapshot: 'COMPLETE', inserted: last.gain || 0, updated: 0, withdrawn: 0 } : null };
+        }),
         circuits: [
           { source: 'AT_REALTIME', state: 'OPEN', consecutive_failures: 5, next_probe_at: iso(TODAY, '10:20'), disabled_reason: null, last_error_kind: 'SERVER_ERROR', last_success_at: iso(TODAY, '06:31') },
           { source: 'AT_SETTLE', state: 'CLOSED', consecutive_failures: 0, disabled_reason: null, last_success_at: iso(TODAY, '07:02') },
@@ -328,7 +334,7 @@ async function route(method, path, q, body, headers) {
       tickJobs();
       // 같은 날짜를 이미 받는 중(스케줄 폴링·직전 수동) → 새 작업 없이 그 작업 번호(A 설계 5.1 ALREADY_RUNNING)
       const running = jobs.find((j) => j.live && (j.status === 'QUEUED' || j.status === 'RUNNING') && j.trade_date >= body.date_from && j.trade_date <= body.date_to);
-      if (running && body.date_from === body.date_to) return json(202, { ok: true, data: { queued: [], skipped: [{ target_date: running.trade_date, reason: 'ALREADY_RUNNING', job_id: running.id }] } });
+      if (running && body.date_from === body.date_to) return json(202, { ok: true, data: { queued: [], skipped: [{ target_date: running.trade_date, reason: 'ALREADY_RUNNING', job_id: running.id, status: running.status }], settle_today: TODAY, run_now: false } });
       if (body.date_to > TODAY) return fail(400, 'VALIDATION', '아직 오지 않은 정산일은 받을 수 없습니다.', { field: 'date_to' });
       if (Date.now() - lastSync < 5 * 60e3) return fail(429, 'SYNC_RATE_LIMIT', '수동 동기화는 5분에 한 번만 할 수 있습니다.', { detail: { retry_after_sec: Math.ceil((5 * 60e3 - (Date.now() - lastSync)) / 1000) } });
       lastSync = Date.now();
@@ -345,7 +351,7 @@ async function route(method, path, q, body, headers) {
           queued.push({ id: j.id, target_date: dd });
         }
       }
-      return json(202, { ok: true, data: { queued, skipped } });
+      return json(202, { ok: true, data: { queued, skipped, settle_today: TODAY, run_now: queued.length > 0 } });
     }
     if (b === 'jobs' && d === 'retry') {
       if (need('owner')) return forbid();
@@ -452,8 +458,8 @@ async function route(method, path, q, body, headers) {
       return {
         trade_id: id, result: 'WILL_CONVERT', partner: { id: cl.partner_id, name: cl.corp_name }, product: { id: pl.product_id, name: pl.product_name, unit: pl.product_unit },
         purchase_date: t.trade_date, quantity, unit_price: unitPrice, total: `${t.amount}.00`, shipment_no: t.shipment_no, auction_seq: t.auction_seq,
-        source: { qty: t.qty, unit_price: t.unit_price, amount: t.amount, unit_qty_kg: t.unit_qty_kg, pkg_name: t.pkg_name },
-        conversion: { product_unit: pl.product_unit, unit_kg: W, line_kg: K, factor: conv ? String(K / W) : '1' },
+        trade_original: { qty: t.qty, pkg_name: t.pkg_name, unit_qty_kg: t.unit_qty_kg, weight_source: t.weight_source, unit_price: String(t.unit_price), amount: String(t.amount), price_per_kg: t.price_per_kg },
+        unit_basis: { product_unit: pl.product_unit, product_unit_kg: W ? `${W}.000` : null, trade_unit_kg: t.unit_qty_kg, factor: conv ? String(K / W) : '1', same_unit: !conv, rule: conv ? 'KG_RATIO' : 'SAME_UNIT' },
         warnings: t.trade_date === TODAY ? ['BASE_NOT_FINAL'] : [], _t: t, _pl: pl, _cl: cl,
       };
     };
@@ -484,7 +490,7 @@ async function route(method, path, q, body, headers) {
         quantity: t.qty, allocated_qty: '0', remaining_qty: t.qty, unit_price: t.unit_price, total_amount: t.amount, unpaid_amount: t.amount, status: 'active',
         source_name: t.corp_name, origin_region: t.origin_name, memo: `경락 #${t.id} · 원표 ${t.shipment_no} · 경매 ${t.auction_seq}`, purchase_doc_line_id: nextLine++, purchase_doc_id: nextDoc, purchase_doc_kind: 'AUCTION',
       });
-      return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid, quantity: r.quantity, unit_price: r.unit_price, total: r.total, product: r.product, source: r.source, conversion: r.conversion };
+      return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid, quantity: r.quantity, unit_price: r.unit_price, total: r.total, product: r.product, trade_original: r.trade_original, unit_basis: r.unit_basis };
     });
     const conv = results.filter((r) => r.result === 'CONVERTED');
     if (conv.length) {

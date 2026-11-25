@@ -13,7 +13,7 @@ export const SYNC_GAP_MS = 5 * 60 * 1000;
 /** 회원별 5분 제한(서버 R-98) — 경락 조회·수집 현황 두 화면이 같은 값을 본다. 새로고침하면 비고, 그때는 서버 429로 다시 안다 */
 export const syncGate = { until: 0 };
 
-const POLL_MS = 5000;
+const POLL_MS = 3000; // B 권고 2~5초(즉시 실행 run_now)
 const POLL_MAX_MS = 120000;
 const REFRESH_MS = 60000;
 const RUNNING = new Set(['QUEUED', 'RUNNING']);
@@ -83,8 +83,11 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
     return () => clearInterval(t);
   }, [now]);
 
-  /** 작업 id들이 대기·실행 목록에서 빠질 때까지 5초마다 확인(최대 2분) → 결과 상태 */
-  const waitJobs = async (jobIds) => {
+  /**
+   * 그 날짜 작업이 끝날 때까지 3초마다 R-96 확인(최대 2분) → 끝난 시점의 응답
+   * 끝 = live[그 날짜].running 이 null(B 계약). running 칸이 없는 옛 서버면 queue 에서 그 작업 id가 빠질 때
+   */
+  const waitJobs = async (jobIds, date) => {
     const t0 = Date.now();
     while (alive.current && Date.now() - t0 < POLL_MAX_MS) {
       // eslint-disable-next-line no-await-in-loop
@@ -92,6 +95,11 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
       // eslint-disable-next-line no-await-in-loop
       const s = await load();
       if (!s) continue;
+      const d = (Array.isArray(s.live) ? s.live : []).find((x) => x.settle_date === date);
+      if (d && 'running' in d) {
+        if (!d.running) return s;
+        continue;
+      }
       const q = Array.isArray(s.queue) ? s.queue : [];
       if (!jobIds.some((id) => q.some((j) => j.id === id && RUNNING.has(j.status)))) return s;
     }
@@ -110,7 +118,8 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
       const r = await auctionApi.sync({ source: 'AT_REALTIME', date_from: date, date_to: date });
       const q = r.data?.queued || [];
       const sk = r.data?.skipped || [];
-      const runningIds = sk.filter((x) => x.reason === 'ALREADY_RUNNING' && x.job_id).map((x) => x.job_id);
+      // 이미 받는 중·이미 대기 중(작업 번호가 있으면) → 새 작업 없이 그 작업을 기다린다
+      const runningIds = sk.filter((x) => (x.reason === 'ALREADY_RUNNING' || x.reason === 'ALREADY_QUEUED') && x.job_id).map((x) => x.job_id);
       if (q.length) {
         syncGate.until = Date.now() + SYNC_GAP_MS;
         setNow(Date.now());
@@ -123,17 +132,24 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
       }
       setStep('waiting');
       setMsg({ tone: 'info', text: runningIds.length && !q.length ? '이미 받는 중입니다 — 끝나면 표를 새로 고칩니다.' : '받는 중… 끝나면 표를 새로 고칩니다.' });
-      const s = await waitJobs(jobIds);
+      const s = await waitJobs(jobIds, date);
       if (!alive.current) return;
       if (!s) {
         setMsg({ tone: 'warn', text: '2분 안에 끝나지 않았습니다. 수집 현황에서 진행 상태를 확인하세요.' });
         return;
       }
-      const after = (Array.isArray(s.live) ? s.live : []).find((x) => x.settle_date === date)?.rows;
-      const gained = before != null && after != null ? Math.max(0, Number(after) - Number(before)) : null;
-      await onCollected?.(date);
+      const d = (Array.isArray(s.live) ? s.live : []).find((x) => x.settle_date === date);
+      const lj = d?.last_job && jobIds.includes(d.last_job.job_id) ? d.last_job : null;
+      await onCollected?.(date); // 결과와 관계없이 지금 조회 조건으로 1회 다시 조회
       if (!alive.current) return;
-      setMsg({ tone: 'ok', text: gained == null ? '받기를 마치고 표를 새로 고쳤습니다.' : gained > 0 ? `${won(gained)}건 새로 받음` : '새로 받은 건 없음(원천과 같음)' });
+      if (lj && (lj.status === 'FAILED' || lj.status === 'DEAD')) {
+        setMsg({ tone: 'bad', text: '받기에 실패했습니다. 수집 현황에서 오류를 확인하세요.' });
+        return;
+      }
+      // N건 = 그 작업의 inserted(B 계약). 없으면 행 수 차이
+      const gained = lj?.inserted != null ? Number(lj.inserted) : before != null && d?.rows != null ? Math.max(0, Number(d.rows) - Number(before)) : null;
+      const upd = Number(lj?.updated || 0);
+      setMsg({ tone: 'ok', text: gained == null ? '받기를 마치고 표를 새로 고쳤습니다.' : gained > 0 ? `${won(gained)}건 새로 받음${upd ? ` · ${won(upd)}건 값 바뀜` : ''}` : upd ? `${won(upd)}건 값 바뀜` : '새로 받은 건 없음(원천과 같음)' });
     } catch (e) {
       if (e.code === 'SYNC_RATE_LIMIT') {
         const sec = Number(e.detail?.retry_after_sec) || 300;
@@ -174,6 +190,7 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
         )}
         {times && <span className="pm-live-times" data-testid="auction-live-times">{times}</span>}
         {cur?.rows != null && cur.state !== 'WAITING' && <span className="pm-live-rows">{won(cur.rows)}건</span>}
+        {cur?.running && step === 'idle' && <span className="pm-live-rows" data-testid="auction-live-running"><span className="pm-spin pm-spin--sm" aria-hidden="true" /> 자동 수집 중</span>}
       </div>
       {msg && (
         <p className={`pm-live-msg pm-live-msg--${msg.tone}`} role={msg.tone === 'bad' ? 'alert' : 'status'} data-testid="auction-live-msg">

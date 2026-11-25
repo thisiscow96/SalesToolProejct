@@ -383,6 +383,8 @@ thead .pm-col-pick { z-index: 2; background: inherit; }
   animation: pm-spin 0.8s linear infinite; opacity: 0.8;
 }
 @keyframes pm-spin { to { transform: rotate(360deg); } }
+.pm-spin--sm { width: 10px; height: 10px; border-width: 1.5px; }
+.pm-live-rows { display: inline-flex; align-items: center; gap: 4px; }
 @media (prefers-reduced-motion: reduce) {
   .pm-live-chip.is-live .pm-live-dot, .pm-spin { animation: none; }
 }

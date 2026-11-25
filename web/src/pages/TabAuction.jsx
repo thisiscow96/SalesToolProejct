@@ -825,12 +825,12 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
 
 /**
  * 환산 근거 한 줄 — "경락 1상자(6kg) × 33,600원 → 매입 0.6(10kg 단위) × 56,000원"
- * [가정] 계약(B 병합 전): 미리보기·결과 행의 source{qty,unit_price,unit_qty_kg,pkg_name}·conversion{product_unit,unit_kg}.
- * 없으면 표의 경락 행 값과 product.unit 으로 채운다. 화면은 표시만 하고 계산하지 않는다(서버 값 그대로).
+ * B 계약(f4492ab): 줄의 trade_original{qty,pkg_name,unit_qty_kg,unit_price}·unit_basis{product_unit,product_unit_kg,factor,same_unit}.
+ * 없으면(옛 서버) 표의 경락 행 값으로 채운다. 화면은 표시만 하고 계산하지 않는다(서버 값 그대로).
  */
 function convBasis(x, t = {}) {
-  const src = x.source || x.trade_source || {};
-  const cv = x.conversion || {};
+  const src = x.trade_original || x.source || {};
+  const cv = x.unit_basis || x.conversion || {};
   const qty = src.qty ?? t.qty;
   const price = src.unit_price ?? t.unit_price;
   const kg = src.unit_qty_kg ?? t.unit_qty_kg;
@@ -838,8 +838,9 @@ function convBasis(x, t = {}) {
   const q2 = x.quantity ?? x.detail?.quantity;
   const p2 = x.unit_price ?? x.detail?.unit_price;
   if (qty == null || q2 == null || p2 == null) return null;
-  const unit = cv.product_unit ?? x.product?.unit ?? (cv.unit_kg != null ? `${dec(cv.unit_kg)}kg` : null);
-  const same = Number(qty) === Number(q2) && Number(price) === Number(p2);
+  const unitKg = cv.product_unit_kg ?? cv.unit_kg;
+  const unit = cv.product_unit ?? x.product?.unit ?? (unitKg != null ? `${dec(unitKg)}kg` : null);
+  const same = cv.same_unit === true || (Number(qty) === Number(q2) && Number(price) === Number(p2));
   return {
     from: `${dec(qty)}${pkg}${kg != null && kg !== '' ? `(${dec(kg)}kg)` : ''} × ${won(price)}원`,
     to: `${dec(q2)}${unit ? `(${unit} 단위)` : ''} × ${won(p2)}원`,
