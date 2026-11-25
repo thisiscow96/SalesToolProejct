@@ -1,7 +1,9 @@
 // T-203 ④ 후보 창·수동 확정(R-122·R-128) · 줄 수정(R-126) · 사유 입력(매입 아님 R-129·전환 취소 R-130·매입서 취소 R-131)
 // 잠금(T-404): 확정 요청 중 창 닫기·라디오 변경 잠금(guardClose), 확정 버튼 1회. 확정은 클릭 하나에 Idempotency-Key 하나
 import { useCallback, useEffect, useId, useState } from 'react';
+import { fetchProducts } from '../api';
 import { purchaseDocApi } from '../lib/purchaseDocApi';
+import { productOptionLabel } from '../pages/ProductRequest';
 import { can } from '../lib/staffAccess';
 import { newIdempotencyKey, withIdempotency } from '../lib/idempotency';
 import { ErrorLine, MatchModal, Tone } from './MatchBits';
@@ -48,6 +50,10 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
   const [serverDiff, setServerDiff] = useState(null);
   const [version, setVersion] = useState(l.version);
   const reasonId = useId();
+  const productSelId = useId();
+  // C D02: 품목 연결이 없는 줄도 끝낼 수 있게 판매툴 품목을 고르는 칸(R-128 본문 product_id). '' = 줄·품목 연결대로
+  const [products, setProducts] = useState(null);
+  const [productId, setProductId] = useState(l.product_id ? String(l.product_id) : '');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,6 +73,12 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
     load();
   }, [load]);
 
+  const showProduct = canConfirm && l.status !== 'CONVERTED' && (pick === 'NONE' || err?.code === 'NO_PRODUCT_LINK' || !!productId && productId !== String(l.product_id ?? ''));
+  useEffect(() => {
+    if (!showProduct || products) return;
+    fetchProducts().then((p) => setProducts(p || [])).catch(() => setProducts([]));
+  }, [showProduct, products]);
+
   const chosen = cands.find((c) => c.trade_id === pick) || null;
   const needAccept = pick === 'NONE' || (chosen && !chosen.strict) || !!serverDiff;
   const needReason = needAccept;
@@ -81,6 +93,7 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
       version,
       accept_diff: needAccept ? accept : false,
       ...(reason.trim() ? { reason: reason.trim() } : {}),
+      ...(productId && productId !== String(l.product_id ?? '') ? { product_id: Number(productId) } : {}),
     };
     try {
       const r = await withIdempotency((key) => purchaseDocApi.confirm(l.id, body, key), newIdempotencyKey('cf'));
@@ -92,6 +105,11 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
         onLine?.(e.detail.line);
       }
       if (e.code === 'TRADE_TAKEN') load();
+      if (e.code === 'NO_PRODUCT_LINK') {
+        // 서버 문구의 "product_id 지정"은 화면 말이 아니라서 바꿔 보여 준다
+        setErr(Object.assign(e, { message: '판매툴 품목 연결이 없습니다. 위 "판매툴 품목"에서 고르거나 대조 설정 → 품목 연결에서 연결하세요.' }));
+        return;
+      }
       setErr(e);
     } finally {
       setBusy(false);
@@ -155,6 +173,16 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
             <label className="main-filter-checkbox" data-testid="pdoc-cand-accept-wrap">
               <input type="checkbox" checked={accept} disabled={busy} onChange={(e) => setAccept(e.target.checked)} data-testid="pdoc-cand-accept" />
               차이를 확인했습니다{serverDiff ? ` (${diffText(serverDiff)})` : chosen ? ` (${diffText(chosen.diff)})` : ''}
+            </label>
+          )}
+          {showProduct && (
+            <label htmlFor={productSelId} className="pm-reason" data-testid="pdoc-cand-product-wrap">
+              판매툴 품목{err?.code === 'NO_PRODUCT_LINK' ? '(필수 — 품목 연결이 없는 줄)' : '(선택 — 비우면 품목 연결대로)'}
+              <select id={productSelId} value={productId} disabled={busy || products === null} onChange={(e) => { setProductId(e.target.value); if (err?.code === 'NO_PRODUCT_LINK') setErr(null); }}
+                aria-invalid={err?.code === 'NO_PRODUCT_LINK' || undefined} data-testid="pdoc-cand-product">
+                <option value="">{products === null ? '품목을 불러오는 중…' : '품목 연결대로'}</option>
+                {(products || []).map((p) => <option key={p.id} value={p.id}>{productOptionLabel(p)}{p.unit ? ` (${p.unit})` : ''}</option>)}
+              </select>
             </label>
           )}
           <label htmlFor={reasonId} className="pm-reason">

@@ -203,7 +203,7 @@ function AuctionTrades() {
 
       {res && (
         <div className="pm-meta" role="status" data-testid="auction-meta">
-          <span>ⓘ {kstTime(meta.as_of)} 기준</span>
+          {meta.as_of && <span>ⓘ {kstTime(meta.as_of)} 기준</span>}{/* C O-4: 경매 전(as_of 없음)에 "- 기준"을 안 보임 */}
           {meta.phase && <Tone tone={meta.phase === 'FINAL' ? 'ok' : 'info'} testid="auction-phase">{PHASE_LABEL[meta.phase] || meta.phase}</Tone>}
           {meta.stale && (
             <Tone tone="warn" title="지금 수집이 실패했거나 진행 중이라 마지막 정상 수집 결과를 보여 줍니다" testid="auction-stale">
@@ -247,7 +247,7 @@ function AuctionTrades() {
             )}
             {!loading && res && rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="main-empty" data-testid="auction-empty">
+                <td colSpan={10} className="main-empty-cell" data-testid="auction-empty">
                   {emptyDay ? EMPTY_REASON[emptyDay.status] : '조건에 맞는 경락이 없습니다.'}
                 </td>
               </tr>

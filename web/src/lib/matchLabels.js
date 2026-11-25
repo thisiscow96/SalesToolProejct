@@ -146,6 +146,17 @@ export const REASON = {
   WEIGHT_UNKNOWN: '중량 모름',
   GRADE_DIFF: '등급 다름',
   CORRECTED_AFTER_CONVERT: '전환 뒤 매입정보에서 정정됨',
+  // C D03: 서버 엔진·전환이 넣는 코드(score.js 후보 flags, engine.js 사유, convert.js 경고, doc-parse.js 줄 경고)
+  BUYER_MISMATCH: '내 중매인 번호로 낙찰된 경락 없음',
+  NOT_STRICT: '허용오차 안 후보 없음(주인 확인)',
+  UNIT_ROUNDING: '규격 환산 시 수량·금액이 딱 맞지 않음',
+  GRADE_UNKNOWN: '등급 모름(한쪽 등급 없음)',
+  PRICE_DIFF: '단가 차이(검토 범위 안)',
+  NO_BASE_TRADE: '경락 근거 없이 등록',
+  CORP_UNKNOWN: '법인 확인 안 됨',
+  DATE_DIFF: '날짜 차이(자동 범위 밖)',
+  QTY_DIFF: '수량 차이(검토 범위 안)',
+  VARIETY_UNKNOWN: '품종 모름(한쪽 품종 없음)',
 };
 export const reasonText = (code) => REASON[code] || code;
 
@@ -159,6 +170,8 @@ export const REVIEW_FILTER = [
   { value: 'NO_PRODUCT_LINK', label: '품목 연결 없음' },
   { value: 'BASE_REVISED', label: '경락 값 바뀜' },
   { value: 'ITEM_UNMAPPED', label: '품목 매핑 없음' },
+  { value: 'NOT_STRICT', label: '허용오차 안 후보 없음' },
+  { value: 'BUYER_MISMATCH', label: '내 중매인 번호 경락 없음' },
 ];
 
 /** R-127 줄 결과 코드 */

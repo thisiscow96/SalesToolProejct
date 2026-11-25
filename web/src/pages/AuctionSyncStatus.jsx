@@ -213,7 +213,7 @@ export default function AuctionSyncStatus() {
             </tr>
           </thead>
           <tbody>
-            {jobs.length === 0 && !loading && <tr><td colSpan={8} className="main-empty">작업 기록 없음</td></tr>}
+            {jobs.length === 0 && !loading && <tr><td colSpan={8} className="main-empty-cell">작업 기록 없음</td></tr>}
             {jobs.map((j) => {
               const s = JOB_STATUS[j.status] || { label: j.status, tone: 'neutral' };
               const failed = j.status === 'FAILED' || j.status === 'DEAD';

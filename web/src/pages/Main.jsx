@@ -3394,10 +3394,19 @@ export default function Main() {
   const [activeTab, setActiveTab] = useState('today');
   // 다른 탭에서 넘겨준 검색 조건(T-103: 매입 취소가 막혔을 때 연결 매출 보기)
   const [navFilter, setNavFilter] = useState(null);
+  // C D04: 탭 안에서 요청 중이면(예 매입서 대조 [선택한 줄 매입 등록]) 최상위 탭 이동을 잠근다 — 결과 문구를 못 보고 떠나지 않게
+  const [tabBusy, setTabBusy] = useState(false);
+  // 지금 탭을 다시 누른 횟수 — 받는 탭(매입서 대조)만 첫 화면으로 돌아간다. 다른 탭은 이 값을 쓰지 않아 입력 중인 값이 그대로 남는다
+  const [tabHome, setTabHome] = useState(0);
   const navigateTab = (tabId, filter) => {
+    if (tabBusy && tabId !== activeTab) return;
+    if (tabId === activeTab && !filter && !tabBusy) setTabHome((n) => n + 1);
     setNavFilter(filter || null);
     setActiveTab(tabId);
   };
+  useEffect(() => {
+    setTabBusy(false);
+  }, [activeTab]);
   const activeTabDef = tabs.find((t) => t.id === activeTab);
   const TabContent = activeTabDef?.Component;
 
@@ -3440,6 +3449,8 @@ export default function Main() {
             type="button"
             className={'main-tab ' + (activeTab === t.id ? 'active' : '')}
             aria-current={activeTab === t.id ? 'page' : undefined}
+            disabled={tabBusy && activeTab !== t.id}
+            title={tabBusy && activeTab !== t.id ? '요청을 처리하는 중입니다. 끝난 뒤 이동하세요.' : undefined}
             onClick={() => navigateTab(t.id, null)}
           >
             {t.label}
@@ -3448,7 +3459,7 @@ export default function Main() {
       </nav>
       <main className="main-content">
         {activeTabDef && <h2 className="main-page-title">{activeTabDef.label}</h2>}
-        {TabContent && <TabContent key={activeTab + (navFilter ? JSON.stringify(navFilter) : '')} onNavigate={navigateTab} navFilter={navFilter} />}
+        {TabContent && <TabContent key={activeTab + (navFilter ? JSON.stringify(navFilter) : '')} onNavigate={navigateTab} navFilter={navFilter} onTabBusy={setTabBusy} tabHome={tabHome} />}
       </main>
       </div>
     </div>

@@ -113,7 +113,7 @@ export default function ReviewQueue({ onOpenDoc, onChanged, busyNav }) {
             </tr>
           </thead>
           <tbody>
-            {!loading && rows.length === 0 && <tr><td colSpan={6} className="main-empty">검토 대기 줄이 없습니다.</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={6} className="main-empty-cell">검토 대기 줄이 없습니다.</td></tr>}
             {rows.map((l) => {
               const waitOnly = l.reason_codes.length > 0 && l.reason_codes.every((c) => WAIT_ONLY.has(c));
               const d = l.top_diff || l.diff || {};

@@ -137,3 +137,9 @@
 @media (max-width: 767px) {
   .pm-filters > span[aria-hidden='true'] { display: none; }
 }
+/* C D04: 매입서 대조에서 요청 중이면 최상위 탭을 잠근다(Main.jsx tabBusy) */
+.main-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.main-tab:disabled:hover { color: var(--c-text-3); }

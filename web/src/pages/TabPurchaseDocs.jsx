@@ -1,7 +1,7 @@
 // T-203 매입서 대조 탭 — ③ 매입서(업로드·목록·대조 결과) ④ 검토 대기 ⑤ 대조 설정 (설계 6.4~6.6)
 // "매입 등록(매입전환)" = 대조된 매입서 줄로 판매툴 매입 기록을 만드는 것. 기존 "매입→판매 전환"과 다른 기능(U-12)
 // 잠금(T-404): 목록 조건·탭 전환은 useLatestRequest, 줄 버튼은 useBusyIds, 창은 guardClose, 요청 중 다른 화면 이동 잠금
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { purchaseDocApi } from '../lib/purchaseDocApi';
 import { getUser } from '../api';
 import { can } from '../lib/staffAccess';
@@ -21,7 +21,7 @@ import './PurchaseMatch.css';
 const LIMIT = 50;
 const MAX_CONVERT = 200;
 
-export default function TabPurchaseDocs({ navFilter, onNavigate }) {
+export default function TabPurchaseDocs({ navFilter, onNavigate, onTabBusy, tabHome }) {
   const [view, setView] = useState(navFilter?.doc_id ? { name: 'docs', docId: navFilter.doc_id } : { name: 'docs' });
   const [reviewCount, setReviewCount] = useState(null);
   const [navBusy, setNavBusy] = useState(false); // 하위 화면에서 요청 중이면 보기 전환 잠금
@@ -32,6 +32,16 @@ export default function TabPurchaseDocs({ navFilter, onNavigate }) {
   useEffect(() => {
     loadCount();
   }, [loadCount]);
+  // C D04: 하위 화면 요청 중 잠금을 최상위 탭(Main)까지 올린다
+  useEffect(() => {
+    onTabBusy?.(navBusy);
+  }, [navBusy, onTabBusy]);
+  useEffect(() => () => onTabBusy?.(false), [onTabBusy]);
+  // 최상위 "매입서 대조" 탭을 다시 누르면 매입서 목록(첫 화면)으로 — 상세에 들어가 있어도 메뉴로 돌아갈 수 있게
+  const firstHome = useRef(tabHome);
+  useEffect(() => {
+    if (tabHome !== firstHome.current) setView({ name: 'docs' });
+  }, [tabHome]);
 
   return (
     <div className="pm" data-testid="pdoc-tab">
@@ -151,7 +161,7 @@ function DocList({ onOpen, onChanged }) {
             </tr>
           </thead>
           <tbody>
-            {!loading && rows.length === 0 && <tr><td colSpan={7} className="main-empty">매입서가 없습니다. [파일 올리기] 또는 [직접 입력]으로 넣어 주세요.</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={7} className="main-empty-cell">매입서가 없습니다. [파일 올리기] 또는 [직접 입력]으로 넣어 주세요.</td></tr>}
             {rows.map((d) => (
               <tr key={d.id} data-testid={`pdoc-row-${d.id}`}>
                 <td data-label="매입서번호">{d.doc_no || `#${d.id}`}</td>
