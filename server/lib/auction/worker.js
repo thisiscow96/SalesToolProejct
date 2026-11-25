@@ -409,8 +409,25 @@ async function runRemap(pool, job) {
 async function runPurge(pool, job) {
   const okDays = Number(process.env.RAW_KEEP_OK_DAYS || 90);
   const errDays = Number(process.env.RAW_KEEP_ERROR_DAYS || 30);
-  const a = await pool.query(`DELETE FROM ext_raw_response WHERE (kind IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $1))
-                                 OR (kind NOT IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $2))`, [okDays, errDays]);
+  // 원천 로그는 1,000행씩 나눠 지운다(I 검토 D-04 — 한 번에 지우면 경락 raw_ref SET NULL 로 긴 잠금). 예산(기본 20초)을 넘기면 멈추고 다음 정리에서 이어서
+  const RAW_WHERE = `(kind IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $1))
+                  OR (kind NOT IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $2))`;
+  const budgetMs = Number(process.env.PURGE_BUDGET_MS || 20000);
+  const t0 = Date.now();
+  let rawDeleted = 0;
+  let remaining = 0;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const d = await pool.query(`DELETE FROM ext_raw_response WHERE id IN (SELECT id FROM ext_raw_response WHERE ${RAW_WHERE} ORDER BY id LIMIT 1000)`, [okDays, errDays]);
+    rawDeleted += d.rowCount;
+    if (d.rowCount < 1000) break;
+    if (Date.now() - t0 > budgetMs) {
+      // eslint-disable-next-line no-await-in-loop
+      const left = await pool.query(`SELECT COUNT(*)::int AS n FROM ext_raw_response WHERE ${RAW_WHERE}`, [okDays, errDays]);
+      remaining = left.rows[0].n;
+      break;
+    }
+  }
   const b = await pool.query(`DELETE FROM api_idempotency WHERE created_at < NOW() - interval '7 days'`);
   const c = await pool.query(
     `DELETE FROM purchase_match_candidate pc USING (
@@ -418,7 +435,7 @@ async function runPurge(pool, job) {
          FROM (SELECT DISTINCT line_id, run_id FROM purchase_match_candidate) d) x
       WHERE pc.line_id = x.line_id AND pc.run_id = x.run_id AND x.rk > 3`
   );
-  const result = { raw_deleted: a.rowCount, idempotency_deleted: b.rowCount, candidates_deleted: c.rowCount };
+  const result = { raw_deleted: rawDeleted, raw_remaining: remaining, idempotency_deleted: b.rowCount, candidates_deleted: c.rowCount };
   await queue.finish(pool, job.id, { status: 'DONE', result });
   return { status: 'DONE', ...result };
 }

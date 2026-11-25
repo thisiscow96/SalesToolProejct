@@ -71,38 +71,54 @@ async function claim(pool, { types = null } = {}) {
   }
 }
 
-async function finish(db, id, { status = 'DONE', result = {}, error = null, errorKind = null }) {
-  await db.query(
+/**
+ * 끝내기 — 이 인스턴스가 잡고 있는 RUNNING 일 때만 상태를 바꾼다(I 검토 D-06).
+ *   회수(recoverStale)로 이미 QUEUED·DEAD 가 됐거나 다른 인스턴스가 다시 잡은 작업이면 0행 → 경고만 남기고 넘어감(옛 실행이 상태를 덮어쓰지 않게)
+ */
+async function finish(db, id, { status = 'DONE', result = {}, error = null, errorKind = null, lockedBy = INSTANCE }) {
+  const r = await db.query(
     `UPDATE collect_job SET status = $2, result = $3::jsonb, last_error = $4, last_error_kind = $5, finished_at = NOW(), locked_by = NULL, locked_at = NULL
-      WHERE id = $1`,
-    [id, status, JSON.stringify(result || {}), error ? String(error).slice(0, 500) : null, errorKind]
+      WHERE id = $1 AND status = 'RUNNING' AND locked_by = $6`,
+    [id, status, JSON.stringify(result || {}), error ? String(error).slice(0, 500) : null, errorKind, lockedBy]
   );
+  if (!r.rowCount) console.warn(`[collect-queue] finish 무시: 작업 #${id} 은 이미 회수됐거나 다른 실행이 잡고 있음(${status})`);
+  return r.rowCount > 0;
 }
 
 /** 다시 대기열로 — at(Date) 이 있으면 그 시각, 없으면 백오프. keepAttempt=false 면 이번 시도는 세지 않음(서킷·잠금으로 못 돌린 경우) */
 async function requeue(db, job, { at = null, error = null, errorKind = null, keepAttempt = true, result = null }) {
   const runAfter = at || new Date(Date.now() + backoffSec(job.attempts) * 1000);
-  await db.query(
+  const r = await db.query(
     `UPDATE collect_job SET status = 'QUEUED', run_after = $2, locked_by = NULL, locked_at = NULL,
             attempts = CASE WHEN $3 THEN attempts ELSE GREATEST(attempts - 1, 0) END,
             last_error = COALESCE($4, last_error), last_error_kind = COALESCE($5, last_error_kind),
             result = COALESCE($6::jsonb, result)
-      WHERE id = $1`,
-    [job.id, runAfter, keepAttempt, error ? String(error).slice(0, 500) : null, errorKind, result ? JSON.stringify(result) : null]
+      WHERE id = $1 AND status = 'RUNNING' AND locked_by = $7`,
+    [job.id, runAfter, keepAttempt, error ? String(error).slice(0, 500) : null, errorKind, result ? JSON.stringify(result) : null, job.locked_by || INSTANCE]
   );
+  if (!r.rowCount) console.warn(`[collect-queue] requeue 무시: 작업 #${job.id} 은 이미 회수됐거나 다른 실행이 잡고 있음`);
   return runAfter;
 }
 
-/** 멈춘 RUNNING 회수 */
+/**
+ * 멈춘 RUNNING 회수 — 최대 시도에 닿은 작업은 DEAD(finished_at 함께, CHECK collect_job_finished_match), 나머지는 QUEUED (I 검토 D-05)
+ * @returns 다시 대기열로 간 작업 id 배열(기존 형식 그대로). 배열의 .dead 에 DEAD 로 끝낸 id
+ */
 async function recoverStale(db) {
   const r = await db.query(
-    `UPDATE collect_job SET status = 'QUEUED', locked_by = NULL, locked_at = NULL, run_after = NOW(),
-            last_error = COALESCE(last_error, '실행 중 멈춤 — 회수'), last_error_kind = COALESCE(last_error_kind, 'STALE')
+    `UPDATE collect_job
+        SET status = CASE WHEN attempts >= max_attempts THEN 'DEAD' ELSE 'QUEUED' END,
+            finished_at = CASE WHEN attempts >= max_attempts THEN NOW() END,
+            locked_by = NULL, locked_at = NULL, run_after = NOW(),
+            last_error = CASE WHEN attempts >= max_attempts THEN '실행 중 멈춤 — 최대 시도 도달로 중단' ELSE COALESCE(last_error, '실행 중 멈춤 — 회수') END,
+            last_error_kind = CASE WHEN attempts >= max_attempts THEN 'STALE' ELSE COALESCE(last_error_kind, 'STALE') END
       WHERE status = 'RUNNING' AND locked_at < NOW() - make_interval(mins => $1)
-      RETURNING id`,
+      RETURNING id, status`,
     [staleMinutes()]
   );
-  return r.rows.map((x) => Number(x.id));
+  const ids = r.rows.filter((x) => x.status === 'QUEUED').map((x) => Number(x.id));
+  ids.dead = r.rows.filter((x) => x.status === 'DEAD').map((x) => Number(x.id));
+  return ids;
 }
 
 module.exports = { enqueue, claim, finish, requeue, recoverStale, backoffSec, INSTANCE, staleMinutes };

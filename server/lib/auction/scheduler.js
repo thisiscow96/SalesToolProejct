@@ -143,7 +143,7 @@ async function tick(pool, { hooks = {}, maxJobs = 3, budgetMs = 25000, plan = tr
   const filled = plan ? await backfill(pool) : [];
   const recovered = await queue.recoverStale(pool);
   const ran = await runBatch(pool, { maxJobs, budgetMs, hooks });
-  return { planned: [...planned, ...filled], recovered, ran, elapsed_ms: Date.now() - started };
+  return { planned: [...planned, ...filled], recovered: [...recovered], recovered_dead: recovered.dead || [], ran, elapsed_ms: Date.now() - started };
 }
 
 /** 상시 호스트용 내부 타이머(COLLECT_TIMER_ENABLED=true) — 5분 */
