@@ -251,18 +251,22 @@ async function remapStored(client, { dateFrom = null } = {}) {
     }
   }
   const dctx = await loadMappingContext(client, { target: 'DOC' });
-  const l = await client.query(`SELECT id, item_name_raw, item_key FROM purchase_doc_line WHERE status IN ('PENDING','HOLD','CANCELLED','REJECTED')`);
+  // 매입서 줄: id 순으로 잠그되 대조·전환이 잡고 있는 줄은 건너뜀(SKIP LOCKED) → 화면 작업을 기다리게 하지 않음. 바뀐 줄은 version + 1 (I 검토 D-10)
+  const total = await client.query(`SELECT COUNT(*)::int AS n FROM purchase_doc_line WHERE status IN ('PENDING','HOLD','CANCELLED','REJECTED')`);
+  const l = await client.query(
+    `SELECT id, item_name_raw, item_key FROM purchase_doc_line WHERE status IN ('PENDING','HOLD','CANCELLED','REJECTED') ORDER BY id FOR UPDATE SKIP LOCKED`
+  );
   let lines = 0;
   for (const row of l.rows) {
     const k = N.matchKeyword(N.nameCandidates(row.item_name_raw), dctx.keywordRules);
     const key = k && dctx.activeItems.has(k.item_key) ? k.item_key : null;
     if ((key || null) !== (row.item_key || null)) {
       // eslint-disable-next-line no-await-in-loop
-      await client.query(`UPDATE purchase_doc_line SET item_key = $2, updated_at = NOW() WHERE id = $1`, [row.id, key]);
+      await client.query(`UPDATE purchase_doc_line SET item_key = $2, version = version + 1, updated_at = NOW() WHERE id = $1`, [row.id, key]);
       lines += 1;
     }
   }
-  return { trades_changed: changed, lines_changed: lines, scanned: t.rowCount };
+  return { trades_changed: changed, lines_changed: lines, lines_skipped: Math.max(total.rows[0].n - l.rowCount, 0), scanned: t.rowCount };
 }
 
 module.exports = {
