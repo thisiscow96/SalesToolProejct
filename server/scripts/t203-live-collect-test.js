@@ -222,11 +222,13 @@ async function main() {
   let who = null;
   const app = express();
   app.use(express.json());
-  registerAuctionRoutes(app, { pool, getUserId: async () => who, getUserIdAndAdmin: async () => (who ? { userId: who, isAdmin: false, staffId: null } : null), recordAudit: async () => {}, hooks, now: () => clock });
+  registerAuctionRoutes(app, { pool, getUserId: async () => who, getUserIdAndAdmin: async (req) => { const u = Number(req.headers['x-test-user']) || who; return u ? { userId: u, isAdmin: false, staffId: null } : null; }, recordAudit: async () => {}, hooks, now: () => clock });
   const MINI = 3174;
   const srv = await new Promise((res) => { const s = app.listen(MINI, '127.0.0.1', () => res(s)); });
-  const mini = async (method, p, body) => {
-    const r = await fetch(`http://127.0.0.1:${MINI}${p}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  // as: 동시 요청 검사(C-L-22)에서 회원을 요청마다 지정(x-test-user) — 없으면 who
+  const mini = async (method, p, body, as = null) => {
+    const headers = { ...(body ? { 'content-type': 'application/json' } : {}), ...(as ? { 'x-test-user': String(as) } : {}) };
+    const r = await fetch(`http://127.0.0.1:${MINI}${p}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, json: await r.json() };
   };
   const waitJob = async (id, ms = 10000) => {
@@ -406,6 +408,39 @@ async function main() {
     r = await mini('POST', '/api/auction/sync', { date: NP });
     check('R-98 어제 정산분 → FINAL', r.status === 202 && (r.json.data.queued[0] ? r.json.data.queued[0].phase === 'FINAL' : r.json.data.skipped.length > 0), r.json);
     if (r.json.data && r.json.data.queued[0]) await waitJob(r.json.data.queued[0].id);
+
+    // ---------- C-L-22 동시 요청과 5분 제한(회원 단위 잠금) ----------
+    // 즉시 실행은 끄고(작업 행만 본다) 지난 날짜(스냅샷 없음 → FINAL 대기 작업)로 요청한다. 남은 대기 작업은 끝의 정리에서 취소
+    const runNowBefore = process.env.AUCTION_SYNC_RUN_NOW;
+    process.env.AUCTION_SYNC_RUN_NOW = 'false';
+    try {
+      const jobsBy = async (u) => q(`SELECT id, trade_date FROM collect_job WHERE requested_by_user_id = $1 ORDER BY id`, [u]);
+      // 같은 날짜 2개 동시 — 같은 분이면 같은 dedupe_key(202 + ALREADY_QUEUED), 분이 넘어가면 둘째는 429. 어느 쪽이든 작업 1건
+      const u1 = await mkRaw(7);
+      const s1 = await Promise.all([mini('POST', '/api/auction/sync', { date: addDays(N, -30) }, u1), mini('POST', '/api/auction/sync', { date: addDays(N, -30) }, u1)]);
+      const j1 = await jobsBy(u1);
+      check('C-L-22 같은 회원·같은 날짜 2개 동시 → 작업 1건(하나는 202 queued, 다른 하나는 202 ALREADY_QUEUED 또는 429)', j1.length === 1
+        && s1.filter((x) => x.status === 202 && x.json.data.queued.length === 1).length === 1
+        && s1.filter((x) => (x.status === 202 && x.json.data.queued.length === 0 && x.json.data.skipped.some((y) => y.reason === 'ALREADY_QUEUED')) || (x.status === 429 && x.json.code === 'SYNC_RATE_LIMIT')).length === 1,
+      { s1: s1.map((x) => [x.status, x.json]), j1 });
+      // 다른 날짜 2개 동시 — 예전에는 둘 다 5분 제한을 통과해 작업 2건(C-L-22). 기대: 작업 1건, 다른 하나 429
+      const u2 = await mkRaw(8);
+      const s2 = await Promise.all([mini('POST', '/api/auction/sync', { date: addDays(N, -31) }, u2), mini('POST', '/api/auction/sync', { date: addDays(N, -32) }, u2)]);
+      const j2 = await jobsBy(u2);
+      check('C-L-22 같은 회원·다른 지난 날짜 2개 동시 → 5분 1회 제한대로 작업 1건(다른 하나는 429 SYNC_RATE_LIMIT)', j2.length === 1
+        && s2.map((x) => x.status).sort().join(',') === '202,429' && s2.some((x) => x.status === 429 && x.json.code === 'SYNC_RATE_LIMIT' && x.json.detail.retry_after_sec > 0)
+        && s2.some((x) => x.status === 202 && x.json.data.queued.length === 1), { s2: s2.map((x) => [x.status, x.json]), j2 });
+      // 서로 다른 회원 2명 동시(각자 다른 날짜) — 제한은 회원 단위라 둘 다 허용
+      const u3 = await mkRaw(9);
+      const u4 = await mkRaw(10);
+      const s3 = await Promise.all([mini('POST', '/api/auction/sync', { date: addDays(N, -33) }, u3), mini('POST', '/api/auction/sync', { date: addDays(N, -34) }, u4)]);
+      const j3 = await jobsBy(u3);
+      const j4 = await jobsBy(u4);
+      check('C-L-22 서로 다른 회원 2명 동시 → 각자 202·작업 1건씩(회원 단위 제한)', s3.every((x) => x.status === 202 && x.json.data.queued.length === 1) && j3.length === 1 && j4.length === 1,
+        { s3: s3.map((x) => [x.status, x.json]), j3, j4 });
+    } finally {
+      if (runNowBefore === undefined) delete process.env.AUCTION_SYNC_RUN_NOW; else process.env.AUCTION_SYNC_RUN_NOW = runNowBefore;
+    }
   }
   await new Promise((res) => srv.close(res));
 
