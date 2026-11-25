@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lists>
+  <list_total_count>3</list_total_count>
+  <list><PUM_NM>청양고추</PUM_NM><PUM_CD>90001</PUM_CD><G_NAME>특</G_NAME><U_QTY>10</U_QTY><U_NAME>10키로상자</U_NAME><AV_P>37600</AV_P><P_AV_P>37100</P_AV_P></list>
+  <list><PUM_NM>꽈리고추</PUM_NM><PUM_CD>90002</PUM_CD><G_NAME>특</G_NAME><U_QTY>4</U_QTY><U_NAME>4키로상자</U_NAME><AV_P>20800</AV_P><P_AV_P>20300</P_AV_P></list>
+  <list><PUM_NM>파프리카</PUM_NM><PUM_CD>90003</PUM_CD><G_NAME>특</G_NAME><U_QTY>5</U_QTY><U_NAME>5키로상자</U_NAME><AV_P>24300</AV_P><P_AV_P>23800</P_AV_P></list>
+</lists>

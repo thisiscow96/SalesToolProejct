@@ -18,6 +18,7 @@
  * 재사용하는 기존 기록(이중 기록 없음):
  *   trade_correction(010) 매입·매출 수정·취소 / supplier_payment(014) 지급 취소 / product_request(016) 품목 요청·승인·반려
  *   audit_log(019) 거래처 등록·수정, 로그인 성공
+ *   purchase_match_event(027) 매입서 업로드·대조·매입전환·확정·취소(T-203) — kind 'purchase_match'
  *
  * T-213 직원(021):
  *   - audit_log.actor_staff_id: 직원 로그인·직원 비밀번호 설정의 실제 행위자. 직원 관리(entity_type 'staff')는 주인이 한 일이라 NULL
@@ -30,7 +31,8 @@ const { parseListOptions, runList } = require('./list-query');
 const KINDS = ['correction', 'cancel', 'payment_cancel', 'product_request', 'partner', 'login', 'staff', 'staff_entry',
   'discount', 'offset', 'offset_cancel', // T-401 정산 할인·상계
   'excel_upload', // T-402 엑셀 업로드 한 줄(건별은 원천 행)
-  'data_migration']; // T-403 데이터 이관 저장·되돌림
+  'data_migration', // T-403 데이터 이관 저장·되돌림
+  'purchase_match']; // T-203 매입서 대조·매입전환(purchase_match_event) + 대조 설정·경락 수집 조작(audit_log)
 const SKIP_FIELDS = new Set(['id', 'user_id', 'created_at', 'updated_at']);
 
 function same(a, b) {
@@ -196,14 +198,15 @@ const UNION_SQL = `
   UNION ALL
   SELECT 'audit_log', al.id,
          CASE WHEN al.entity_type = 'auth' THEN 'login' WHEN al.entity_type = 'staff' THEN 'staff'
-              WHEN al.entity_type = 'upload' THEN 'excel_upload' WHEN al.entity_type = 'migration' THEN 'data_migration' ELSE 'partner' END, al.created_at,
+              WHEN al.entity_type = 'upload' THEN 'excel_upload' WHEN al.entity_type = 'migration' THEN 'data_migration'
+              WHEN al.entity_type IN ('purchase_doc', 'match_setting', 'market_mapping', 'market_sync') THEN 'purchase_match' ELSE 'partner' END, al.created_at,
          al.entity_type::text, al.entity_id,
          CASE WHEN al.entity_type = 'auth' THEN '로그인'
               WHEN al.entity_type = 'staff' THEN COALESCE(st.name, al.after_data->>'name', al.before_data->>'name')
-              WHEN al.entity_type IN ('upload', 'migration') THEN al.note
+              WHEN al.entity_type IN ('upload', 'migration', 'purchase_doc', 'match_setting', 'market_mapping', 'market_sync') THEN al.note
               ELSE COALESCE(acc.name, al.after_data->>'name') END,
          al.partner_id, CASE WHEN al.actor_staff_id IS NULL THEN 'self' ELSE 'staff' END,
-         CASE WHEN al.entity_type IN ('staff', 'upload', 'migration') THEN al.note
+         CASE WHEN al.entity_type IN ('staff', 'upload', 'migration', 'purchase_doc', 'match_setting', 'market_mapping', 'market_sync') THEN al.note
               WHEN al.action = 'create' THEN '등록' WHEN al.action = 'update' THEN '수정' ELSE al.note END,
          al.changed_fields, al.before_data, al.after_data, al.actor_staff_id
     FROM audit_log al
@@ -225,7 +228,23 @@ const UNION_SQL = `
          '수금 ' || to_char(py.amount, 'FM999,999,999,990') || '원', py.partner_id, 'staff', '수금 등록',
          ARRAY['amount']::text[], NULL::jsonb, jsonb_build_object('amount', py.amount), py.created_by_staff_id
     FROM payment py
-   WHERE py.user_id = $1 AND py.created_by_staff_id IS NOT NULL`;
+   WHERE py.user_id = $1 AND py.created_by_staff_id IS NOT NULL
+  UNION ALL
+  -- T-203 매입서 대조·매입전환 사건(추가만 하는 이력 표 — 이중 기록 없음)
+  SELECT 'purchase_match_event', e.id::bigint, 'purchase_match', e.created_at, 'purchase_doc', e.doc_id::int, -- int: 다른 갈래의 target_id 형(정수)을 넓히지 않게
+         COALESCE(pd.doc_no, '매입서 #' || e.doc_id::text) || COALESCE('-' || pl.line_no::text, '') || ' ' ||
+           CASE e.event_type WHEN 'UPLOAD' THEN '업로드' WHEN 'MANUAL_INPUT' THEN '직접 입력' WHEN 'MATCH' THEN '대조' WHEN 'REMATCH' THEN '재대조'
+                WHEN 'AUTO_CONVERT' THEN '자동 매입 등록' WHEN 'CONVERT' THEN '매입 등록' WHEN 'MANUAL_CONFIRM' THEN '수동 확정' WHEN 'FORCE_CONFIRM' THEN '강제 확정'
+                WHEN 'REJECT' THEN '매입 아님' WHEN 'CANCEL' THEN '전환 취소' WHEN 'CANCEL_VIA_PURCHASE' THEN '매입 취소로 전환 취소' WHEN 'LINE_EDIT' THEN '줄 수정'
+                WHEN 'DOC_CANCEL' THEN '매입서 취소' ELSE e.event_type END,
+         pd.supplier_partner_id, CASE WHEN e.actor_kind = 'STAFF' THEN 'staff' WHEN e.actor_kind = 'SYSTEM' THEN 'admin' ELSE 'self' END, e.reason::text,
+         ARRAY['status']::text[], jsonb_build_object('status', e.from_status),
+         jsonb_build_object('status', e.to_status, 'match_result', e.match_result, 'score', e.score, 'purchase_id', e.purchase_id, 'trade_id', e.trade_id,
+                            'tolerance', e.detail->'tolerance', 'diff', e.detail->'diff'), e.actor_staff_id
+    FROM purchase_match_event e
+    LEFT JOIN purchase_doc pd ON pd.id = e.doc_id AND pd.user_id = e.user_id
+    LEFT JOIN purchase_doc_line pl ON pl.id = e.line_id AND pl.user_id = e.user_id
+   WHERE e.user_id = $1 AND e.event_type NOT IN ('MATCH', 'REMATCH')`;
 
 /** 화면에 내보내는 모양: 바뀐 열마다 전·후 값 (정정의 _row 같은 내부 값은 뺀다) */
 function toChanges(row) {

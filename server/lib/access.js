@@ -154,6 +154,55 @@ function buildRules(env = process.env) {
     ['R-89', 'POST', '/api/migrations/:id/rollback', OWNER, { ui: 'migration' }],
     ['R-90', 'GET', '/api/migrations/:id/reconcile', OWNER],
     ['R-91', 'GET', '/api/migration-history', OWNER],
+    // ---- T-203 경락 수집 · 매입서 대조/매입전환 (설계: AI 팀 산출물 A_설계서.md 7장) ----
+    // 경락 조회·수집 현황은 전원. 수집 실행·재실행은 주인, 작업 취소·원천 로그·달력·일정 수정·품목 매핑은 관리자(라우트가 isAdmin 검사)
+    ['R-92', 'GET', '/api/auction/trades', ALL],
+    ['R-93', 'GET', '/api/auction/trades/:id', ALL],
+    ['R-94', 'GET', '/api/auction/daily-prices', ALL],
+    ['R-95', 'GET', '/api/auction/items', ALL],
+    ['R-96', 'GET', '/api/auction/sync/status', ALL],
+    ['R-97', 'GET', '/api/auction/jobs', ALL],
+    ['R-98', 'POST', '/api/auction/sync', OWNER, { ui: 'auction.sync' }],
+    ['R-99', 'POST', '/api/auction/jobs/:id/cancel', OWNER, { ui: 'auction.admin' }],          // 관리자
+    ['R-132', 'POST', '/api/auction/jobs/:id/retry', OWNER, { ui: 'auction.sync' }],
+    ['R-100', 'GET', '/api/auction/raw/:id', OWNER],                                           // 관리자 — 출하자 실명이 있을 수 있음
+    ['R-101', 'GET', '/api/auction/calendar', ALL],
+    ['R-102', 'PUT', '/api/auction/calendar', OWNER, { ui: 'auction.admin' }],                 // 관리자
+    ['R-134', 'GET', '/api/auction/schedules', OWNER],
+    ['R-135', 'PUT', '/api/auction/schedules', OWNER, { ui: 'auction.admin' }],                // 관리자
+    ['R-103', 'GET', '/api/auction/item-mappings', OWNER],
+    ['R-104', 'POST', '/api/auction/item-mappings', OWNER, { ui: 'auction.mapping' }],         // 관리자
+    ['R-105', 'PUT', '/api/auction/item-mappings/:id', OWNER, { ui: 'auction.mapping' }],      // 관리자
+    ['R-106', 'DELETE', '/api/auction/item-mappings/:id', OWNER, { ui: 'auction.mapping' }],   // 관리자
+    ['R-107', 'GET', '/api/auction/unmapped', OWNER],                                          // 관리자
+    ['R-108', 'GET', '/api/auction/product-links', ALL],
+    ['R-109', 'PUT', '/api/auction/product-links', OWNER, { ui: 'match.settings' }],
+    ['R-110', 'DELETE', '/api/auction/product-links/:id', OWNER, { ui: 'match.settings' }],
+    ['R-111', 'GET', '/api/auction/corp-links', ALL],
+    ['R-112', 'PUT', '/api/auction/corp-links', OWNER, { ui: 'match.settings' }],
+    ['R-113', 'GET', '/api/purchase-match/tolerances', ALL],
+    ['R-114', 'PUT', '/api/purchase-match/tolerances', OWNER, { ui: 'match.settings' }],
+    ['R-115', 'DELETE', '/api/purchase-match/tolerances/:id', OWNER, { ui: 'match.settings' }],
+    // 매입서: 업로드·대조·재대조·줄 수정·완전일치 매입 등록은 입력 직원도(매입 등록 R-30 과 같은 권한).
+    //   수동 확정(허용오차 밖·근거 없음 포함)·매입 아님·전환 취소·매입서 취소는 주인만(매입 취소 R-36 과 같은 권한)
+    ['R-116', 'GET', '/api/purchase-docs/template', ALL],
+    ['R-117', 'POST', '/api/purchase-docs/preview', WRITE, { ui: 'purchase_doc.upload' }],
+    ['R-121', 'GET', '/api/purchase-docs/review', ALL],                                        // :id 보다 먼저
+    ['R-127', 'POST', '/api/purchase-docs/convert', WRITE, { ui: 'purchase_doc.convert' }],
+    ['R-118', 'POST', '/api/purchase-docs', WRITE, { ui: 'purchase_doc.upload' }],
+    ['R-119', 'GET', '/api/purchase-docs', ALL],
+    ['R-120', 'GET', '/api/purchase-docs/:id', ALL],
+    ['R-123', 'GET', '/api/purchase-docs/:id/events', ALL],
+    ['R-124', 'POST', '/api/purchase-docs/:id/match', WRITE, { ui: 'purchase_doc.match' }],
+    ['R-131', 'POST', '/api/purchase-docs/:id/cancel', OWNER, { ui: 'purchase_doc.cancel' }],
+    ['R-122', 'GET', '/api/purchase-docs/lines/:lineId/candidates', ALL],
+    ['R-125', 'POST', '/api/purchase-docs/lines/:lineId/rematch', WRITE, { ui: 'purchase_doc.match' }],
+    ['R-126', 'PATCH', '/api/purchase-docs/lines/:lineId', WRITE, { ui: 'purchase_doc.edit' }],
+    ['R-128', 'POST', '/api/purchase-docs/lines/:lineId/confirm', OWNER, { ui: 'purchase_doc.confirm' }],
+    ['R-129', 'POST', '/api/purchase-docs/lines/:lineId/reject', OWNER, { ui: 'purchase_doc.reject' }],
+    ['R-130', 'POST', '/api/purchase-docs/lines/:lineId/cancel', OWNER, { ui: 'purchase_doc.cancel' }],
+    // 외부 cron 내부 호출 — 사용자 토큰 없음. 라우트가 X-Collect-Token 을 상수 시간 비교, 틀리면 404
+    ['R-133', 'POST', '/api/internal/collect/tick', 'public'],
   ];
 }
 
