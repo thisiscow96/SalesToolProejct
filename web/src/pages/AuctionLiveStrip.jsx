@@ -126,6 +126,12 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
       }
       const jobIds = [...q.map((x) => x.id), ...runningIds];
       if (!jobIds.length) {
+        // 같은 분에 같은 날짜를 다시 누르면 서버가 작업 번호 없이 ALREADY_QUEUED(요청 키 중복)를 준다 → '방금 같은 요청'으로 안내
+        const dupOnly = sk.length > 0 && sk.every((x) => x.reason === 'ALREADY_QUEUED' && !x.job_id);
+        if (dupOnly) {
+          setMsg({ tone: 'info', text: '방금 같은 요청을 보냈습니다. 1분쯤 뒤 다시 누르세요.' });
+          return;
+        }
         const why = sk.map((x) => SYNC_SKIP[x.reason] || x.reason).join(', ');
         setMsg({ tone: 'info', text: why ? `${md2(date)} ${why} — 새로 받을 것이 없습니다.${sk.some((x) => x.reason === 'ALREADY_COMPLETE') ? ' 다시 받기는 수집 현황에서 합니다.' : ''}` : '받을 작업이 없습니다.' });
         return;
@@ -210,7 +216,7 @@ export default function AuctionLiveStrip({ onSettleToday, onCollected }) {
             data-testid="auction-live-sync"
           >
             {busy && <span className="pm-spin" aria-hidden="true" />}
-            {waitLeft > 0 && !busy ? <>{leftText(waitLeft)} 뒤<span className="pm-live-btn-tail"> 다시 가능</span></> : btnText}
+            <span>{waitLeft > 0 && !busy ? <>{leftText(waitLeft)} 뒤<span className="pm-live-btn-tail"> 다시 가능</span></> : btnText}</span>
           </button>
         </div>
       )}
