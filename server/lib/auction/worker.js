@@ -405,10 +405,111 @@ async function runRemap(pool, job) {
   return { status: 'DONE', ...r };
 }
 
-/** 정리 — 원천 로그(정상 90일·오류 30일), 멱등 키 7일, 후보는 줄마다 최근 3회 실행만 */
+/**
+ * 경락 보관 기간(운영 무료 DB용, T-203 후속) — AUCTION_TRADE_KEEP_DAYS
+ *  - 비어 있으면 무기한(로컬 영구 DB 기본) → 경락 행은 지우지 않는다.
+ *  - 최소값 = 누락 보정 일수(COLLECT_BACKFILL_DAYS, 기본 7) + 1. 더 짧으면 지운 날을 누락 보정이 다시 받아 지우고 받기를 되풀이한다.
+ *  - 정수가 아니거나 0 이하이면 설정 오류로 보고 지우지 않는다(invalid=true, 관리자 화면에 표시).
+ */
+function tradeRetention(env = process.env) {
+  const raw = String(env.AUCTION_TRADE_KEEP_DAYS == null ? '' : env.AUCTION_TRADE_KEEP_DAYS).trim();
+  const min = Number(env.COLLECT_BACKFILL_DAYS || 7) + 1;
+  if (!raw) return { configured: null, days: null, min, invalid: false, clamped: false };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return { configured: raw, days: null, min, invalid: true, clamped: false };
+  return { configured: n, days: Math.max(n, min), min, invalid: false, clamped: n < min };
+}
+
+/** 매입서 대조 근거가 되는 경락 — 줄의 최적 후보·후보 목록·매입전환·대조 이력(감사)이 가리키면 지우지 않는다 */
+const TRADE_UNREFERENCED = `NOT EXISTS (SELECT 1 FROM purchase_doc_line l WHERE l.best_trade_id = t.id)
+   AND NOT EXISTS (SELECT 1 FROM purchase_match_candidate c WHERE c.trade_id = t.id)
+   AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion v WHERE v.trade_id = t.id)
+   AND NOT EXISTS (SELECT 1 FROM purchase_match_event e WHERE e.trade_id = t.id)`;
+
+/**
+ * 보관 기간 지난 경락·딸린 행 분할 삭제 — budget 안에서만. 남으면 다음 정리에서 이어서
+ *  ① 경락(+이전 값 이력) 1회 batch 행씩, 참조된 행은 남김 ② 품목별 가격 ③ 아무도 안 가리키는 스냅샷
+ *  ④ 참조 행 때문에 남은 옛 스냅샷은 is_latest_ok 를 내려 "기준 데이터 있음"으로 보이지 않게(경락 일부만 남았으므로 재대조는 BASE_NOT_READY)
+ */
+async function purgeTrades(pool, { cutoff, budgetMs, t0, batch }) {
+  const out = { trades_deleted: 0, trade_history_deleted: 0, trades_remaining: 0, trades_kept_referenced: 0,
+    prices_deleted: 0, snapshots_deleted: 0, snapshots_unmarked: 0, trade_purge_conflict: false };
+  const over = () => Date.now() - t0 > budgetMs;
+  // 묶음마다 지운 뒤 예산을 본다(원천 로그 정리와 같은 방식 — 예산 0 이어도 한 묶음은 지움). 경락이 남으면 가격·스냅샷은 다음 정리에서
+  let done = false;
+  let stopped = false;
+  for (;;) {
+    let d;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      d = await pool.query(
+        `WITH v AS (SELECT t.id FROM auction_trade t WHERE t.trade_date < $1::date AND ${TRADE_UNREFERENCED} ORDER BY t.id LIMIT $2 FOR UPDATE SKIP LOCKED),
+              h AS (DELETE FROM auction_trade_history h USING v WHERE h.trade_id = v.id RETURNING 1),
+              x AS (DELETE FROM auction_trade t USING v WHERE t.id = v.id RETURNING 1)
+         SELECT (SELECT COUNT(*) FROM x)::int AS trades, (SELECT COUNT(*) FROM h)::int AS hist`,
+        [cutoff, batch]
+      );
+    } catch (e) {
+      // 그 사이 대조가 같은 경락을 후보로 잡음(FK 23503) — 이번 정리는 여기서 멈추고 다음 정리에서 다시 고른다
+      if (e.code !== '23503') throw e;
+      out.trade_purge_conflict = true;
+      break;
+    }
+    out.trades_deleted += d.rows[0].trades;
+    out.trade_history_deleted += d.rows[0].hist;
+    if (d.rows[0].trades < batch) { done = true; break; }
+    if (over()) { stopped = true; break; }
+  }
+  for (;;) {
+    if (stopped || out.trade_purge_conflict) break;
+    // eslint-disable-next-line no-await-in-loop
+    const p = await pool.query(`DELETE FROM market_price_daily WHERE id IN (SELECT id FROM market_price_daily WHERE price_date < $1::date ORDER BY id LIMIT $2)`, [cutoff, batch]);
+    out.prices_deleted += p.rowCount;
+    if (p.rowCount < batch) break;
+    if (over()) { stopped = true; done = false; break; }
+  }
+  for (;;) {
+    if (stopped || out.trade_purge_conflict) break;
+    // eslint-disable-next-line no-await-in-loop
+    const s = await pool.query(
+      `DELETE FROM collect_snapshot WHERE id IN (
+         SELECT s.id FROM collect_snapshot s
+          WHERE s.trade_date < $1::date AND s.status <> 'RUNNING'
+            AND NOT EXISTS (SELECT 1 FROM auction_trade a WHERE a.snapshot_id = s.id)
+            AND NOT EXISTS (SELECT 1 FROM auction_trade_history h WHERE h.snapshot_id = s.id)
+            AND NOT EXISTS (SELECT 1 FROM market_price_daily m WHERE m.snapshot_id = s.id)
+          ORDER BY s.id LIMIT $2)`,
+      [cutoff, batch]
+    );
+    out.snapshots_deleted += s.rowCount;
+    if (s.rowCount < batch) break;
+    if (over()) { done = false; break; }
+  }
+  if (done) {
+    const u = await pool.query(
+      `UPDATE collect_snapshot SET is_latest_ok = false,
+              verify_warning = LEFT(COALESCE(verify_warning || ' / ', '') || $2, 1000)
+        WHERE trade_date < $1::date AND is_latest_ok`,
+      [cutoff, '보관 기간이 지나 매입서 근거 경락만 남음']
+    );
+    out.snapshots_unmarked = u.rowCount;
+  }
+  const left = await pool.query(
+    `SELECT COUNT(*) FILTER (WHERE ${TRADE_UNREFERENCED})::int AS unref, COUNT(*)::int AS total FROM auction_trade t WHERE t.trade_date < $1::date`,
+    [cutoff]
+  );
+  out.trades_remaining = left.rows[0].unref;
+  out.trades_kept_referenced = left.rows[0].total - left.rows[0].unref;
+  return out;
+}
+
+/** 정리 — 원천 로그(정상 90일·오류 30일), 멱등 키 7일, 후보는 줄마다 최근 3회 실행만, 경락은 AUCTION_TRADE_KEEP_DAYS 가 있을 때만 */
 async function runPurge(pool, job) {
-  const okDays = Number(process.env.RAW_KEEP_OK_DAYS || 90);
-  const errDays = Number(process.env.RAW_KEEP_ERROR_DAYS || 30);
+  const keep = tradeRetention();
+  // 경락 보관 기간이 있으면 원천 로그도 그보다 오래 두지 않는다(무료 DB 용량 — 원천 본문이 가장 큼)
+  const capRaw = (n) => (keep.days ? Math.min(n, keep.days) : n);
+  const okDays = capRaw(Number(process.env.RAW_KEEP_OK_DAYS || 90));
+  const errDays = capRaw(Number(process.env.RAW_KEEP_ERROR_DAYS || 30));
   // 원천 로그는 1,000행씩 나눠 지운다(I 검토 D-04 — 한 번에 지우면 경락 raw_ref SET NULL 로 긴 잠금). 예산(기본 20초)을 넘기면 멈추고 다음 정리에서 이어서
   const RAW_WHERE = `(kind IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $1))
                   OR (kind NOT IN ('OK','EMPTY') AND fetched_at < NOW() - make_interval(days => $2))`;
@@ -435,7 +536,13 @@ async function runPurge(pool, job) {
          FROM (SELECT DISTINCT line_id, run_id FROM purchase_match_candidate) d) x
       WHERE pc.line_id = x.line_id AND pc.run_id = x.run_id AND x.rk > 3`
   );
-  const result = { raw_deleted: rawDeleted, raw_remaining: remaining, idempotency_deleted: b.rowCount, candidates_deleted: c.rowCount };
+  const result = { raw_deleted: rawDeleted, raw_remaining: remaining, idempotency_deleted: b.rowCount, candidates_deleted: c.rowCount,
+    raw_keep_ok_days: okDays, raw_keep_error_days: errDays, trade_keep_days: keep.days, trade_keep_invalid: keep.invalid };
+  if (keep.days) {
+    const batch = Math.max(1, Number(process.env.PURGE_BATCH_ROWS || 1000));
+    const cutoff = addDays(kstToday(), -keep.days);
+    Object.assign(result, { trade_cutoff: cutoff }, await purgeTrades(pool, { cutoff, budgetMs, t0, batch }));
+  }
   await queue.finish(pool, job.id, { status: 'DONE', result });
   return { status: 'DONE', ...result };
 }
@@ -473,4 +580,4 @@ async function runJob(pool, job, hooks = {}) {
   }
 }
 
-module.exports = { runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk };
+module.exports = { runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };

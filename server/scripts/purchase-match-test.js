@@ -69,7 +69,9 @@ async function main() {
   await q(`UPDATE collect_job SET status = 'CANCELLED', finished_at = NOW(), locked_by = NULL, locked_at = NULL WHERE status IN ('QUEUED','RUNNING')`);
   const resetCircuit = () => q(`UPDATE ext_circuit_state SET state = 'CLOSED', consecutive_failures = 0, opened_at = NULL, next_probe_at = NULL, disabled_reason = NULL, disabled_until = NULL, cooldown_sec = 600`);
   await resetCircuit();
-  const minDate = (await q(`SELECT COALESCE(MIN(trade_date), DATE '2026-11-23')::text AS d FROM auction_trade`))[0].d;
+  // 경락 보관 정리(AUCTION_TRADE_KEEP_DAYS)가 옛 경락을 지워도 이전 실행 날짜와 겹치지 않게 작업·스냅샷·매입서 날짜까지 본다
+  const minDate = (await q(`SELECT COALESCE(LEAST((SELECT MIN(trade_date) FROM auction_trade), (SELECT MIN(trade_date) FROM collect_job), (SELECT MIN(trade_date) FROM collect_snapshot),
+                                                 (SELECT MIN(trade_date) FROM purchase_doc_line)), DATE '2026-11-23')::text AS d`))[0].d;
   const B = addDays(minDate, -120); // 이번 실행 기준일(실행마다 120일씩 앞으로)
   const slot = (i) => addDays(B, -10 * i);
   console.log(`[purchase-match-test] 기준일 ${B}`);
@@ -866,6 +868,98 @@ async function main() {
   j = await collect(G, 'FINAL', 'normal', { source: 'GARAK_PRICE' });
   r = await api('GET', `/api/auction/daily-prices?date=${G}`, null, A);
   check('R-94 참고 시세(가락 목업 3품목) 평균가·전일 대비', j.status === 'DONE' && r.status === 200 && r.json.data.length === 3 && r.json.data[0].avg_price > 0 && r.json.data.some((x) => x.diff === 500), r.json);
+
+  // ---------- T-203 후속: 운영 경락 보관 기간(AUCTION_TRADE_KEEP_DAYS) · R-136 DB 사용량 ----------
+  // 정리 작업을 이 프로세스에서 직접 돌린다(서버 환경을 바꾸지 않음). 기준선 = 이번 실행 기준일 B 다음 날 → B 이하(이번·이전 실행 데이터)만 대상
+  {
+    const workerLib = require('../lib/auction/worker');
+    const queueLib = require('../lib/auction/queue');
+    const savedEnv = { k: process.env.AUCTION_TRADE_KEEP_DAYS, b: process.env.PURGE_BATCH_ROWS, m: process.env.PURGE_BUDGET_MS };
+    const cut = addDays(B, 1);
+    const keepN = Math.round((Date.parse(`${kstToday()}T00:00:00Z`) - Date.parse(`${cut}T00:00:00Z`)) / 86400000);
+    const REF = `(EXISTS (SELECT 1 FROM purchase_doc_line l WHERE l.best_trade_id = t.id) OR EXISTS (SELECT 1 FROM purchase_match_candidate c WHERE c.trade_id = t.id)
+                 OR EXISTS (SELECT 1 FROM purchase_doc_conversion v WHERE v.trade_id = t.id) OR EXISTS (SELECT 1 FROM purchase_match_event e WHERE e.trade_id = t.id))`;
+    const stat = async () => (await q(
+      `SELECT (SELECT COUNT(*)::int FROM auction_trade t WHERE t.trade_date < $1 AND NOT ${REF}) AS old_unref,
+              (SELECT COALESCE(array_agg(t.id::int ORDER BY t.id), '{}') FROM auction_trade t WHERE t.trade_date < $1 AND ${REF}) AS old_ref_ids,
+              (SELECT COUNT(*)::int FROM auction_trade WHERE trade_date >= $1) AS recent,
+              (SELECT COUNT(*)::int FROM auction_trade) AS total,
+              (SELECT COUNT(*)::int FROM auction_trade_history h JOIN auction_trade t ON t.id = h.trade_id WHERE t.trade_date < $1 AND NOT ${REF}) AS old_hist,
+              (SELECT COUNT(*)::int FROM market_price_daily WHERE price_date < $1) AS old_price,
+              (SELECT COUNT(*)::int FROM collect_snapshot WHERE trade_date >= $1) AS recent_snap,
+              (SELECT COUNT(*)::int FROM collect_snapshot WHERE trade_date < $1 AND is_latest_ok) AS old_snap_ok,
+              (SELECT COUNT(*)::int FROM purchase_doc_conversion) AS conv`, [cut]))[0];
+    const purge = async () => {
+      await queueLib.enqueue(pool, { job_type: 'PURGE_RAW', dedupe_key: `PURGE_RAW:TEST:${crypto.randomBytes(6).toString('hex')}` });
+      const job = await queueLib.claim(pool, { types: ['PURGE_RAW'] });
+      job.params = job.params || {};
+      const rr = await workerLib.runJob(pool, job);
+      return { ...rr, job_status: (await q(`SELECT status FROM collect_job WHERE id = $1`, [job.id]))[0].status };
+    };
+    // 근거 없는 옛 경락 하나에 이전 값 이력을 붙여 둔다(경락과 함께 지워져야 함)
+    const victim = (await q(`SELECT t.id, t.snapshot_id FROM auction_trade t WHERE t.trade_date < $1 AND NOT ${REF} ORDER BY t.id LIMIT 1`, [cut]))[0];
+    if (victim) await q(`INSERT INTO auction_trade_history (trade_id, revision, old_values, content_hash, snapshot_id) VALUES ($1, 9999, '{}'::jsonb, repeat('0', 64), $2) ON CONFLICT DO NOTHING`, [victim.id, victim.snapshot_id]);
+    const s0 = await stat();
+    check('RET 준비 — 기준선 이전 근거 없는 경락·근거 경락이 모두 있음', s0.old_unref > 0 && s0.old_ref_ids.length > 0 && !!victim, { old_unref: s0.old_unref, ref: s0.old_ref_ids.length });
+
+    delete process.env.AUCTION_TRADE_KEEP_DAYS;
+    let pr = await purge();
+    let s1 = await stat();
+    check('RET-1 보관 기간 미설정 → 경락 삭제 0(무기한)', pr.status === 'DONE' && pr.trade_keep_days === null && pr.trades_deleted === undefined && s1.total === s0.total && s1.old_price === s0.old_price, { pr, total: [s0.total, s1.total] });
+
+    process.env.AUCTION_TRADE_KEEP_DAYS = 'abc';
+    pr = await purge();
+    s1 = await stat();
+    check('RET-2 잘못된 값(abc) → 설정 오류 표시·삭제 0', pr.trade_keep_invalid === true && pr.trade_keep_days === null && s1.total === s0.total, pr);
+    const k3 = workerLib.tradeRetention({ AUCTION_TRADE_KEEP_DAYS: '3' });
+    check('RET-3 최소값 — 3일 설정은 누락 보정+1(8일)로 적용', k3.days === 8 && k3.clamped === true, k3);
+
+    // 분할 삭제: 한 번에 5행, 시간 예산 0 → 첫 정리는 1묶음만 지우고 남은 수를 보고
+    process.env.AUCTION_TRADE_KEEP_DAYS = String(keepN);
+    process.env.PURGE_BATCH_ROWS = '5';
+    process.env.PURGE_BUDGET_MS = '0';
+    pr = await purge();
+    s1 = await stat();
+    check('RET-4 분할 삭제 — 예산 0·묶음 5 → 5행만 지우고 남은 행 보고·작업 DONE', pr.job_status === 'DONE' && pr.trade_cutoff === cut && pr.trades_deleted === Math.min(5, s0.old_unref)
+      && pr.trades_remaining === s0.old_unref - pr.trades_deleted && s1.old_unref === s0.old_unref - pr.trades_deleted, { pr, before: s0.old_unref, after: s1.old_unref });
+
+    process.env.PURGE_BATCH_ROWS = '1000';
+    process.env.PURGE_BUDGET_MS = '20000';
+    pr = await purge();
+    const s2 = await stat();
+    check('RET-5 보관 기간 지난 근거 없는 경락 0·이전 값 이력·참고 시세도 삭제', s2.old_unref === 0 && s2.old_hist === 0 && s2.old_price === 0 && pr.trades_remaining === 0
+      && (await q(`SELECT 1 FROM auction_trade_history WHERE trade_id = $1`, [victim.id])).length === 0, { pr, s2 });
+    check('RET-6 매입서 근거 경락은 그대로(같은 id 전부)·매입전환 수 그대로', same(s2.old_ref_ids, s0.old_ref_ids) && s2.conv === s0.conv && pr.trades_kept_referenced === s0.old_ref_ids.length,
+      { kept: s2.old_ref_ids.length, was: s0.old_ref_ids.length, pr });
+    check('RET-7 기준선 이후 경락·스냅샷은 그대로', s2.recent === s0.recent && s2.recent_snap === s0.recent_snap, { recent: [s0.recent, s2.recent], snap: [s0.recent_snap, s2.recent_snap] });
+    const orphanSnap = (await q(`SELECT COUNT(*)::int AS n FROM collect_snapshot s WHERE s.trade_date < $1 AND s.status <> 'RUNNING'
+        AND NOT EXISTS (SELECT 1 FROM auction_trade a WHERE a.snapshot_id = s.id) AND NOT EXISTS (SELECT 1 FROM auction_trade_history h WHERE h.snapshot_id = s.id)
+        AND NOT EXISTS (SELECT 1 FROM market_price_daily m WHERE m.snapshot_id = s.id)`, [cut]))[0].n;
+    check('RET-8 빈 옛 스냅샷 삭제·근거 경락 때문에 남은 옛 스냅샷은 정상 표시(is_latest_ok) 내림', orphanSnap === 0 && s2.old_snap_ok === 0 && pr.snapshots_deleted > 0, { orphanSnap, pr });
+    const det = (await q(`SELECT line_id FROM purchase_doc_conversion WHERE trade_id = ANY($1::bigint[]) AND status = 'ACTIVE' LIMIT 1`, [s0.old_ref_ids]))[0];
+    r = det ? await api('GET', `/api/purchase-docs/lines/${det.line_id}/candidates`, null, A) : { status: 'no-line' };
+    check('RET-9 정리 뒤에도 매입 등록 줄의 후보 조회 정상(200)', r.status === 200, r.status);
+
+    pr = await purge();
+    const s3 = await stat();
+    check('RET-10 재실행 멱등 — 삭제 0·표시 변경 0·행 수 그대로', pr.trades_deleted === 0 && pr.trade_history_deleted === 0 && pr.prices_deleted === 0 && pr.snapshots_deleted === 0
+      && pr.snapshots_unmarked === 0 && s3.total === s2.total, pr);
+
+    r = await api('GET', '/api/auction/storage', null, ADM.tok);
+    const sd = r.json && r.json.data;
+    check('RET-11 R-136 DB 사용량(관리자) — 크기·한도·경락 행 수·가장 오래된 날짜·표 크기·마지막 정리', r.status === 200 && sd.db_bytes > 0 && sd.limit_bytes === 1024 * 1024 * 1024
+      && sd.trade_count === s3.total && typeof sd.oldest_trade_date === 'string' && 'retention' in sd && Array.isArray(sd.tables) && sd.tables.some((x) => x.name === 'auction_trade')
+      && sd.last_purge && sd.last_purge.result && sd.last_purge.result.trade_keep_days === keepN, sd);
+    check('RET-12 R-136 한도 80% 미만이면 경고 없음(이상이면 경고 문구)', !!sd && (sd.usage_ratio < 0.8 ? sd.warning === null : typeof sd.warning === 'string'), sd && { ratio: sd.usage_ratio, warning: sd.warning });
+    r = await api('GET', '/api/auction/storage', null, A);
+    check('RET-13 R-136 관리자 아닌 주인 → 403 ADMIN_ONLY', r.status === 403 && r.json.code === 'ADMIN_ONLY', r.json);
+    r = await api('GET', '/api/auction/storage', null, SV);
+    check('RET-14 R-136 직원 → 403', r.status === 403, r.status);
+
+    for (const [k, v] of [['AUCTION_TRADE_KEEP_DAYS', savedEnv.k], ['PURGE_BATCH_ROWS', savedEnv.b], ['PURGE_BUDGET_MS', savedEnv.m]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
 
   await q(`UPDATE collect_job SET status = 'CANCELLED', finished_at = NOW() WHERE status = 'QUEUED'`);
   await resetCircuit();

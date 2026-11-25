@@ -1,4 +1,4 @@
-// T-203 경락 시세 API — 설계서 4.1·4.2 (R-92~R-112, R-132~R-135). 서버 lib/auction/routes.js 가 계약대로 답한다.
+// T-203 경락 시세 API — 설계서 4.1·4.2 (R-92~R-112, R-132~R-136). 서버 lib/auction/routes.js 가 계약대로 답한다.
 import { request, qs } from './matchHttp';
 
 export const auctionApi = {
@@ -14,6 +14,8 @@ export const auctionApi = {
   syncStatus: (params) => request('GET', `/auction/sync/status${qs(params)}`, { fallback: '수집 현황을 불러오지 못했습니다.' }),
   /** R-97 수집 작업 목록 */
   jobs: (params) => request('GET', `/auction/jobs${qs(params)}`, { fallback: '수집 작업을 불러오지 못했습니다.' }),
+  /** R-136 DB 사용량·경락 보관 기간(관리자) */
+  storage: () => request('GET', '/auction/storage', { fallback: 'DB 사용량을 불러오지 못했습니다.' }),
   /** R-98 지금 받기(주인) { source, date_from, date_to, phase, force } → 202 { queued, skipped } */
   sync: (body) => request('POST', '/auction/sync', { body, fallback: '수집을 요청하지 못했습니다.' }),
   /** R-99 대기 작업 취소(관리자) */

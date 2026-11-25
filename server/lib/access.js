@@ -162,6 +162,7 @@ function buildRules(env = process.env) {
     ['R-95', 'GET', '/api/auction/items', ALL],
     ['R-96', 'GET', '/api/auction/sync/status', ALL],
     ['R-97', 'GET', '/api/auction/jobs', ALL],
+    ['R-136', 'GET', '/api/auction/storage', OWNER],                                             // 관리자 — DB 사용량·경락 보관 기간
     ['R-98', 'POST', '/api/auction/sync', OWNER, { ui: 'auction.sync' }],
     ['R-99', 'POST', '/api/auction/jobs/:id/cancel', OWNER, { ui: 'auction.admin' }],          // 관리자
     ['R-132', 'POST', '/api/auction/jobs/:id/retry', OWNER, { ui: 'auction.sync' }],

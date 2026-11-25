@@ -241,6 +241,54 @@ function registerAuctionRoutes(app, deps) {
     } catch (err) { return fail(res, err, '수집 현황을 불러오지 못했습니다.'); }
   });
 
+  // ---- R-136 DB 사용량·경락 보관 기간(관리자) — 운영 무료 DB 한도 관리(T-203 후속) ----
+  //   한도: DB_STORAGE_LIMIT_MB(기본 1024 = Neon 무료 프로젝트당 1GB, 0 이면 한도 없음 — 로컬 영구 DB). 80% 넘으면 warning
+  app.get('/api/auction/storage', async (req, res) => {
+    if (!(await needAdmin(req, res))) return undefined;
+    try {
+      const keep = worker.tradeRetention();
+      const limitMb = process.env.DB_STORAGE_LIMIT_MB == null || process.env.DB_STORAGE_LIMIT_MB === '' ? 1024 : Number(process.env.DB_STORAGE_LIMIT_MB);
+      const limitBytes = Number.isFinite(limitMb) && limitMb > 0 ? Math.round(limitMb * 1024 * 1024) : null;
+      const db = await pool.query(`SELECT pg_database_size(current_database())::bigint AS bytes`);
+      const tr = await pool.query(`SELECT COUNT(*)::bigint AS n, MIN(trade_date)::text AS oldest, MAX(trade_date)::text AS newest FROM auction_trade`);
+      const tb = await pool.query(
+        `SELECT c.relname AS name, pg_total_relation_size(c.oid)::bigint AS bytes
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = current_schema() AND c.relkind = 'r'
+            AND c.relname = ANY($1::text[]) ORDER BY 2 DESC`,
+        [['auction_trade', 'auction_trade_history', 'ext_raw_response', 'collect_snapshot', 'collect_job', 'market_price_daily', 'purchase_match_candidate', 'purchase_match_event']]
+      );
+      const lp = await pool.query(
+        `SELECT id, status, result, finished_at FROM collect_job WHERE job_type = 'PURGE_RAW' AND status IN ('DONE','FAILED','DEAD') ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`
+      );
+      const bytes = Number(db.rows[0].bytes);
+      const ratio = limitBytes ? Math.round((bytes / limitBytes) * 1000) / 1000 : null;
+      let warning = null;
+      if (ratio != null && ratio >= 0.8) {
+        warning = `DB 사용량이 한도(${limitMb} MB)의 ${Math.floor(ratio * 100)}%입니다. 보관 기간(AUCTION_TRADE_KEEP_DAYS)을 줄이거나 정리 작업이 끝까지 도는지 확인하세요.`;
+      } else if (keep.invalid) {
+        warning = `보관 기간 설정 값(${keep.configured})이 올바르지 않아 경락을 지우지 않습니다. 1 이상의 정수로 지정하세요.`;
+      }
+      const last = lp.rows[0];
+      return res.json({
+        ok: true,
+        data: {
+          db_bytes: bytes,
+          limit_bytes: limitBytes,
+          usage_ratio: ratio,
+          warn_ratio: 0.8,
+          warning,
+          trade_count: Number(tr.rows[0].n),
+          oldest_trade_date: tr.rows[0].oldest,
+          newest_trade_date: tr.rows[0].newest,
+          tables: tb.rows.map((x) => ({ name: x.name, bytes: Number(x.bytes) })),
+          retention: { ...keep, cutoff: keep.days ? worker.addDays(worker.kstToday(), -keep.days) : null },
+          last_purge: last ? { id: Number(last.id), status: last.status, finished_at: iso(last.finished_at), result: last.result } : null,
+        },
+      });
+    } catch (err) { return fail(res, err, 'DB 사용량을 불러오지 못했습니다.'); }
+  });
+
   // ---- R-97 작업 목록 ----
   app.get('/api/auction/jobs', async (req, res) => {
     if (!(await needUser(req, res))) return undefined;

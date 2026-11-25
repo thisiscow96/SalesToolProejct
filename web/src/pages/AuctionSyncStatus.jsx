@@ -1,4 +1,5 @@
 // T-203 ② 수집 현황 (설계 6.3) — R-96 현황 · R-97 작업 / 쓰기 R-98 지금 받기(주인) · R-132 다시 실행(주인) · R-99 대기 취소(관리자)
+// DB 사용량(R-136, 관리자만): DB 크기·한도 대비 %·경락 행 수·가장 오래된 날짜·보관 기간 — 한도 80% 넘으면 경고 문구
 // 잠금(T-404): [지금 받기] 응답까지 버튼·기간 잠금, 429 SYNC_RATE_LIMIT 은 남은 시간 표시, 행별 버튼은 useBusyIds
 import { useCallback, useEffect, useId, useState } from 'react';
 import { auctionApi } from '../lib/auctionApi';
@@ -12,6 +13,43 @@ import {
 } from '../lib/matchLabels';
 
 const SYNC_GAP_MS = 5 * 60 * 1000;
+const mb = (b) => (b == null ? '-' : `${(Number(b) / 1048576).toLocaleString('ko-KR', { maximumFractionDigits: 1 })} MB`);
+
+function StorageCard({ data, error }) {
+  if (error) return <div className="pm-card" data-testid="auction-storage"><h3 className="pm-h3">DB 사용량</h3><ErrorLine error={error} /></div>;
+  if (!data) return null;
+  const r = data.retention || {};
+  const pct = data.usage_ratio == null ? null : Math.floor(data.usage_ratio * 100);
+  const keepText = r.invalid ? `설정 오류(${r.configured}) — 지우지 않음`
+    : r.days ? `최근 ${r.days}일 보관${r.clamped ? ` (설정 ${r.configured}일 → 최소 ${r.min}일)` : ''} · ${md(r.cutoff)} 이전 경락 정리(매입서 근거 행은 남김)`
+      : '무기한(지우지 않음)';
+  const lp = data.last_purge;
+  return (
+    <div className="pm-card" data-testid="auction-storage">
+      <h3 className="pm-h3">DB 사용량</h3>
+      <ul className="pm-circuits">
+        <li data-testid="auction-storage-size">
+          <strong>DB 크기</strong>
+          <Tone tone={pct != null && pct >= 80 ? 'bad' : 'neutral'}>{mb(data.db_bytes)}{data.limit_bytes ? ` / ${mb(data.limit_bytes)} (${pct}%)` : ' (한도 없음)'}</Tone>
+        </li>
+        <li data-testid="auction-storage-trades">
+          <strong>경락 행</strong>
+          <span>{won(data.trade_count)}건</span>
+          {data.oldest_trade_date && <span className="pm-muted">· {data.oldest_trade_date} ~ {data.newest_trade_date}</span>}
+        </li>
+        <li data-testid="auction-storage-keep"><strong>보관 기간</strong><span>{keepText}</span></li>
+        {lp && (
+          <li className="pm-muted">
+            마지막 정리 #{lp.id} {kstTime(lp.finished_at)}
+            {lp.result && lp.result.trades_deleted != null && ` · 경락 ${won(lp.result.trades_deleted)}건 삭제`}
+            {lp.result && lp.result.trades_remaining > 0 && ` · 남은 ${won(lp.result.trades_remaining)}건은 다음 정리에서`}
+          </li>
+        )}
+      </ul>
+      {data.warning && <p className="pm-error" role="alert" data-testid="auction-storage-warning">{data.warning}</p>}
+    </div>
+  );
+}
 
 export default function AuctionSyncStatus() {
   const today = kstToday();
@@ -22,6 +60,7 @@ export default function AuctionSyncStatus() {
   const ids = { from: useId(), to: useId(), phase: useId(), src: useId() };
   const [st, setSt] = useState(null);
   const [jobs, setJobs] = useState([]);
+  const [storage, setStorage] = useState({ data: null, error: null });
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [form, setForm] = useState({ source: 'AT_REALTIME', date_from: kstAddDays(today, -4), date_to: today, phase: 'FINAL', force: false });
@@ -44,12 +83,17 @@ export default function AuctionSyncStatus() {
       if (!latest.isCurrent(t)) return;
       setSt(s);
       setJobs(j.data || []);
+      if (isAdmin) {
+        // 사용량은 따로 — 실패해도 수집 현황은 보이게
+        auctionApi.storage().then((x) => latest.isCurrent(t) && setStorage({ data: x.data, error: null }))
+          .catch((e) => latest.isCurrent(t) && setStorage({ data: null, error: e }));
+      }
     } catch (e) {
       if (latest.isCurrent(t)) setErr(e);
     } finally {
       if (latest.isCurrent(t)) setLoading(false);
     }
-  }, [latest, today]);
+  }, [latest, today, isAdmin]);
 
   useEffect(() => {
     load();
@@ -158,6 +202,8 @@ export default function AuctionSyncStatus() {
           })}
         </ul>
       </div>
+
+      {isAdmin && <StorageCard data={storage.data} error={storage.error} />}
 
       {canSync ? (
         <div className="main-filters pm-filters" data-testid="auction-sync-form">
