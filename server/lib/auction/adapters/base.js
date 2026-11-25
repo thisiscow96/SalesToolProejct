@@ -152,6 +152,14 @@ class SourceAdapter {
     const url = buildUrl(this.constructor.BASE_URL, this.buildParams(params), this.apiKey);
     const masked = maskUrl(url);
     const r = await httpGet(url, { fetchImpl: this.fetchImpl });
+    // C-RA-01: 원격이 본문(오류 문구 포함)에 키 값을 되돌려 줘도 결과 객체·기록에 남지 않게 키 값만 바꾼다(JSON 구조는 그대로)
+    if (this.apiKey && String(this.apiKey).length >= 6) {
+      const k = String(this.apiKey);
+      for (const v of [k, encodeURIComponent(k)]) {
+        if (r.body && r.body.includes(v)) r.body = r.body.split(v).join('****');
+        if (r.errorMessage && r.errorMessage.includes(v)) r.errorMessage = r.errorMessage.split(v).join('****');
+      }
+    }
     recordLive(this.source, params, r, masked);
     return this.interpret(r, { masked, pageNo: params.pageNo || 1, requestParams: this.buildParams(params) });
   }

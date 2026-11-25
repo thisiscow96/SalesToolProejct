@@ -12,6 +12,7 @@
  *  U  순수 함수: 응답 코드 "0"·필드 이름(R-01)·자연키 모양·옛 목업 해시 불변·코드 매핑 IGNORE·점수 m2(실 경락만)
  *  M  실형식 목업(MOCK 시나리오 real*) — 저장·멱등·정정·옛 응답(STALE)·철회·같은 키 두 번·자연키 없음·쪽 나눔
  *  R  재생(REPLAY) — 2026-11-24 FINAL·2026-11-25 수집 건수(AC-42·43), 매핑 결과(AC-53), 자연키 중복 0, 철회 범위(R-04)
+ *  S  보안·운영 경고 — 원천 로그 키 가림(C-RA-01, 가짜 키·가짜 fetch), 매핑 시드 0행 경고(O1)
  *  D  대조 m2(API) — AC-46·47·48·49·50·51·47b(스위치 끔)
  */
 const crypto = require('crypto');
@@ -221,6 +222,80 @@ async function main() {
   fs.rmSync(tmp, { recursive: true, force: true });
   // 최신 FINAL 이 12-06 하나만이면 다음 대조의 base_final 판단은 같음(날짜 단위) — 전체 조합으로 한 번 더 받아 최신 스냅샷을 원래대로
   await runReplay(RD, 'FINAL');
+
+  // ================= S 보안·운영 경고 (B 20261125-1430 — C-RA-01·O1) =================
+  // 키는 가짜 값만 쓴다(실 키 읽지 않음). 실호출 0 — fetch 는 이 프로세스 안에서 잠깐 가짜로 바꾼다
+  const FAKE = 'T203fakeKEY+/0123456789abcdef==';
+  const FAKE_ENC = encodeURIComponent(FAKE);
+  const hasKey = (v) => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.includes(FAKE) || t.includes(FAKE_ENC); };
+  {
+    // S-1 원천 로그 저장 지점(worker.logRaw) 자체가 가리는지 — 어댑터를 거치지 않은(가리지 않은) 결과가 와도 본문·URL 에 키가 남지 않음
+    const e = await queue.enqueue(pool, { job_type: 'COLLECT', source: 'AT_REALTIME', market_code: '110001', trade_date: '2025-03-05', phase: 'FINAL', params: {}, dedupe_key: `T203S1:${key()}` });
+    const rawBody = `{"response":{"header":{"resultCode":"30","resultMsg":"SERVICE KEY IS NOT REGISTERED ERROR. serviceKey=${FAKE_ENC}&x=1 echo ${FAKE}"}}}`;
+    const rawId = await withEnv({ AT_AUCTION_API_KEY: FAKE }, () => worker.logRaw(pool, { id: e.id }, 'AT_REALTIME',
+      { kind: 'AUTH_ERROR', httpStatus: 200, pageNo: 1, rawBody, requestUrlMasked: `https://x.invalid/trades2?serviceKey=${FAKE_ENC}&pageNo=1`, requestParams: {} }));
+    const rr = (await q(`SELECT body, request_url_masked, body_hash FROM ext_raw_response WHERE id = $1`, [rawId]))[0];
+    let parsedOk = true; try { JSON.parse(rr.body); } catch { parsedOk = false; }
+    check('S-1 C-RA-01 원천 로그 저장 전 본문·URL 의 키(원문·인코딩) 가림 — **** 로 바뀌고 JSON 구조 유지·해시는 받은 원문 기준',
+      !hasKey(rr) && rr.body.includes('****') && parsedOk && rr.body_hash === crypto.createHash('sha256').update(rawBody).digest('hex'), { body: rr.body, url: rr.request_url_masked, parsedOk });
+    await q(`UPDATE collect_job SET status = 'CANCELLED', finished_at = NOW() WHERE id = $1`, [e.id]);
+  }
+  {
+    // S-2 LIVE 어댑터 → 워커 전체 경로: 원격이 오류 응답(resultMsg·본문)에 키를 되돌려 줌 → 원천 로그·작업 오류·실패 스냅샷·어댑터 결과 어디에도 키 없음
+    const SD = '2025-03-07';
+    const fakeFetch = async () => ({ ok: true, status: 200, headers: { get: () => null, forEach() {} },
+      text: async () => JSON.stringify({ response: { header: { resultCode: '99', resultMsg: `echo ${FAKE} serviceKey=${FAKE_ENC}` }, body: {} } }) });
+    const A = ad.createAdapter('AT_REALTIME', { fetchImpl: fakeFetch }, { AT_AUCTION_API_KEY: FAKE });
+    const ar = await A.fetchPage({ tradeDate: SD, marketCode: '110001', pageNo: 1, itemL: '12', itemM: '06' });
+    check('S-2a 어댑터 결과 객체(rawBody·message)에 키 없음 — 오류 분류는 그대로(SERVER_ERROR)', A.mode === 'LIVE' && ar.kind === 'SERVER_ERROR' && !hasKey(ar), { kind: ar.kind, mode: A.mode });
+    const realFetch = globalThis.fetch;
+    let jr;
+    const e = await queue.enqueue(pool, { job_type: 'COLLECT', source: 'AT_REALTIME', market_code: '110001', trade_date: SD, phase: 'FINAL', params: {}, dedupe_key: `T203S2:${key()}` });
+    try {
+      globalThis.fetch = fakeFetch;
+      jr = await withEnv({ AUCTION_SOURCE_MODE: null, AT_AUCTION_API_KEY: FAKE, AUCTION_ITEM_COMBOS: '12-06' }, async () => {
+        const job = (await q(`UPDATE collect_job SET status = 'RUNNING', locked_by = $2, locked_at = NOW(), attempts = attempts + 1, started_at = COALESCE(started_at, NOW()) WHERE id = $1 RETURNING *`, [e.id, queue.INSTANCE]))[0];
+        job.params = job.params || {};
+        await worker.runJob(pool, job);
+        return (await q(`SELECT status, last_error_kind, last_error, result FROM collect_job WHERE id = $1`, [e.id]))[0];
+      });
+    } finally { globalThis.fetch = realFetch; }
+    const raws = await q(`SELECT source, body, request_url_masked FROM ext_raw_response WHERE job_id = $1`, [e.id]);
+    const snaps = await q(`SELECT error_kind, error_message FROM collect_snapshot WHERE job_id = $1`, [e.id]);
+    check('S-2b C-RA-01 워커 경로(LIVE·가짜 fetch): 원천 로그 본문·URL, 작업 last_error, 실패 스냅샷 오류 문구에 키 없음',
+      raws.length >= 1 && raws.every((r) => r.source === 'AT_REALTIME') && !hasKey(raws) && !hasKey(jr) && snaps.length >= 1 && !hasKey(snaps) && jr.last_error_kind === 'SERVER_ERROR',
+      { raws: raws.length, kind: jr && jr.last_error_kind, snaps: snaps.length, leak: hasKey(raws) || hasKey(jr) || hasKey(snaps) });
+    await q(`UPDATE collect_job SET status = 'CANCELLED', finished_at = NOW() WHERE id = $1 AND status = 'QUEUED'`, [e.id]);
+    await q(`UPDATE ext_circuit_state SET state = 'CLOSED', consecutive_failures = 0, opened_at = NULL, next_probe_at = NULL, disabled_reason = NULL, disabled_until = NULL`);
+  }
+  {
+    // S-3·4 O1: 실 소스(REPLAY)인데 AT 코드 매핑 규칙이 0행 → 수집은 그대로(DONE·COMPLETE), 스냅샷 경고 + 결과 표시. 시드가 있으면 경고 없음
+    const OD = '2025-03-03';
+    const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 't203o1-'));
+    const src2 = JSON.parse(fs.readFileSync(path.join(ad.REPLAY_DIR, `${RD}_12-06_p1.json`), 'utf8'));
+    for (const it of src2.response.body.items.item) it.trd_clcln_ymd = OD;
+    fs.writeFileSync(path.join(tmp2, `${OD}_12-06_p1.json`), JSON.stringify(src2));
+    const n06 = src2.response.body.items.item.length;
+    const off = await q(`UPDATE item_mapping SET active = false WHERE source = 'AT_REALTIME' AND active RETURNING id`);
+    let o1;
+    try {
+      o1 = await runReplay(OD, 'FINAL', { AUCTION_ITEM_COMBOS: '12-06', AUCTION_REPLAY_DIR: tmp2 });
+    } finally {
+      await q(`UPDATE item_mapping SET active = true WHERE id = ANY($1::bigint[])`, [off.map((r) => r.id)]);
+    }
+    const sn1 = (await q(`SELECT status, verify_warning FROM collect_snapshot WHERE id = $1`, [o1.result && o1.result.snapshot_id]))[0] || {};
+    check('S-3 O1 매핑 시드 0행 + 실 소스(REPLAY) → 수집 막지 않음(DONE·COMPLETE·전부 UNMAPPED) + 스냅샷 경고 "분류 코드 매핑 시드 없음 — seed-at-realtime-mapping.js 실행"',
+      off.length >= 21 && o1.status === 'DONE' && o1.result.snapshot === 'COMPLETE' && o1.result.mapping_seed_missing === true && o1.result.unmapped === n06
+      && String(sn1.verify_warning || '').includes(worker.SEED_MISSING_WARNING), { off: off.length, r: o1.result, sn1 });
+    const o2 = await runReplay(OD, 'FINAL', { AUCTION_ITEM_COMBOS: '12-06', AUCTION_REPLAY_DIR: tmp2 });
+    const sn2 = (await q(`SELECT verify_warning FROM collect_snapshot WHERE id = $1`, [o2.result && o2.result.snapshot_id]))[0] || {};
+    check('S-4 O1 시드가 있으면 경고 없음(mapping_seed_missing 없음·스냅샷 경고에 문구 없음)',
+      o2.status === 'DONE' && !('mapping_seed_missing' in o2.result) && !String(sn2.verify_warning || '').includes(worker.SEED_MISSING_WARNING), { r: o2.result, sn2 });
+    fs.rmSync(tmp2, { recursive: true, force: true });
+    // 정리 — 이 날짜 실형식 행은 다른 검사에 안 쓰임(재실행 대비 지움)
+    await q(`DELETE FROM auction_trade_history WHERE trade_id IN (SELECT id FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1)`, [OD]);
+    await q(`DELETE FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1 AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.trade_id = auction_trade.id)`, [OD]);
+  }
 
   // ================= D 대조 m2 (API) =================
   const mkUser = async (name, agent) => {

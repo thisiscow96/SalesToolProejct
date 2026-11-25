@@ -21,6 +21,8 @@ const { scrubSecrets } = require('./mask');
 
 const MAX_PAGES = 200;
 const MAX_BODY = 1024 * 1024;
+/** O1 경고 문구 — 수집 현황(verify_warning)·서버 로그에 그대로 보임 */
+const SEED_MISSING_WARNING = '분류 코드 매핑 시드 없음 — seed-at-realtime-mapping.js 실행';
 
 const kstNow = () => new Date(Date.now() + 9 * 3600 * 1000);
 const kstToday = () => kstNow().toISOString().slice(0, 10);
@@ -48,14 +50,16 @@ function mockScenarioOf(job, env = process.env) {
 
 /** 원천 로그 — 별도 연결(수집 트랜잭션이 롤백돼도 남는다). 본문 1MB 넘으면 앞부분 + 전체 해시 */
 async function logRaw(pool, job, effSource, r) {
-  const body = r.rawBody || '';
+  const raw = r.rawBody || '';
+  // C-RA-01: 원격이 오류 본문에 키를 되돌려 줘도 저장 전에 가린다(serviceKey= 패턴 + 알고 있는 키 값). 해시는 받은 원문 기준
+  const body = scrubSecrets(raw, secretValues());
   const truncated = Buffer.byteLength(body, 'utf8') > MAX_BODY;
   const stored = truncated ? body.slice(0, MAX_BODY / 2) : body;
   const ins = await pool.query(
     `INSERT INTO ext_raw_response (job_id, source, request_url_masked, request_params, page_no, http_status, kind, body, body_truncated, body_hash, row_count, duration_ms)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
     [job.id, effSource, scrubSecrets(r.requestUrlMasked, secretValues()), JSON.stringify(r.requestParams || {}), r.pageNo || null, r.httpStatus || null,
-      r.kind, stored, truncated, crypto.createHash('sha256').update(body).digest('hex'), (r.items || []).length, r.durationMs ?? null]
+      r.kind, stored, truncated, crypto.createHash('sha256').update(raw).digest('hex'), (r.items || []).length, r.durationMs ?? null]
   );
   return Number(ins.rows[0].id);
 }
@@ -218,6 +222,9 @@ async function runCollect(pool, job, hooks) {
 
   // 정규화(전부 검사 — 한 건이라도 형식 오류면 그 작업은 저장 0건)
   const ctx = await norm.loadMappingContext(pool, { target: 'MARKET', on: job.trade_date });
+  // O1: 실 소스(LIVE·REPLAY)인데 AT 코드 매핑 규칙이 0행이면 전부 UNMAPPED 가 된다 — 수집은 그대로 하고 경고만 남김
+  const seedMissing = job.source === 'AT_REALTIME' && adapter.mode !== 'MOCK' && !ctx.codeRules.some((x) => x.source === 'AT_REALTIME');
+  if (seedMissing) console.warn(`[collect] job ${job.id} ${SEED_MISSING_WARNING}`);
   const n = fetched.empty ? { rows: [], errors: [] } : norm.normalizeItems(ctx, adapter, fetched.items, { source: effSource, marketCode: job.market_code });
   if (n.errors.length) {
     const msg = `응답 형식 이상 ${n.errors.length}건: ${n.errors.slice(0, 3).map((e) => `${e.idx + 1}번째 ${e.message}`).join(' / ')}`;
@@ -262,7 +269,8 @@ async function runCollect(pool, job, hooks) {
       `UPDATE collect_snapshot SET status = $2, inserted = $3, updated = $4, unchanged = $5, unmapped = $6, withdrawn = $7, content_hash = $8,
               verify_warning = $9, finished_at = NOW() WHERE id = $1`,
       [snap.id, status, up.inserted, up.updated, up.unchanged, up.unmapped, withdrawn.length, contentHash,
-        [fetched.note || (status === 'EMPTY' ? '데이터 없음 — 확인 필요(휴장 미등록?)' : null),
+        [seedMissing ? SEED_MISSING_WARNING : null,
+          fetched.note || (status === 'EMPTY' ? '데이터 없음 — 확인 필요(휴장 미등록?)' : null),
           dd.dropped ? `같은 키 중복 ${dd.dropped}행 정리` : null, up.stale ? `STALE_ROW ${up.stale}건(옛 응답 — 덮어쓰지 않음)` : null]
           .filter(Boolean).join(' / ').slice(0, 1000) || null]
     );
@@ -271,7 +279,7 @@ async function runCollect(pool, job, hooks) {
     if (['COMPLETE', 'EMPTY', 'HOLIDAY'].includes(status)) latest = await markLatestOk(client, snap);
     Object.assign(result, { snapshot_id: Number(snap.id), snapshot: status, latest_ok: latest, total: fetched.total || 0, fetched: rows.length,
       inserted: up.inserted, updated: up.updated, unchanged: up.unchanged, unmapped: up.unmapped, withdrawn: withdrawn.length, revised_flagged: flagged, pages: fetched.pages,
-      ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
+      ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(seedMissing ? { mapping_seed_missing: true } : {}), ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -610,4 +618,4 @@ async function runJob(pool, job, hooks = {}) {
   }
 }
 
-module.exports = { runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };
+module.exports = { SEED_MISSING_WARNING, logRaw, runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };

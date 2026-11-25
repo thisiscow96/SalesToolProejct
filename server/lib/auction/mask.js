@@ -8,7 +8,8 @@
 /** URL·문자열 안의 serviceKey 값(인코딩 키·디코딩 키 모두)을 **** 로 */
 function maskUrl(s) {
   if (s == null) return s;
-  return String(s).replace(/(servicekey=)[^&#\s]*/gi, '$1****');
+  // 따옴표·꺾쇠에서 멈춘다 — JSON·XML 본문을 가려도 뒤 구조를 먹지 않게(C-RA-01)
+  return String(s).replace(/(servicekey=)[^&#\s"'<>]*/gi, '$1****');
 }
 
 /** 오류 메시지 같은 자유 문장에서 키 값처럼 보이는 것을 지운다(키 값 자체를 알고 있으면 그 값도) */
