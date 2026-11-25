@@ -157,6 +157,11 @@ export const REASON = {
   DATE_DIFF: '날짜 차이(자동 범위 밖)',
   QTY_DIFF: '수량 차이(검토 범위 안)',
   VARIETY_UNKNOWN: '품종 모름(한쪽 품종 없음)',
+  // T-203 실 API(m2) — 실 경락에만 붙는 코드
+  GRADE_NOT_IN_SOURCE: '경락 자료에 등급 없음(등급은 비교 안 함)',
+  PRICE_OUTLIER: '경락 단가가 그날 같은 품목 kg 단가와 10배 넘게 차이(자동 등록 안 함)',
+  UNIQUE_NO_ID: '번호 없이 조건이 맞는 경락이 1건뿐이라 자동 일치',
+  AUCTION_REF_WEAK: '경매번호만으로는 한 건을 못 정함(출하번호 함께 적기)',
 };
 export const reasonText = (code) => REASON[code] || code;
 

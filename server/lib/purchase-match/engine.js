@@ -10,7 +10,7 @@
  *  5. 줄 상태: EXACT+전환 가능+자동 → 같은 트랜잭션에서 매입전환 / EXACT 그 밖 → PENDING(사유) / PARTIAL·UNMATCHED → HOLD
  *  6. 후보 상위 5건·실행 기록(tolerance_snapshot)·이력(purchase_match_event)·헤더 재계산
  */
-const { ENGINE_VERSION, scoreCandidate, assignWithinDoc } = require('./score');
+const { ENGINE_VERSION, ENGINE_VERSION_REAL, scoreCandidate, assignWithinDoc } = require('./score');
 const N = require('./normalize');
 
 const TOL_FIELDS = ['price_pct_auto', 'price_pct_review', 'qty_pct_auto', 'qty_pct_review', 'amount_abs_auto', 'date_before_auto', 'date_after_auto',
@@ -39,7 +39,7 @@ function pickTolerance(rows, userId, itemKey) {
     if (hit) return hit;
   }
   return { id: null, price_pct_auto: 0, price_pct_review: 10, qty_pct_auto: 0, qty_pct_review: 20, amount_abs_auto: 0, date_before_auto: 1, date_after_auto: 0,
-    date_before_review: 3, date_after_review: 1, auto_convert: true, auto_min_score: 85, ambiguity_margin: 10 };
+    date_before_review: 3, date_after_review: 1, auto_convert: true, auto_min_score: 85, ambiguity_margin: 10, auto_unique_no_id: true };
 }
 const tolView = (t) => ({ id: t.id, scope: t.item_key ? { item_key: t.item_key } : t.item_family ? { item_family: t.item_family } : 'ALL', is_default: t.user_id == null,
   ...Object.fromEntries(TOL_FIELDS.map((k) => [k, typeof t[k] === 'boolean' ? t[k] : Number(t[k])])) });
@@ -64,6 +64,13 @@ WITH tol AS (
 )
 SELECT l.id AS line_id, t.id AS trade_id, t.source, t.trade_date, t.auction_at, t.corp_code, t.corp_name, t.item_key, t.item_name_raw, t.grade_norm,
        t.pkg_norm, t.pkg_name, t.unit_qty_kg, t.qty, t.unit_price, t.amount, t.price_per_kg, t.origin_name, t.buyer_code, t.auction_seq, t.market_code, t.revision,
+       t.shipment_no, t.trade_type, t.corp_item_name, t.corp_variety_name,
+       -- m2(실 API 경락만 — score.js isReal): 등급 칸 없음 · 약한 경매번호 · 이상 단가
+       (t.source = 'AT_REALTIME' AND t.grade_norm IS NULL AND t.grade_code IS NULL) AS grade_not_in_source,
+       (t.source = 'AT_REALTIME' AND l.auction_ref IS NOT NULL AND l.shipment_ref IS NULL
+          AND NOT COALESCE((cm.extra->>'seq_daily_unique')::boolean, false)) AS auction_ref_weak,
+       (t.source = 'AT_REALTIME' AND med.m IS NOT NULL AND t.price_per_kg IS NOT NULL
+          AND (t.price_per_kg > med.m * 10 OR t.price_per_kg < med.m / 10)) AS price_outlier,
        (t.trade_date - l.trade_date)::int AS date_diff,
        (t.item_key = l.item_key) AS same_item,
        (right(t.item_key, 2) = '._' OR right(l.item_key, 2) = '._') AS variety_unknown_one,
@@ -73,7 +80,12 @@ SELECT l.id AS line_id, t.id AS trade_id, t.source, t.trade_date, t.auction_at, 
        (l.unit_qty_kg IS NOT NULL AND t.unit_qty_kg IS NOT NULL) AS kg_known_both,
        COALESCE(l.unit_qty_kg = t.unit_qty_kg, false) AS same_kg,
        (l.pkg_norm IS NOT DISTINCT FROM t.pkg_norm) AS same_pkg,
-       CASE WHEN l.auction_ref IS NOT NULL AND t.auction_seq = l.auction_ref THEN 'AUCTION'
+       CASE WHEN t.source = 'AT_REALTIME' THEN
+              -- m2 R1: 경매순번은 법인마다 뜻이 달라(농협가락·동화·한국청과 = 출하 건 안 순번) 출하번호와 함께이거나 하루 유일 순번 법인일 때만 식별
+              CASE WHEN l.auction_ref IS NOT NULL AND t.auction_seq = l.auction_ref
+                        AND ((l.shipment_ref IS NOT NULL AND t.shipment_no = l.shipment_ref)
+                             OR (l.shipment_ref IS NULL AND COALESCE((cm.extra->>'seq_daily_unique')::boolean, false))) THEN 'AUCTION' END
+            WHEN l.auction_ref IS NOT NULL AND t.auction_seq = l.auction_ref THEN 'AUCTION'
             WHEN COALESCE(l.buyer_code, $5) IS NOT NULL AND t.buyer_code = COALESCE(l.buyer_code, $5) THEN 'BUYER' END AS ident,
        (d.corp_code IS NOT NULL AND t.corp_code = d.corp_code) AS corp_same,
        COALESCE(CASE WHEN l.unit_qty_kg IS NOT NULL AND t.unit_qty_kg IS NOT NULL AND l.unit_qty_kg <> t.unit_qty_kg
@@ -102,6 +114,13 @@ SELECT l.id AS line_id, t.id AS trade_id, t.source, t.trade_date, t.auction_at, 
    AND (l.auction_ref IS NULL OR t.auction_seq IS NULL OR t.auction_seq = l.auction_ref)
    AND (COALESCE(l.buyer_code, $5) IS NULL OR t.buyer_code IS NULL OR t.buyer_code = COALESCE(l.buyer_code, $5))
    AND (d.corp_code IS NULL OR t.corp_code IS NULL OR t.corp_code = d.corp_code)
+   AND (l.shipment_ref IS NULL OR t.shipment_no IS NULL OR t.shipment_no = l.shipment_ref)
+  LEFT JOIN code_master cm ON cm.code_type = 'corp' AND cm.code = t.corp_code
+  LEFT JOIN LATERAL (
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY t2.price_per_kg) AS m
+      FROM auction_trade t2
+     WHERE t.source = 'AT_REALTIME' AND t2.source = 'AT_REALTIME' AND t2.trade_date = t.trade_date AND t2.item_key = t.item_key
+       AND t2.withdrawn_at IS NULL AND t2.price_per_kg IS NOT NULL) med ON true
  WHERE l.user_id = $1 AND l.id = ANY($2::bigint[]) AND l.item_key IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.user_id = $1 AND c.trade_id = t.id AND c.status = 'ACTIVE' AND c.line_id <> l.id)
  ORDER BY l.id, t.id`;
@@ -282,16 +301,18 @@ async function matchLines(client, cx, opts) {
   }
   const readiness = await baseReadiness(client, lines.filter((l) => l.item_key), tolOf, market);
 
-  // 실행 기록 — 매입서마다 한 건
+  // 실행 기록 — 매입서마다 한 건. 실 API 후보가 하나라도 있으면 m2(규칙 R1~R4 가 쓰였음), 목업뿐이면 m1
   const runOf = new Map();
+  const versionOf = new Map();
   for (const [docId, group] of byDoc) {
+    versionOf.set(docId, group.some((l) => (scoredByLine.get(String(l.id)) || []).some((c) => c.source === 'AT_REALTIME')) ? ENGINE_VERSION_REAL : ENGINE_VERSION);
     const used = new Map();
     for (const l of group) { const t = tolOf(l); used.set(String(t.id), tolView(t)); }
     // eslint-disable-next-line no-await-in-loop
     const run = await client.query(
       `INSERT INTO purchase_match_run (user_id, doc_id, trigger, engine_version, tolerance_snapshot, line_count, actor_staff_id)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7) RETURNING id`,
-      [userId, docId, opts.trigger, ENGINE_VERSION, JSON.stringify({ tolerances: [...used.values()], line_tolerance: Object.fromEntries(group.map((l) => [String(l.id), tolOf(l).id])) }),
+      [userId, docId, opts.trigger, versionOf.get(docId), JSON.stringify({ tolerances: [...used.values()], line_tolerance: Object.fromEntries(group.map((l) => [String(l.id), tolOf(l).id])) }),
         group.length, cx.staffId || null]
     );
     runOf.set(docId, Number(run.rows[0].id));
@@ -325,7 +346,7 @@ async function matchLines(client, cx, opts) {
       else why = 'ALL_CANDIDATES_TAKEN';
       reasons.splice(0, reasons.length, why);
     }
-    for (const f of (d.best && d.best.flags) || []) if (['UNIT_CONVERTED', 'PRICE_OUT', 'QTY_OUT', 'QTY_PARTIAL', 'GRADE_DIFF'].includes(f)) warnings.add(f);
+    for (const f of (d.best && d.best.flags) || []) if (['UNIT_CONVERTED', 'PRICE_OUT', 'QTY_OUT', 'QTY_PARTIAL', 'GRADE_DIFF', 'GRADE_NOT_IN_SOURCE', 'PRICE_OUTLIER', 'UNIQUE_NO_ID', 'AUCTION_REF_WEAK'].includes(f)) warnings.add(f);
     // 품목 연결
     let productId = l.product_id;
     let product = null;
@@ -389,7 +410,7 @@ async function matchLines(client, cx, opts) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)`,
       [userId, l.doc_id, l.id, opts.eventType || (opts.trigger === 'UPLOAD' ? 'MATCH' : 'REMATCH'), l.status, status, result, d.score, d.best ? d.best.trade_id : null, runId,
         reasons.join(',').slice(0, 200) || null,
-        JSON.stringify({ engine_version: ENGINE_VERSION, tolerance: tolView(tol), flags: d.best ? d.best.flags : [], warnings: [...warnings],
+        JSON.stringify({ engine_version: versionOf.get(String(l.doc_id)), tolerance: tolView(tol), flags: d.best ? d.best.flags : [], warnings: [...warnings],
           candidates_top3: d.ranked.slice(0, 3).map((c) => ({ trade_id: Number(c.trade_id), score: c.score, strict: c.strict })) }),
         cx.actorKind, cx.actorKind === 'STAFF' ? cx.staffId : null]
     );

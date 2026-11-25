@@ -236,11 +236,11 @@ function registerPurchaseDocRoutes(app, deps) {
         // eslint-disable-next-line no-await-in-loop
         const r = await client.query(
           `INSERT INTO purchase_doc_line (doc_id, user_id, line_no, source_line_no, trade_date, arrival_date, item_name_raw, item_key, grade_raw, grade_norm, pkg_raw, pkg_norm,
-                                          unit_qty_kg, weight_source, qty, unit_price, amount, origin_name, shipper_name_masked, auction_ref, buyer_code, product_id, line_fingerprint)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::numeric,$14,$15::numeric,$16::bigint, COALESCE($17::bigint, ROUND($15::numeric * $16::bigint)::bigint), $18,$19,$20,$21,$22,$23)
+                                          unit_qty_kg, weight_source, qty, unit_price, amount, origin_name, shipper_name_masked, auction_ref, buyer_code, product_id, line_fingerprint, shipment_ref)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::numeric,$14,$15::numeric,$16::bigint, COALESCE($17::bigint, ROUND($15::numeric * $16::bigint)::bigint), $18,$19,$20,$21,$22,$23,$24)
            RETURNING id`,
           [docId, cx.userId, no, l.source_line_no || null, l.trade_date, l.arrival_date, l.item_name_raw, l.item_key, l.grade_raw, l.grade_norm, l.pkg_raw, l.pkg_norm,
-            l.unit_qty_kg, l.weight_source, l.qty, l.unit_price, l.amount, l.origin_name, l.shipper_name_masked, l.auction_ref, l.buyer_code, l.product_id, l.line_fingerprint]
+            l.unit_qty_kg, l.weight_source, l.qty, l.unit_price, l.amount, l.origin_name, l.shipper_name_masked, l.auction_ref, l.buyer_code, l.product_id, l.line_fingerprint, l.shipment_ref || null]
         );
         lineIds.push(Number(r.rows[0].id));
       }
@@ -573,7 +573,7 @@ function registerPurchaseDocRoutes(app, deps) {
     if (!lineId) return NF(res, '줄');
     const b = req.body || {};
     if (b.version == null || !Number.isInteger(Number(b.version))) return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'version', message: '줄 version 을 함께 보내세요.' });
-    const EDITABLE = ['trade_date', 'arrival_date', 'item_name', 'item', 'grade', 'spec', 'qty', 'unit_price', 'amount', 'origin', 'auction_ref', 'buyer_code', 'product_id'];
+    const EDITABLE = ['trade_date', 'arrival_date', 'item_name', 'item', 'grade', 'spec', 'qty', 'unit_price', 'amount', 'origin', 'auction_ref', 'shipment_ref', 'buyer_code', 'product_id'];
     const bad = Object.keys(b).find((k) => k !== 'version' && !EDITABLE.includes(k));
     if (bad) return res.status(400).json({ ok: false, code: 'VALIDATION', field: bad, message: `바꿀 수 없는 칸입니다: ${bad}` });
     return inTx(req, res, auth, { route: 'R-126', body: b }, async (client, cx) => {
@@ -589,7 +589,8 @@ function registerPurchaseDocRoutes(app, deps) {
         supplier_partner_id: l.supplier_partner_id, item: has('item_name') ? b.item_name : has('item') ? b.item : l.item_name_raw,
         grade: has('grade') ? b.grade : l.grade_raw, spec: has('spec') ? b.spec : l.pkg_raw, qty: has('qty') ? b.qty : l.qty,
         unit_price: has('unit_price') ? b.unit_price : String(l.unit_price), amount: has('amount') ? b.amount : (has('qty') || has('unit_price') ? null : String(l.amount)),
-        origin: has('origin') ? b.origin : l.origin_name, auction_ref: has('auction_ref') ? b.auction_ref : l.auction_ref, buyer_code: has('buyer_code') ? b.buyer_code : l.buyer_code,
+        origin: has('origin') ? b.origin : l.origin_name, auction_ref: has('auction_ref') ? b.auction_ref : l.auction_ref,
+        shipment_ref: has('shipment_ref') ? b.shipment_ref : l.shipment_ref, buyer_code: has('buyer_code') ? b.buyer_code : l.buyer_code,
         product_id: has('product_id') ? b.product_id : l.product_id,
       };
       const lk = await makeLookup(client, cx.userId).init();
@@ -599,12 +600,12 @@ function registerPurchaseDocRoutes(app, deps) {
       await client.query(
         `UPDATE purchase_doc_line SET trade_date = $2, arrival_date = $3, item_name_raw = $4, item_key = $5, grade_raw = $6, grade_norm = $7, pkg_raw = $8, pkg_norm = $9,
                 unit_qty_kg = $10::numeric, weight_source = $11, qty = $12::numeric, unit_price = $13::bigint, amount = COALESCE($14::bigint, ROUND($12::numeric * $13::bigint)::bigint),
-                origin_name = $15, auction_ref = $16, buyer_code = $17, product_id = $18, line_fingerprint = $19,
+                origin_name = $15, auction_ref = $16, buyer_code = $17, product_id = $18, line_fingerprint = $19, shipment_ref = $20,
                 match_result = NULL, match_score = NULL, best_trade_id = NULL, candidate_count = NULL, reason_codes = '{}', warning_flags = '{}',
                 status = CASE WHEN status = 'REJECTED' THEN 'PENDING' ELSE status END, rejected_at = NULL, version = version + 1, updated_at = NOW()
           WHERE id = $1`,
         [l.id, n.trade_date, n.arrival_date, n.item_name_raw, n.item_key, n.grade_raw, n.grade_norm, n.pkg_raw, n.pkg_norm, n.unit_qty_kg, n.weight_source, n.qty, n.unit_price, n.amount,
-          n.origin_name, n.auction_ref, n.buyer_code, n.product_id, n.line_fingerprint]
+          n.origin_name, n.auction_ref, n.buyer_code, n.product_id, n.line_fingerprint, n.shipment_ref || null]
       );
       await client.query(`INSERT INTO purchase_match_event (user_id, doc_id, line_id, event_type, from_status, to_status, detail, actor_kind, actor_staff_id) VALUES ($1,$2,$3,'LINE_EDIT',$4,$4,$5::jsonb,$6,$7)`,
         [cx.userId, l.doc_id, l.id, l.status, JSON.stringify({ changed: Object.keys(b).filter((k) => k !== 'version') }), cx.actorKind, cx.actorKind === 'STAFF' ? cx.staffId : null]);
@@ -677,7 +678,7 @@ function lineView(r) {
     item_label: r.family_name ? `${r.family_name} · ${r.variety_name}` : null, grade_raw: r.grade_raw, grade_norm: r.grade_norm,
     pkg_raw: r.pkg_raw, pkg_norm: r.pkg_norm, unit_qty_kg: r.unit_qty_kg, weight_source: r.weight_source,
     qty: r.qty, unit_price: Number(r.unit_price), amount: Number(r.amount), amount_calc_diff: Number(r.amount_calc_diff),
-    origin_name: r.origin_name, shipper_name_masked: r.shipper_name_masked, auction_ref: r.auction_ref, buyer_code: r.buyer_code, product_id: r.product_id,
+    origin_name: r.origin_name, shipper_name_masked: r.shipper_name_masked, auction_ref: r.auction_ref, shipment_ref: r.shipment_ref || null, buyer_code: r.buyer_code, product_id: r.product_id,
     match_result: r.match_result, match_score: r.match_score, best_trade_id: r.best_trade_id ? Number(r.best_trade_id) : null, candidate_count: r.candidate_count,
     reason_codes: r.reason_codes || [], warning_flags: r.warning_flags || [], last_run_id: r.last_run_id ? Number(r.last_run_id) : null, matched_at: r.matched_at,
     rejected_at: r.rejected_at, reject_reason: r.reject_reason,

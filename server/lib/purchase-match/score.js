@@ -8,8 +8,16 @@
  *   c.same_kg c.kg_known_both c.same_pkg c.same_grade c.grade_one_null c.grade_both_null
  *   c.same_item c.variety_unknown_one c.ident ('AUCTION'|'BUYER'|null) c.corp_same c.corp_one_null
  * 여기서 하는 것은 점수 더하기와 % 비교(금액 아님)뿐이다.
+ *
+ * T-203 m2(A_실API보정 4.2) — **실 API 경락(c.source = 'AT_REALTIME')에만** 적용. 목업(MOCK) 후보는 m1 그대로(기존 기대값 유지)
+ *   R1 식별: SQL 이 ident 'AUCTION' 을 (출하번호+경매번호) 또는 (경매번호 + 하루 유일 순번 법인)일 때만 준다. 그 밖 경매번호만 → AUCTION_REF_WEAK(점수 0, 필터만)
+ *   R2 등급: 원천에 등급이 없으면 비교하지 않음(10점, strict 유지, GRADE_NOT_IN_SOURCE)
+ *   R3 유일 후보: 식별 0점이라도 strict 후보 1건 + 범위 안 다른 후보 0건 + 법인 같음 + tol.auto_unique_no_id → EXACT(UNIQUE_NO_ID)
+ *   R4 이상 단가: PRICE_OUTLIER 후보는 strict 불가
  */
 const ENGINE_VERSION = 'm1';
+const ENGINE_VERSION_REAL = 'm2';
+const isReal = (c) => c && c.source === 'AT_REALTIME';
 
 const num = (v) => (v == null ? null : Number(v));
 
@@ -27,8 +35,9 @@ function scoreCandidate(c, line, tol) {
   else if (c.variety_unknown_one) { b.item = 5; strict = false; flags.push('VARIETY_UNKNOWN'); }
   else { b.item = 0; strict = false; }
 
-  // 등급 10
-  if (c.same_grade || c.grade_both_null) b.grade = 10;
+  // 등급 10 (m2 R2: 실 API 원천엔 등급 칸이 없다 — 비교하지 않음)
+  if (isReal(c) && c.grade_not_in_source) { b.grade = 10; flags.push('GRADE_NOT_IN_SOURCE'); }
+  else if (c.same_grade || c.grade_both_null) b.grade = 10;
   else if (c.grade_one_null) { b.grade = 4; strict = false; flags.push('GRADE_UNKNOWN'); }
   else { b.grade = 0; strict = false; flags.push('GRADE_DIFF'); }
 
@@ -70,6 +79,10 @@ function scoreCandidate(c, line, tol) {
   if (c.corp_same) b.corp = 5;
   else { b.corp = 2; if (!line.doc_corp_null) strict = false; flags.push('CORP_UNKNOWN'); }
 
+  // m2 R1·R4
+  if (isReal(c) && c.auction_ref_weak) flags.push('AUCTION_REF_WEAK');
+  if (isReal(c) && c.price_outlier) { strict = false; flags.push('PRICE_OUTLIER'); }
+
   // 공통 strict — 매입서 금액 ≠ 수량×단가, 다른 매입서에 같은 줄
   if (Math.abs(Number(line.amount_calc_diff || 0)) > Number(tol.amount_abs_auto)) { strict = false; if (!flags.includes('AMOUNT_CALC_DIFF')) flags.push('AMOUNT_CALC_DIFF'); }
   if (line.dup_other_doc) { strict = false; flags.push('DUP_LINE_OTHER_DOC'); }
@@ -101,6 +114,12 @@ function decide(scored, tol) {
     const okScore = s.score >= Number(tol.auto_min_score);
     const okGap = !runner || runner.score <= s.score - Number(tol.ambiguity_margin);
     if (okScore && okGap) return { result: 'EXACT', score: s.score, best: s, reasons: [], ranked };
+    // m2 R3 유일 후보(실 API 경락만): 식별 근거 없이도 범위 안 후보가 이 1건뿐이고 법인이 같으면 자동(설정으로 끔 — U-03)
+    const uniqueOn = tol.auto_unique_no_id == null ? true : tol.auto_unique_no_id === true || String(tol.auto_unique_no_id) === 'true';
+    if (!okScore && uniqueOn && isReal(s) && !s.ident && s.corp_same && !others.some((c) => !c.out_of_range)) {
+      if (!s.flags.includes('UNIQUE_NO_ID')) s.flags.push('UNIQUE_NO_ID');
+      return { result: 'EXACT', score: s.score, best: s, reasons: [], ranked, unique_no_id: true };
+    }
     if (!okScore) reasons.push('LOW_SCORE');
     if (!okGap) reasons.push('AMBIGUOUS');
     return { result: 'PARTIAL', score: s.score, best: s, reasons, ranked };
@@ -133,4 +152,4 @@ function assignWithinDoc(lines, tol) {
   return out;
 }
 
-module.exports = { ENGINE_VERSION, scoreCandidate, decide, assignWithinDoc };
+module.exports = { ENGINE_VERSION, ENGINE_VERSION_REAL, scoreCandidate, decide, assignWithinDoc };

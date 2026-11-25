@@ -12,7 +12,7 @@
  * 스냅샷·작업의 source 는 논리 소스(AT_REALTIME 등). 목업으로 돌면 경락 행·원천 로그의 source 가 'MOCK'(자동 전환 제외 표시).
  */
 const crypto = require('crypto');
-const { createAdapter, secretValues } = require('./adapters');
+const { createAdapter, secretValues, itemCombos } = require('./adapters');
 const circuit = require('./circuit');
 const queue = require('./queue');
 const norm = require('./normalizer');
@@ -120,8 +120,35 @@ async function handleFailure(pool, job, kind, message, retryAfterSec) {
   return { status: 'QUEUED', kind, run_after: at };
 }
 
-/** 페이지 전부 받기(트랜잭션 밖 — 외부 호출 동안 DB 트랜잭션을 길게 잡지 않음). 실패하면 { error } */
+/**
+ * 페이지 전부 받기(트랜잭션 밖 — 외부 호출 동안 DB 트랜잭션을 길게 잡지 않음). 실패하면 { error }
+ * T-203 실 API(LIVE·REPLAY) 경락은 (대분류, 중분류) 조합별로 부른다(A 5.1 — 대분류만 부르면 마늘·양파까지 와서 쪽 수가 늘어남).
+ * 조합 하나라도 실패하면 작업 전체를 실패로 돌려 재시도(반쪽 저장 없음). 목업·다른 소스는 예전처럼 한 번에.
+ */
 async function fetchAll(pool, job, adapter, effSource) {
+  const useCombos = job.source === 'AT_REALTIME' && adapter.mode !== 'MOCK' && !(job.params && job.params.filter);
+  if (!useCombos) return fetchOne(pool, job, adapter, effSource, (job.params && job.params.filter) || {});
+  const combos = itemCombos();
+  const out = { items: [], total: 0, rawIds: [], pages: 0, combos, perCombo: [] };
+  const notes = [];
+  for (const c of combos) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await fetchOne(pool, job, adapter, effSource, c);
+    out.rawIds.push(...(r.rawIds || []));
+    out.pages += r.pages || 0;
+    if (r.error) return { ...r, rawIds: out.rawIds, pages: out.pages, message: `${c.itemL}-${c.itemM}: ${r.message || r.error}` };
+    out.perCombo.push({ combo: `${c.itemL}-${c.itemM}`, total: r.empty ? 0 : r.total, pages: r.pages });
+    if (r.empty) continue;
+    out.items.push(...r.items);
+    out.total += r.total;
+    if (r.partial) { out.partial = true; notes.push(`${c.itemL}-${c.itemM} ${r.note}`); }
+  }
+  if (!out.items.length) return { empty: true, rawIds: out.rawIds, pages: out.pages, combos, perCombo: out.perCombo };
+  if (notes.length) out.note = notes.join(' / ');
+  return out;
+}
+
+async function fetchOne(pool, job, adapter, effSource, filter) {
   const size = pageSize();
   for (let round = 1; round <= 2; round += 1) {
     const items = [];
@@ -131,7 +158,7 @@ async function fetchAll(pool, job, adapter, effSource) {
     let pages = 0;
     for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo += 1) {
       // eslint-disable-next-line no-await-in-loop
-      const r = await adapter.fetchPage({ tradeDate: job.trade_date, marketCode: job.market_code, pageNo, numOfRows: size, ...(job.params.filter || {}) });
+      const r = await adapter.fetchPage({ tradeDate: job.trade_date, marketCode: job.market_code, pageNo, numOfRows: size, ...filter });
       // eslint-disable-next-line no-await-in-loop
       const rawId = await logRaw(pool, job, effSource, r);
       rawIds.push(rawId);
@@ -197,10 +224,9 @@ async function runCollect(pool, job, hooks) {
     await recordFailedSnapshot(pool, job, { kind: 'BAD_RESPONSE', message: msg, pages: fetched.pages });
     return handleFailure(pool, job, 'BAD_RESPONSE', msg, null);
   }
-  // 같은 키가 한 응답 안에 두 번(페이지 경계 중복) — 마지막 값
-  const byKey = new Map();
-  for (const r of n.rows) byKey.set(r.source_row_key, r);
-  const rows = [...byKey.values()];
+  // 같은 키가 한 작업 안에 두 번(페이지 경계·적재 경합) — 원천 수정일시가 가장 늦은 값(없으면 마지막 값). 버린 수는 경고에(I B-3)
+  const dd = norm.dedupeRows(n.rows);
+  const rows = dd.rows;
 
   const client = await pool.connect();
   let snap;
@@ -228,20 +254,24 @@ async function runCollect(pool, job, hooks) {
     const lastRaw = fetched.rawIds[fetched.rawIds.length - 1] || null;
     const up = await norm.upsertTrades(client, rows, { snapshotId: snap.id, rawRef: lastRaw });
     let withdrawn = [];
-    if (job.phase === 'FINAL' && status === 'COMPLETE') withdrawn = await norm.markWithdrawn(client, { source: effSource, marketCode: job.market_code, tradeDate: job.trade_date });
+    if (job.phase === 'FINAL' && status === 'COMPLETE') withdrawn = await norm.markWithdrawn(client, { source: effSource, marketCode: job.market_code, tradeDate: job.trade_date, combos: fetched.combos || null });
     changedTrades = [...up.changedIds, ...withdrawn];
     const flagged = await norm.flagRevisedConversions(client, changedTrades);
     const contentHash = crypto.createHash('sha256').update(rows.map((r) => r.content_hash).sort().join('')).digest('hex');
     await client.query(
       `UPDATE collect_snapshot SET status = $2, inserted = $3, updated = $4, unchanged = $5, unmapped = $6, withdrawn = $7, content_hash = $8,
               verify_warning = $9, finished_at = NOW() WHERE id = $1`,
-      [snap.id, status, up.inserted, up.updated, up.unchanged, up.unmapped, withdrawn.length, contentHash, fetched.note || (status === 'EMPTY' ? '데이터 없음 — 확인 필요(휴장 미등록?)' : null)]
+      [snap.id, status, up.inserted, up.updated, up.unchanged, up.unmapped, withdrawn.length, contentHash,
+        [fetched.note || (status === 'EMPTY' ? '데이터 없음 — 확인 필요(휴장 미등록?)' : null),
+          dd.dropped ? `같은 키 중복 ${dd.dropped}행 정리` : null, up.stale ? `STALE_ROW ${up.stale}건(옛 응답 — 덮어쓰지 않음)` : null]
+          .filter(Boolean).join(' / ').slice(0, 1000) || null]
     );
     snap.status = status;
     let latest = false;
     if (['COMPLETE', 'EMPTY', 'HOLIDAY'].includes(status)) latest = await markLatestOk(client, snap);
     Object.assign(result, { snapshot_id: Number(snap.id), snapshot: status, latest_ok: latest, total: fetched.total || 0, fetched: rows.length,
-      inserted: up.inserted, updated: up.updated, unchanged: up.unchanged, unmapped: up.unmapped, withdrawn: withdrawn.length, revised_flagged: flagged, pages: fetched.pages });
+      inserted: up.inserted, updated: up.updated, unchanged: up.unchanged, unmapped: up.unmapped, withdrawn: withdrawn.length, revised_flagged: flagged, pages: fetched.pages,
+      ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

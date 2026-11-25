@@ -43,6 +43,9 @@ function tradeOut(r) {
     pkg_name: r.pkg_name, pkg_norm: r.pkg_norm, unit_qty_kg: r.unit_qty_kg, weight_source: r.weight_source,
     qty: r.qty, unit_price: toInt(r.unit_price), price_per_kg: r.price_per_kg, amount: toInt(r.amount),
     origin_name: r.origin_name, shipper_name_masked: r.shipper_name_masked, buyer_code: r.buyer_code, auction_seq: r.auction_seq,
+    // T-203 030 실 API 칸(목업 행은 null)
+    shipment_no: r.shipment_no || null, trade_type: r.trade_type || null, corp_item_name: r.corp_item_name || null, corp_variety_name: r.corp_variety_name || null,
+    source_modified_at: iso(r.source_modified_at),
     revision: r.revision, withdrawn_at: iso(r.withdrawn_at),
   };
 }

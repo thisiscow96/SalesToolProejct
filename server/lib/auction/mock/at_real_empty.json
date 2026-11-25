@@ -1,0 +1,15 @@
+{
+ "response": {
+  "header": {
+   "resultCode": "0",
+   "resultMsg": "정상"
+  },
+  "body": {
+   "dataType": "JSON",
+   "items": "",
+   "numOfRows": 1000,
+   "pageNo": 1,
+   "totalCount": 0
+  }
+ }
+}

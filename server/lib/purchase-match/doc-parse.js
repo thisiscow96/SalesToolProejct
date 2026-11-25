@@ -26,13 +26,14 @@ const DOC_DEF = {
     { key: 'origin', header: '산지', format: '글자' },
     { key: 'shipper', header: '출하자', format: '글자', help: '저장할 때 가려서 저장합니다(예: 김*수)' },
     { key: 'auction_ref', header: '경매번호', format: '글자', help: '정산서의 경매(건) 번호 — 있으면 정확도가 크게 오릅니다' },
+    { key: 'shipment_ref', header: '출하번호', format: '글자', help: '정산서의 출하번호(선택) — 경매번호와 함께 있으면 그 경락 한 건을 바로 찾습니다' },
     { key: 'buyer_code', header: '낙찰자번호', format: '글자', help: '비우면 내 중매인 번호' },
     { key: 'product', header: '판매툴품목', format: '품목명', help: '선택 — 비우면 대조 설정의 품목 연결을 씁니다' },
     { key: 'memo', header: '메모', format: '글자' },
   ],
   examples: [
-    ['D-1123-01', '2026-11-23', '', '가명청과', '청양고추', '특', '10kg 상자', 12, 38000, 456000, '충남 청양', '', '', '', '', '예시 — 지우고 쓰세요'],
-    ['D-1123-01', '2026-11-23', '', '가명청과', '꽈리고추', '특', '4kg 상자', 30, 21000, '', '전남 고흥', '', '', '', '', ''],
+    ['D-1123-01', '2026-11-23', '', '가명청과', '청양고추', '특', '10kg 상자', 12, 38000, 456000, '충남 청양', '', '', '', '', '', '예시 — 지우고 쓰세요'],
+    ['D-1123-01', '2026-11-23', '', '가명청과', '꽈리고추', '특', '4kg 상자', 30, 21000, '', '전남 고흥', '', '', '', '', '', ''],
   ],
 };
 
@@ -186,7 +187,7 @@ async function buildLine(raw, lk) {
   const a = N.readWon(raw.amount);
   if (a.error === 'NOT_INTEGER_WON') errors.push(E('amount', 'NOT_INTEGER_WON', `금액은 원 단위 정수로 입력하세요(${a.raw}).`));
   else if (a.error) errors.push(E('amount', a.error === 'NOT_POSITIVE' ? 'NOT_POSITIVE' : 'NOT_NUMBER', '금액은 0 이상의 숫자로 입력하세요.'));
-  const lens = [['doc_no', 50], ['origin', 50], ['auction_ref', 50], ['buyer_code', 20], ['grade', 30], ['spec', 50], ['memo', 200]];
+  const lens = [['doc_no', 50], ['origin', 50], ['auction_ref', 50], ['shipment_ref', 20], ['buyer_code', 20], ['grade', 30], ['spec', 50], ['memo', 200]];
   for (const [k, n] of lens) if (txt(raw[k]).length > n) errors.push(E(k, 'TOO_LONG', `${k} 은(는) ${n}자 이내로 입력하세요.`));
   // 판매툴 품목(선택)
   let product = null;
@@ -224,6 +225,7 @@ async function buildLine(raw, lk) {
     trade_date: td, arrival_date: ad, item_name_raw: itemName, item_key: itemKey, grade_raw: gradeRaw, grade_norm: gradeNorm,
     pkg_raw: spec, pkg_norm: ps.pkg, unit_qty_kg: kg, weight_source: ws, qty: q.value, unit_price: p.value, amount: a.value, // amount null → DB ROUND
     origin_name: txt(raw.origin) || null, shipper_name_masked: maskName(txt(raw.shipper) || null), auction_ref: txt(raw.auction_ref).replace(/\s/g, '') || null,
+    shipment_ref: txt(raw.shipment_ref).replace(/\s/g, '') || null,
     buyer_code: txt(raw.buyer_code).replace(/\s/g, '') || null, product_id: product ? product.id : null, corp_code: corp,
   };
   line.line_fingerprint = N.lineFingerprint(line);

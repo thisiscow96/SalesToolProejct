@@ -32,7 +32,10 @@ class AtRealtimeAdapter extends SourceAdapter {
 }
 AtRealtimeAdapter.BASE_URL = 'https://apis.data.go.kr/B552845/katRealTime2/trades2';
 AtRealtimeAdapter.FIELD_MAP = {
-  source_id: 'auc_seq',
+  // T-203 실 API(2026-11-25 실호출·샘플 2,009행 확인): 경매순번은 auctn_seq(전에는 [가정] auc_seq — R-01). 목업 옛 형식은 LEGACY_ALIASES 로만 읽는다
+  source_id: 'auctn_seq', shipment_no: 'spm_no', trade_type: 'trd_se',
+  corp_item_code: 'corp_gds_cd', corp_item_name: 'corp_gds_item_nm', corp_variety_name: 'corp_gds_vrty_nm',
+  item_l_name: 'gds_lclsf_nm', source_modified_at: 'mdfcn_dt',
   trade_date: 'trd_clcln_ymd', auction_at: 'scsbd_dt',
   market_code: 'whsl_mrkt_cd', market_name: 'whsl_mrkt_nm',
   corp_code: 'corp_cd', corp_name: 'corp_nm',
@@ -44,6 +47,16 @@ AtRealtimeAdapter.FIELD_MAP = {
   qty: 'qty', unit_price: 'scsbd_prc',
   origin_code: 'plor_cd', origin_name: 'plor_nm',
   shipper_name: 'shpr_nm', buyer_code: 'mdlmrchnt_no',
+};
+
+/** 옛 목업 형식(D_mock: auc_seq) — 실 이름이 비었을 때만 읽는다. 기존 목업 테스트 기대값 유지용 */
+AtRealtimeAdapter.LEGACY_ALIASES = { source_id: 'auc_seq' };
+AtRealtimeAdapter.prototype.toNormalized = function toNormalized(item) {
+  const out = SourceAdapter.prototype.toNormalized.call(this, item);
+  for (const [dst, src] of Object.entries(AtRealtimeAdapter.LEGACY_ALIASES)) {
+    if (out[dst] == null && item[src] != null && item[src] !== '') out[dst] = String(item[src]).trim();
+  }
+  return out;
 };
 
 class AtSettleAdapter extends SourceAdapter {
@@ -114,6 +127,13 @@ const SCENARIOS = {
     empty: () => ({ file: 'at_realtime_empty.json' }),
     revised: () => ({ file: 'at_realtime_revised.json' }),
     bad: () => ({ file: 'at_realtime_bad_fields.json' }),
+    // T-203 실형식 목업(실데이터 2026-11-24 대표 행 — 산출물/실데이터_샘플에서 뽑음). 기존 시나리오·기대값은 그대로
+    real: () => ({ file: 'at_real_normal.json' }),
+    real_paged: ({ pageNo }) => ({ file: pageNo >= 2 ? 'at_real_paged_p2.json' : 'at_real_paged_p1.json' }),
+    real_revised: () => ({ file: 'at_real_revised.json' }),
+    real_empty: () => ({ file: 'at_real_empty.json' }),
+    real_dupkey: () => ({ file: 'at_real_dupkey.json' }),
+    real_badkey: () => ({ file: 'at_real_badkey.json' }),
   },
   AT_SETTLE: { normal: () => ({ file: 'at_settle_normal.json' }), settle: () => ({ file: 'at_settle_normal.json' }), empty: () => ({ file: 'at_realtime_empty.json' }) },
   AT_CODE: { normal: () => ({ file: 'at_code_items.json' }), code: () => ({ file: 'at_code_items.json' }) },
@@ -173,9 +193,42 @@ class MockAdapter {
   }
 }
 
-/** 소스 모드 — 키가 없거나 AUCTION_SOURCE_MODE=mock 이면 MOCK. 키 값은 절대 밖으로 내보내지 않는다 */
+// ---------------------------------------------------------------------------
+// 재생(REPLAY) — 실호출로 받아 둔 응답 원문(fixtures/real/, 키 없음)을 돌려준다. 실호출 횟수를 아끼는 테스트용(A 5.3)
+//   파일 이름: {정산일}_{대분류}-{중분류}_p{쪽}.json   예) 2026-11-24_12-05_p1.json
+//   저장 source 는 실 API 와 같은 'AT_REALTIME'(자동 전환 경로까지 시험). 운영(NODE_ENV=production)에서는 쓰지 않는다
+// ---------------------------------------------------------------------------
+const REPLAY_DIR = path.join(__dirname, '..', 'fixtures', 'real');
+const replayDir = (env = process.env) => env.AUCTION_REPLAY_DIR || REPLAY_DIR;
+const fixtureName = ({ tradeDate, itemL, itemM, pageNo = 1 }) => `${tradeDate}_${itemL || 'all'}-${itemM || 'all'}_p${pageNo}.json`;
+
+class ReplayAdapter {
+  constructor(real, env = process.env) { this.real = real; this.dir = replayDir(env); }
+  get source() { return this.real.source; }
+  get mode() { return 'REPLAY'; }
+  buildParams(p) { return this.real.buildParams(p); }
+  toNormalized(item) { return this.real.toNormalized(item); }
+  async fetchPage(params) {
+    const pageNo = params.pageNo || 1;
+    const requestParams = this.buildParams(params);
+    const masked = `replay://${this.source}?serviceKey=****&${new URLSearchParams(requestParams).toString()}`;
+    const file = path.join(this.dir, fixtureName({ ...params, pageNo }));
+    const body = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '{"response":{"header":{"resultCode":"99","resultMsg":"replay 파일 없음"}}}';
+    return this.real.interpret({ status: 200, body, headers: {}, durationMs: 0 }, { masked, pageNo, requestParams });
+  }
+}
+
+/** 실 API 호출 조합(대분류-중분류). 기본 = A 5.1 권고(건고추 12-07·고추잎 10-25 는 호출 안 함 — U-20 기본값, 피망 13-02 는 호출 — U-22a) */
+const DEFAULT_ITEM_COMBOS = '12-05,12-06,12-08,13-26,13-02';
+function itemCombos(env = process.env) {
+  const raw = String(env.AUCTION_ITEM_COMBOS || DEFAULT_ITEM_COMBOS);
+  return raw.split(',').map((x) => x.trim()).filter((x) => /^[0-9A-Z]{2}-[0-9A-Z]{2}$/.test(x)).map((x) => { const [l, m] = x.split('-'); return { itemL: l, itemM: m }; });
+}
+
+/** 소스 모드 — 키가 없거나 AUCTION_SOURCE_MODE=mock 이면 MOCK, replay 면 REPLAY(운영 금지). 키 값은 절대 밖으로 내보내지 않는다 */
 function sourceMode(source, env = process.env) {
   if (String(env.AUCTION_SOURCE_MODE || '').toLowerCase() === 'mock') return 'MOCK';
+  if (String(env.AUCTION_SOURCE_MODE || '').toLowerCase() === 'replay' && source === 'AT_REALTIME' && env.NODE_ENV !== 'production') return 'REPLAY';
   const k = KEY_ENV[source];
   return k && env[k] && String(env[k]).trim() ? 'LIVE' : 'MOCK';
 }
@@ -186,6 +239,7 @@ function createAdapter(source, opts = {}, env = process.env) {
   if (!C) throw new Error(`unknown source ${source}`);
   const mode = sourceMode(source, env);
   if (mode === 'MOCK') return new MockAdapter(new C({ mode: 'MOCK' }), { scenario: opts.scenario });
+  if (mode === 'REPLAY') return new ReplayAdapter(new C({ mode: 'REPLAY' }), env);
   return new C({ apiKey: String(env[KEY_ENV[source]]).trim(), fetchImpl: opts.fetchImpl, mode: 'LIVE' });
 }
 
@@ -195,6 +249,6 @@ function secretValues(env = process.env) {
 }
 
 module.exports = {
-  createAdapter, sourceMode, secretValues, MockAdapter, AtRealtimeAdapter, AtSettleAdapter, AtCodeAdapter, GarakPriceAdapter,
+  createAdapter, sourceMode, secretValues, MockAdapter, ReplayAdapter, itemCombos, fixtureName, DEFAULT_ITEM_COMBOS, REPLAY_DIR, AtRealtimeAdapter, AtSettleAdapter, AtCodeAdapter, GarakPriceAdapter,
   MOCK_DIR, MOCK_BASE_DATE, SCENARIOS, ERROR_SCENARIOS,
 };

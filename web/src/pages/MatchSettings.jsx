@@ -78,6 +78,7 @@ function ToleranceCard({ items, canEdit }) {
     const f = {};
     for (const k of TOL_FIELDS) f[k] = base[k] != null ? String(Number(base[k])) : '';
     f.auto_convert = base.auto_convert !== false;
+    f.auto_unique_no_id = base.auto_unique_no_id !== false;
     setForm(f);
     setErr(null);
   }, [data, myRow]);
@@ -107,7 +108,7 @@ function ToleranceCard({ items, canEdit }) {
     setErr(null);
     setMsg('');
     try {
-      const body = { ...scopeOf(scope), auto_convert: !!form.auto_convert };
+      const body = { ...scopeOf(scope), auto_convert: !!form.auto_convert, auto_unique_no_id: !!form.auto_unique_no_id };
       for (const k of TOL_FIELDS) body[k] = Number(form[k]);
       await purchaseDocApi.saveTolerance(body);
       setMsg('저장했습니다. 다음 대조부터 이 값을 씁니다(이미 등록된 매입은 바뀌지 않음).');
@@ -169,6 +170,11 @@ function ToleranceCard({ items, canEdit }) {
               <input type="checkbox" checked={!!form.auto_convert} onChange={set('auto_convert')} data-testid="pdoc-tol-auto_convert" /> 완전일치는 자동 매입 등록
             </label>
             {' '}최소 점수 {num('auto_min_score', '')} 1·2위 간격 {num('ambiguity_margin', '')}
+          </div>
+          <div>
+            <label className="main-filter-checkbox">
+              <input type="checkbox" checked={!!form.auto_unique_no_id} onChange={set('auto_unique_no_id')} data-testid="pdoc-tol-auto_unique_no_id" /> 번호(경매·출하) 없는 줄도 조건 맞는 경락이 1건뿐이면 자동 일치(실 경락만)
+            </label>
           </div>
         </fieldset>
       )}

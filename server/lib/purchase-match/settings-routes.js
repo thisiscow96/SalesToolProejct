@@ -39,6 +39,11 @@ function validateTolerance(b, base) {
     if (typeof b.auto_convert !== 'boolean') errors.push({ field: 'auto_convert', code: 'VALIDATION', message: '자동 매입 등록은 true/false 입니다.' });
     else v.auto_convert = b.auto_convert;
   }
+  // T-203 030 m2 R3 — 식별 근거 없는 유일 후보 자동(U-03). 실 API 경락에만 쓰임
+  if (b.auto_unique_no_id !== undefined) {
+    if (typeof b.auto_unique_no_id !== 'boolean') errors.push({ field: 'auto_unique_no_id', code: 'VALIDATION', message: '유일 후보 자동 등록은 true/false 입니다.' });
+    else v.auto_unique_no_id = b.auto_unique_no_id;
+  }
   if (!errors.length) {
     const n = (k) => Number(v[k]);
     if (n('price_pct_auto') > n('price_pct_review')) errors.push({ field: 'price_pct_auto', code: 'VALIDATION', message: '단가 자동 %는 후보 %보다 클 수 없습니다.' });
@@ -373,7 +378,8 @@ function registerMatchSettingsRoutes(app, deps) {
       const v = validateTolerance(b, base);
       if (v.errors) { await client.query('ROLLBACK'); return res.status(400).json({ ok: false, code: 'VALIDATION', field: v.errors[0].field, message: v.errors[0].message, errors: v.errors }); }
       const x = v.values;
-      const cols = ['price_pct_auto', 'price_pct_review', 'qty_pct_auto', 'qty_pct_review', 'amount_abs_auto', 'date_before_auto', 'date_after_auto', 'date_before_review', 'date_after_review', 'auto_convert', 'auto_min_score', 'ambiguity_margin'];
+      const cols = ['price_pct_auto', 'price_pct_review', 'qty_pct_auto', 'qty_pct_review', 'amount_abs_auto', 'date_before_auto', 'date_after_auto', 'date_before_review', 'date_after_review', 'auto_convert', 'auto_min_score', 'ambiguity_margin', 'auto_unique_no_id'];
+      if (x.auto_unique_no_id == null) x.auto_unique_no_id = true;
       let row;
       if (cur.rows[0]) {
         const r = await client.query(`UPDATE match_tolerance SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')}, updated_by_staff_id = $${cols.length + 2}, updated_at = NOW() WHERE id = $1 RETURNING *`,

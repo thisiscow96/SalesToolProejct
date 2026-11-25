@@ -264,10 +264,14 @@ function AuctionTrades() {
               >
                 <td data-label="경락일">{md(r.trade_date)}</td>
                 <td data-label="낙찰시각">{kstTime(r.auction_at, false)}</td>
-                <td data-label="법인">{r.corp_name || r.corp_code || '-'}</td>
+                <td data-label="법인">
+                  {r.corp_name || r.corp_code || '-'}
+                  {r.corp_variety_name && <div className="pm-muted" title="법인이 쓴 품목명(매입서와 대조할 때 참고)">{r.corp_item_name ? `${r.corp_item_name}/` : ''}{r.corp_variety_name}</div>}
+                </td>
                 <td data-label="품종">
                   {r.item_label ? r.item_label.split('·').pop().trim() : <span className="pm-muted" title="품목 매핑 없음">{r.item_name_raw}</span>}
                   {r.revision > 1 && <Tone tone="info" title="원천에서 값이 바뀌었습니다(행을 눌러 이전 값 보기)">값 바뀜</Tone>}
+                  {r.trade_type && r.trade_type !== '경매' && <Tone tone="info" title="매매방법">{r.trade_type}</Tone>}
                 </td>
                 <td data-label="등급">{r.grade_name || GRADE_LABEL[r.grade_norm] || '-'}</td>
                 <td data-label="규격">{r.unit_qty_kg ? `${dec(r.unit_qty_kg)}kg` : ''} {r.pkg_name || ''}{r.weight_source === 'RULE' ? '(추정)' : ''}</td>
@@ -337,6 +341,8 @@ function TradeDetail({ id, onClose }) {
             <dt>등급·규격</dt><dd>{d.grade_name || GRADE_LABEL[d.grade_norm] || '-'} · {d.unit_qty_kg ? `${dec(d.unit_qty_kg)}kg` : '중량 모름'} {d.pkg_name || ''}</dd>
             <dt>수량·단가</dt><dd>{dec(d.qty)} × {won(d.unit_price)}원 = {won(d.amount)}원 (kg당 {dec(d.price_per_kg, 2)})</dd>
             <dt>산지·출하자</dt><dd>{d.origin_name || '-'} · {d.shipper_name_masked || '-'}</dd>
+            {(d.shipment_no || d.auction_seq) && (<><dt>출하번호·경매번호</dt><dd>{d.shipment_no || '-'} · {d.auction_seq || '-'}{d.trade_type ? ` (${d.trade_type})` : ''}</dd></>)}
+            {d.corp_variety_name && (<><dt>법인 품목명</dt><dd>{d.corp_item_name ? `${d.corp_item_name}/` : ''}{d.corp_variety_name}</dd></>)}
             <dt>개정</dt><dd>{d.revision ?? 1}차 · 처음 {kstTime(d.first_seen_at)} · 마지막 {kstTime(d.last_seen_at)}</dd>
             {d.withdrawn_at && (<><dt>철회</dt><dd className="pm-bad-text">{kstTime(d.withdrawn_at)} 원천에서 사라짐</dd></>)}
           </dl>

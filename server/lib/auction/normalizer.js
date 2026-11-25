@@ -15,7 +15,7 @@ async function loadMappingContext(db, { target = 'MARKET', on = null } = {}) {
   const day = on || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
   const targets = target === 'DOC' ? ['DOC', 'BOTH'] : ['MARKET', 'BOTH'];
   const m = await db.query(
-    `SELECT id, source, code_l, code_m, code_s, keyword_norm, item_key, priority
+    `SELECT id, source, code_l, code_m, code_s, keyword_norm, item_key, priority, action
        FROM item_mapping
       WHERE active AND target = ANY($1::text[])
         AND (valid_from IS NULL OR valid_from <= $2::date) AND (valid_to IS NULL OR valid_to >= $2::date)
@@ -34,14 +34,23 @@ async function loadMappingContext(db, { target = 'MARKET', on = null } = {}) {
   };
 }
 
-/** 원천 품목 → item_key (코드 우선, 없으면 키워드) */
-function mapItem(ctx, { source, l, m, s, name, parentName }) {
-  const byCode = m ? N.matchCode({ source, l, m, s }, ctx.codeRules) : null;
-  if (byCode && ctx.activeItems.has(byCode.item_key)) return byCode.item_key;
+/**
+ * 원천 품목 → { item_key, map_status } (코드 우선, 없으면 키워드)
+ *  T-203 실 API(A 2.3): realFormat(실 API 행 — source AT_REALTIME 이거나 출하번호가 있는 실형식 행)은 **코드 규칙만**
+ *  (source 'AT_REALTIME' 규칙으로 찾음). 키워드 대체 없음 — '피망(단고추)'·'생고추잎'이 키워드 '고추'에 걸려 PEPPER._ 가 되던 문제(R-02).
+ *  코드 규칙이 IGNORE(030) 면 item_key 없이 IGNORED(행은 보관, 대조 후보·기본 목록 제외)
+ */
+function mapItemFull(ctx, { source, l, m, s, name, parentName, realFormat = false }) {
+  const byCode = m ? N.matchCode({ source: realFormat ? 'AT_REALTIME' : source, l, m, s }, ctx.codeRules) : null;
+  if (byCode && byCode.action === 'IGNORE') return { item_key: null, map_status: 'IGNORED' };
+  if (byCode && byCode.item_key && ctx.activeItems.has(byCode.item_key)) return { item_key: byCode.item_key, map_status: 'MAPPED' };
+  if (realFormat) return { item_key: null, map_status: 'UNMAPPED' };
   const byKw = N.matchKeyword(N.nameCandidates(name, parentName), ctx.keywordRules);
-  if (byKw && ctx.activeItems.has(byKw.item_key)) return byKw.item_key;
-  return null;
+  if (byKw && ctx.activeItems.has(byKw.item_key)) return { item_key: byKw.item_key, map_status: 'MAPPED' };
+  return { item_key: null, map_status: 'UNMAPPED' };
 }
+/** 예전 호출용 — item_key 만 */
+function mapItem(ctx, args) { return mapItemFull(ctx, args).item_key; }
 
 /** 단위 중량: 원천 단위수량+단위명 → SOURCE, 없으면 pack_weight_rule → RULE, 그것도 없으면 UNKNOWN */
 function resolveWeight(ctx, { unitQty, unitName, pkgName, itemKey, pkgNorm }) {
@@ -81,6 +90,7 @@ function normalizeItems(ctx, adapter, rawItems, { source, marketCode }) {
   const rows = [];
   const errors = [];
   const seqByKey = new Map();
+  const realSource = source === 'AT_REALTIME';
   rawItems.forEach((item, idx) => {
     const f = adapter.toNormalized(item);
     const tradeDate = ymd(f.trade_date);
@@ -89,8 +99,16 @@ function normalizeItems(ctx, adapter, rawItems, { source, marketCode }) {
     if (!tradeDate) errors.push({ idx, field: 'trade_date', message: '거래정산일자 없음' });
     if (won.error || won.value == null) errors.push({ idx, field: 'unit_price', message: `낙찰가가 원 단위 정수가 아님(${f.unit_price})` });
     if (q.error || q.value == null) errors.push({ idx, field: 'qty', message: `수량 없음·형식 오류(${f.qty})` });
+    // 실 API 행(실 소스이거나 출하번호가 있는 실형식): 자연키 값이 모두 있어야 한다(A N-7 · I B-2). 해시 키로 넘기지 않음
+    const realFormat = realSource || f.shipment_no != null || f.corp_item_code != null || f.source_modified_at != null; // 옛 목업(D_mock)엔 셋 다 없음
+    const mkt = f.market_code || marketCode;
+    if (realFormat) {
+      const miss = [['whsl_mrkt_cd', mkt], ['corp_cd', f.corp_code], ['spm_no', f.shipment_no], ['auctn_seq', f.source_id]].filter(([, v]) => v == null || v === '').map(([k]) => k);
+      if (miss.length) errors.push({ idx, field: 'source_row_key', message: `자연키 값 없음(${miss.join('·')})` });
+    }
     if (errors.length && errors[errors.length - 1].idx === idx) return;
-    const itemKey = mapItem(ctx, { source, l: f.item_l_code, m: f.item_m_code, s: f.item_s_code, name: f.item_name_raw, parentName: f.item_m_name });
+    const mapped = mapItemFull(ctx, { source, l: f.item_l_code, m: f.item_m_code, s: f.item_s_code, name: f.item_name_raw, parentName: f.item_m_name, realFormat });
+    const itemKey = mapped.item_key;
     const pkgNorm = N.normalizePkg(f.pkg_name);
     const w = resolveWeight(ctx, { unitQty: f.unit_qty, unitName: f.unit_name, pkgName: f.pkg_name, itemKey, pkgNorm });
     const row = {
@@ -103,7 +121,7 @@ function normalizeItems(ctx, adapter, rawItems, { source, marketCode }) {
       item_l_code: f.item_l_code, item_m_code: f.item_m_code, item_s_code: f.item_s_code,
       item_name_raw: f.item_name_raw,
       item_key: itemKey,
-      map_status: itemKey ? 'MAPPED' : 'UNMAPPED',
+      map_status: mapped.map_status,
       grade_code: f.grade_code, grade_name: f.grade_name, grade_norm: N.normalizeGrade(f.grade_name, ctx.grades),
       pkg_code: f.pkg_code, pkg_name: f.pkg_name, pkg_norm: pkgNorm,
       size_code: f.size_code, size_name: f.size_name,
@@ -114,9 +132,17 @@ function normalizeItems(ctx, adapter, rawItems, { source, marketCode }) {
       shipper_name_masked: maskName(f.shipper_name),
       buyer_code: f.buyer_code,
       auction_seq: f.source_id,
+      // T-203 030 칸(실 API 만 값이 있음 — 목업 옛 형식은 모두 null)
+      shipment_no: f.shipment_no, trade_type: f.trade_type,
+      corp_item_code: f.corp_item_code, corp_item_name: f.corp_item_name, corp_variety_name: f.corp_variety_name,
+      item_l_name: f.item_l_name, item_m_name: f.item_m_name,
+      source_modified_at: kstTimestamp(f.source_modified_at),
+      real_format: realFormat,
     };
-    // 자연키(D 5.6) — 원천 건 번호가 있으면 그 값, 없으면 값 조합 해시 + 같은 조합 순번
-    if (f.source_id) row.source_row_key = String(f.source_id).slice(0, 200);
+    // 자연키 — 실 API: 시장|정산일|법인|출하번호|경매순번(원문 문자열, 앞자리 0 유지 — 030 CHECK auction_trade_at_natural_key 와 같은 모양)
+    //         목업 옛 형식(D 5.6): 원천 건 번호가 있으면 그 값, 없으면 값 조합 해시 + 같은 조합 순번
+    if (realFormat) row.source_row_key = [row.market_code, tradeDate, row.corp_code, row.shipment_no, row.auction_seq].join('|').slice(0, 200);
+    else if (f.source_id) row.source_row_key = String(f.source_id).slice(0, 200);
     else {
       const nat = [tradeDate, row.auction_at, row.market_code, row.corp_code, row.item_s_code, row.grade_code, row.pkg_code, row.size_code,
         f.unit_qty, row.origin_code, row.unit_price, row.qty, row.buyer_code].map((v) => v ?? '').join('|');
@@ -133,16 +159,39 @@ function normalizeItems(ctx, adapter, rawItems, { source, marketCode }) {
 const HASH_FIELDS = ['trade_date', 'auction_at', 'market_code', 'market_name', 'corp_code', 'corp_name', 'item_l_code', 'item_m_code', 'item_s_code',
   'item_name_raw', 'item_key', 'grade_code', 'grade_name', 'grade_norm', 'pkg_code', 'pkg_name', 'pkg_norm', 'size_code', 'size_name', 'unit_code',
   'unit_name', 'unit_qty_kg', 'weight_source', 'qty', 'unit_price', 'origin_code', 'origin_name', 'shipper_name_masked', 'buyer_code', 'auction_seq'];
+// 030 새 칸 — 실형식 행에만 해시에 넣는다(목업·기존 행의 해시가 바뀌어 배포 직후 전부 '정정'으로 잡히지 않게).
+// source_modified_at 은 넣지 않음(재적재 시각만 바뀐 건 정정 아님 — A 3.5)
+const HASH_FIELDS_REAL = ['shipment_no', 'trade_type', 'corp_item_code', 'corp_item_name', 'corp_variety_name', 'item_l_name', 'item_m_name', 'map_status'];
 function contentHash(row) {
-  return crypto.createHash('sha256').update(JSON.stringify(HASH_FIELDS.map((k) => row[k] ?? null))).digest('hex');
+  const fields = row.real_format ? [...HASH_FIELDS, ...HASH_FIELDS_REAL] : HASH_FIELDS;
+  return crypto.createHash('sha256').update(JSON.stringify(fields.map((k) => row[k] ?? null))).digest('hex');
+}
+
+/**
+ * 한 작업 안 같은 키 정리(I B-3 · R-03) — 원천 수정일시가 가장 늦은 1행만(같으면 뒤에 온 행). upsert 가 21000 으로 실패하지 않게
+ * @returns { rows, dropped }
+ */
+function dedupeRows(rows) {
+  const byKey = new Map();
+  let dropped = 0;
+  for (const r of rows) {
+    const prev = byKey.get(r.source_row_key);
+    if (prev) {
+      dropped += 1;
+      if (prev.source_modified_at && r.source_modified_at && Date.parse(r.source_modified_at) < Date.parse(prev.source_modified_at)) continue;
+    }
+    byKey.set(r.source_row_key, r);
+  }
+  return { rows: [...byKey.values()], dropped };
 }
 
 const COLS = ['source', 'source_row_key', 'trade_date', 'auction_at', 'market_code', 'market_name', 'corp_code', 'corp_name', 'item_l_code', 'item_m_code',
   'item_s_code', 'item_name_raw', 'item_key', 'map_status', 'grade_code', 'grade_name', 'grade_norm', 'pkg_code', 'pkg_name', 'pkg_norm', 'size_code',
   'size_name', 'unit_code', 'unit_name', 'unit_qty_kg', 'weight_source', 'qty', 'unit_price', 'origin_code', 'origin_name', 'shipper_name_masked',
-  'buyer_code', 'auction_seq', 'content_hash'];
+  'buyer_code', 'auction_seq', 'content_hash',
+  'shipment_no', 'trade_type', 'corp_item_code', 'corp_item_name', 'corp_variety_name', 'item_l_name', 'item_m_name', 'source_modified_at'];
 const RECORD_TYPES = {
-  trade_date: 'date', auction_at: 'timestamptz', unit_qty_kg: 'numeric', qty: 'numeric', unit_price: 'bigint',
+  trade_date: 'date', auction_at: 'timestamptz', source_modified_at: 'timestamptz', unit_qty_kg: 'numeric', qty: 'numeric', unit_price: 'bigint',
 };
 const recordDef = COLS.map((c) => `${c} ${RECORD_TYPES[c] || 'text'}`).join(', ');
 
@@ -162,6 +211,7 @@ async function upsertTrades(client, rows, { snapshotId, rawRef }) {
        FROM jsonb_to_recordset($1::jsonb) AS r(${recordDef})
        JOIN auction_trade t ON t.source = r.source AND t.source_row_key = r.source_row_key
       WHERE t.content_hash <> r.content_hash
+        AND NOT (r.source_modified_at IS NOT NULL AND t.source_modified_at IS NOT NULL AND r.source_modified_at < t.source_modified_at)
      ON CONFLICT (trade_id, revision) DO NOTHING`,
     [payload, snapshotId]
   );
@@ -179,6 +229,9 @@ async function upsertTrades(client, rows, { snapshotId, rawRef }) {
        snapshot_id = EXCLUDED.snapshot_id, raw_ref = EXCLUDED.raw_ref,
        revision = auction_trade.revision + 1, withdrawn_at = NULL, last_seen_at = NOW(), updated_at = NOW()
      WHERE auction_trade.content_hash <> EXCLUDED.content_hash
+       -- 옛 응답으로 덮지 않기(A 3.5 · I R-05): 들어온 원천 수정일시가 저장된 값보다 이르면 그대로 둔다(STALE_ROW)
+       AND NOT (EXCLUDED.source_modified_at IS NOT NULL AND auction_trade.source_modified_at IS NOT NULL
+                AND EXCLUDED.source_modified_at < auction_trade.source_modified_at)
      RETURNING id, (xmax = 0) AS inserted`,
     [payload, snapshotId, rawRef ?? null]
   );
@@ -186,23 +239,38 @@ async function upsertTrades(client, rows, { snapshotId, rawRef }) {
   const changedIds = ins.rows.filter((r) => !r.inserted).map((r) => r.id);
   // ③ 같은 값으로 다시 본 건 — 마지막으로 본 시각만(사라졌다 다시 나온 건은 철회 표시도 지움)
   const same = await client.query(
-    `UPDATE auction_trade t SET last_seen_at = NOW(), withdrawn_at = NULL
+    `UPDATE auction_trade t SET last_seen_at = NOW(), withdrawn_at = NULL,
+            source_modified_at = GREATEST(t.source_modified_at, r.source_modified_at)
        FROM jsonb_to_recordset($1::jsonb) AS r(${recordDef})
       WHERE t.source = r.source AND t.source_row_key = r.source_row_key AND t.content_hash = r.content_hash
         AND t.last_seen_at < NOW()`,
     [payload]
   );
+  // 옛 응답(값이 다른데 원천 수정일시가 저장 값보다 이름) — 값은 그대로, 본 것으로만 표시(철회로 잡히지 않게)하고 건수를 센다
+  const stale = await client.query(
+    `UPDATE auction_trade t SET last_seen_at = NOW()
+       FROM jsonb_to_recordset($1::jsonb) AS r(${recordDef})
+      WHERE t.source = r.source AND t.source_row_key = r.source_row_key AND t.content_hash <> r.content_hash
+        AND r.source_modified_at IS NOT NULL AND t.source_modified_at IS NOT NULL AND r.source_modified_at < t.source_modified_at
+        AND t.last_seen_at < NOW()`,
+    [payload]
+  );
   const unmapped = rows.filter((r) => r.map_status === 'UNMAPPED').length;
-  return { inserted, updated: changedIds.length, unchanged: same.rowCount, unmapped, changedIds };
+  const ignored = rows.filter((r) => r.map_status === 'IGNORED').length;
+  return { inserted, updated: changedIds.length, unchanged: same.rowCount, unmapped, ignored, stale: stale.rowCount, changedIds };
 }
 
 /** FINAL 수집에서 보이지 않은 이전 건 → withdrawn_at (같은 트랜잭션의 NOW() 보다 이전에 본 건) */
-async function markWithdrawn(client, { source, marketCode, tradeDate }) {
+async function markWithdrawn(client, { source, marketCode, tradeDate, combos = null }) {
+  // 중분류별로 나눠 부른 작업은 이번에 부른 (대분류, 중분류) 안에서만 철회 판정(I B-6 · R-04). combos 없으면 날짜 전체(목업·기존)
+  const ls = combos && combos.length ? combos.map((c) => c.itemL) : null;
+  const ms = combos && combos.length ? combos.map((c) => c.itemM) : null;
   const r = await client.query(
     `UPDATE auction_trade SET withdrawn_at = NOW(), updated_at = NOW()
       WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND withdrawn_at IS NULL AND last_seen_at < NOW()
+        AND ($4::text[] IS NULL OR (item_l_code, item_m_code) IN (SELECT * FROM unnest($4::text[], $5::text[])))
       RETURNING id`,
-    [source, marketCode, tradeDate]
+    [source, marketCode, tradeDate, ls, ms]
   );
   return r.rows.map((x) => x.id);
 }
@@ -225,7 +293,7 @@ async function flagRevisedConversions(client, tradeIds) {
 async function remapStored(client, { dateFrom = null } = {}) {
   const ctx = await loadMappingContext(client, { target: 'MARKET' });
   const t = await client.query(
-    `SELECT t.id, t.source, t.item_l_code, t.item_m_code, t.item_s_code, t.item_name_raw, t.item_key, t.pkg_norm
+    `SELECT t.id, t.source, t.item_l_code, t.item_m_code, t.item_s_code, t.item_name_raw, t.item_key, t.pkg_norm, t.map_status, t.shipment_no
        FROM auction_trade t
       WHERE ($1::date IS NULL OR t.trade_date >= $1::date) AND t.withdrawn_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.trade_id = t.id AND c.status = 'ACTIVE')`,
@@ -243,10 +311,12 @@ async function remapStored(client, { dateFrom = null } = {}) {
   );
   for (const r of fam.rows) if (!mName.has(r.item_m_code)) mName.set(r.item_m_code, r.family_name);
   for (const row of t.rows) {
-    const key = mapItem(ctx, { source: row.source, l: row.item_l_code, m: row.item_m_code, s: row.item_s_code, name: row.item_name_raw, parentName: mName.get(row.item_m_code) || null });
-    if ((key || null) !== (row.item_key || null)) {
+    const mp = mapItemFull(ctx, { source: row.source, l: row.item_l_code, m: row.item_m_code, s: row.item_s_code, name: row.item_name_raw, parentName: mName.get(row.item_m_code) || null,
+      realFormat: row.source === 'AT_REALTIME' || row.shipment_no != null });
+    const key = mp.item_key;
+    if ((key || null) !== (row.item_key || null) || mp.map_status !== row.map_status) {
       // eslint-disable-next-line no-await-in-loop
-      await client.query(`UPDATE auction_trade SET item_key = $2, map_status = $3, updated_at = NOW() WHERE id = $1`, [row.id, key, key ? 'MAPPED' : 'UNMAPPED']);
+      await client.query(`UPDATE auction_trade SET item_key = $2, map_status = $3, updated_at = NOW() WHERE id = $1`, [row.id, key, mp.map_status]);
       changed += 1;
     }
   }
@@ -270,6 +340,6 @@ async function remapStored(client, { dateFrom = null } = {}) {
 }
 
 module.exports = {
-  loadMappingContext, mapItem, resolveWeight, normalizeItems, upsertTrades, markWithdrawn, flagRevisedConversions, remapStored,
+  loadMappingContext, mapItem, mapItemFull, dedupeRows, resolveWeight, normalizeItems, upsertTrades, markWithdrawn, flagRevisedConversions, remapStored,
   contentHash, kstTimestamp, ymd,
 };

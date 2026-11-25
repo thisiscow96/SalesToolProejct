@@ -71,9 +71,9 @@ function matchCode({ source, l, m, s }, rules) {
     if (r.code_l && r.code_l !== l) continue;
     if (r.code_s && r.code_s !== s) continue;
     const spec = (r.source ? 1 : 0) + (r.code_l ? 1 : 0) + (r.code_s ? 2 : 0);
-    if (!best || spec > best.spec || (spec === best.spec && r.priority < best.priority)) best = { item_key: r.item_key, rule_id: r.id, spec, priority: r.priority };
+    if (!best || spec > best.spec || (spec === best.spec && r.priority < best.priority)) best = { item_key: r.item_key, rule_id: r.id, spec, priority: r.priority, action: r.action || 'MAP' };
   }
-  return best ? { item_key: best.item_key, rule_id: best.rule_id } : null;
+  return best ? { item_key: best.item_key, rule_id: best.rule_id, action: best.action } : null; // action: MAP | IGNORE(030)
 }
 
 /** 등급 → SPECIAL/HIGH/MID/LOW/OFF/NONE | null.  aliases = Map(alias_norm → grade_norm) */
@@ -170,6 +170,7 @@ function readQty(v) {
 function lineFingerprint(l) {
   const parts = [l.trade_date, l.corp_code || '', l.item_key || normalizeKeyword(l.item_name_raw), l.grade_norm || '',
     l.pkg_norm || '', l.unit_qty_kg || '', canonNum(l.qty), String(l.unit_price), l.auction_ref || ''];
+  if (l.shipment_ref) parts.push(`S:${l.shipment_ref}`); // T-203 030 — 출하번호가 있을 때만(없는 줄의 지문은 예전과 같음)
   return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
 }
 function canonNum(v) {

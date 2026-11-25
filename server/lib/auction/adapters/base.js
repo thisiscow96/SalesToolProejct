@@ -60,7 +60,9 @@ function readStandardJson(json) {
   const header = resp && resp.header;
   const body = resp && resp.body;
   if (!header || !body) return { kind: 'BAD_RESPONSE', message: '응답 형식(response.header/body)이 다릅니다.' };
-  const code = String(header.resultCode ?? '');
+  // 실 katRealTime2 는 정상을 "0" 으로 준다(2026-11-25 실호출 확인) — 표준 "00" 과 같게 본다(한 자리 코드는 앞에 0)
+  const rawCode = String(header.resultCode ?? '').trim();
+  const code = /^\d$/.test(rawCode) ? `0${rawCode}` : rawCode;
   if (code !== '00' && code !== '03') {
     if (AUTH_CODES.has(code)) return { kind: 'AUTH_ERROR', message: `resultCode ${code}` };
     if (code === '22') return { kind: 'QUOTA', message: `resultCode ${code}` };
@@ -104,6 +106,28 @@ function buildUrl(base, params, apiKey) {
   return u.toString();
 }
 
+/**
+ * 로컬 실테스트 보조(운영에서는 둘 다 비워 둠):
+ *  AUCTION_LIVE_CALL_LOG = 실호출 한 번마다 한 줄(시각·소스·조합·쪽·상태·건수 — 키 없음, URL 은 마스킹)
+ *  AUCTION_RECORD_DIR    = 응답 원문을 재생(REPLAY) 파일 이름으로 저장(본문에는 키가 없음 — 그래도 serviceKey 패턴은 지움)
+ */
+function recordLive(source, params, r, masked, env = process.env) {
+  if (env.NODE_ENV === 'production') return;
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    if (env.AUCTION_LIVE_CALL_LOG) {
+      fs.appendFileSync(env.AUCTION_LIVE_CALL_LOG, `${new Date().toISOString()} ${source} ${params.tradeDate || ''} ${params.itemL || 'all'}-${params.itemM || 'all'} p${params.pageNo || 1} http=${r.status} ms=${r.durationMs} bytes=${(r.body || '').length} ${masked}
+`);
+    }
+    if (env.AUCTION_RECORD_DIR && r.status === 200 && r.body) {
+      fs.mkdirSync(env.AUCTION_RECORD_DIR, { recursive: true });
+      const name = `${params.tradeDate}_${params.itemL || 'all'}-${params.itemM || 'all'}_p${params.pageNo || 1}.json`;
+      fs.writeFileSync(path.join(env.AUCTION_RECORD_DIR, name), maskUrl(r.body));
+    }
+  } catch { /* 보조 기록 실패는 수집에 영향 없음 */ }
+}
+
 class SourceAdapter {
   constructor({ apiKey = null, fetchImpl, mode = 'LIVE' } = {}) {
     this.apiKey = apiKey;
@@ -128,6 +152,7 @@ class SourceAdapter {
     const url = buildUrl(this.constructor.BASE_URL, this.buildParams(params), this.apiKey);
     const masked = maskUrl(url);
     const r = await httpGet(url, { fetchImpl: this.fetchImpl });
+    recordLive(this.source, params, r, masked);
     return this.interpret(r, { masked, pageNo: params.pageNo || 1, requestParams: this.buildParams(params) });
   }
 
