@@ -3210,7 +3210,7 @@ auctionHooks.rematchForDate = require('./lib/purchase-match/rematch').createRema
   signOwnerToken: (u) => authToken.signToken(AUTH.secret, { userId: u.id, agentNo: u.agent_no }, 300),
 });
 
-module.exports = { app, pool };
+module.exports = { app, pool, auctionHooks }; // T-203 collect_once: 매입서 자동 재대조 훅을 서버와 같게
 const host = process.env.HOST || '0.0.0.0';
 if (require.main === module) require('./lib/auction/scheduler').startTimer(pool, auctionHooks); // COLLECT_TIMER_ENABLED=true 일 때만
 if (require.main === module) app.listen(port, host, () => {
