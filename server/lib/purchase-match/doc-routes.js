@@ -13,6 +13,7 @@ const idem = require('../idempotency');
 const P = require('./doc-parse');
 const engine = require('./engine');
 const convert = require('./convert');
+const tradeConvert = require('./trade-convert');
 const { loadMappingContext } = require('../auction/normalizer');
 const { MAX_BYTES, MAX_ROWS } = require('../excel-upload');
 
@@ -379,6 +380,40 @@ function registerPurchaseDocRoutes(app, deps) {
       if (!ids.includes(id)) ids.push(id);
     }
     return inTx(req, res, auth, { key, route: 'R-127', body: { lines: ids } }, async (client, cx) => ({ status: 200, body: { ok: true, data: await convert.convertBatch(client, cx, ids) } }));
+  });
+
+  // ---- R-138 경락 → 매입 전환 미리보기 (쓰기·잠금 없음, 키 불필요) — /api/purchase-docs/:id 계열보다 먼저 ----
+  app.post('/api/purchase-docs/from-trades/preview', async (req, res) => {
+    const auth = await authOf(req, res);
+    if (!auth) return undefined;
+    const p = tradeConvert.parseTradeIds((req.body || {}).trade_ids);
+    if (p.error) return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'trade_ids', message: p.error });
+    try {
+      return res.json({ ok: true, data: await tradeConvert.previewTrades(pool, auth.userId, p.ids) });
+    } catch (err) {
+      console.error('[purchase-doc] from-trades preview:', err.message);
+      return res.status(500).json({ ok: false, message: '매입 전환 미리보기를 만들지 못했습니다.' });
+    }
+  });
+
+  // ---- R-139 경락 → 매입 전환 (Idempotency-Key 필수, 건별 결과) ----
+  app.post('/api/purchase-docs/from-trades', async (req, res) => {
+    const auth = await authOf(req, res);
+    if (!auth) return undefined;
+    const key = idem.requireKey(req, res);
+    if (!key) return undefined;
+    const p = tradeConvert.parseTradeIds((req.body || {}).trade_ids);
+    if (p.error) return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'trade_ids', message: p.error });
+    return inTx(req, res, auth, { key, route: 'R-139', body: { trade_ids: p.ids } }, async (client, cx) => {
+      const data = await tradeConvert.convertTrades(client, cx, p.ids);
+      if (data.summary.converted) {
+        await recordAudit(client, { userId: cx.userId, entityType: 'purchase_doc', entityId: data.doc_ids[0] || null, action: 'create', before: null, // audit_log_action_chk 목록 안 — 경락 직접 전환 매입서(AUCTION) 생성
+          after: { route: 'from_trades', trades: p.ids.length, converted: data.summary.converted, doc_ids: data.doc_ids }, note: `경락 ${p.ids.length}건 중 ${data.summary.converted}건 매입 전환`,
+          actorStaffId: cx.staffId || undefined });
+      }
+      delete data.doc_ids;
+      return { status: 200, body: { ok: true, data } };
+    });
   });
 
   // ---- R-119 목록 ----

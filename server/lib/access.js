@@ -191,6 +191,8 @@ function buildRules(env = process.env) {
     ['R-117', 'POST', '/api/purchase-docs/preview', WRITE, { ui: 'purchase_doc.upload' }],
     ['R-121', 'GET', '/api/purchase-docs/review', ALL],                                        // :id 보다 먼저
     ['R-127', 'POST', '/api/purchase-docs/convert', WRITE, { ui: 'purchase_doc.convert' }],
+    ['R-138', 'POST', '/api/purchase-docs/from-trades/preview', WRITE, { ui: 'purchase.convert_from_trade' }], // T-203 경락 조회 → 매입 전환 미리보기
+    ['R-139', 'POST', '/api/purchase-docs/from-trades', WRITE, { ui: 'purchase.convert_from_trade' }],         // T-203 경락 조회 → 매입 전환(조회 직원 403)
     ['R-118', 'POST', '/api/purchase-docs', WRITE, { ui: 'purchase_doc.upload' }],
     ['R-119', 'GET', '/api/purchase-docs', ALL],
     ['R-120', 'GET', '/api/purchase-docs/:id', ALL],

@@ -13,6 +13,8 @@ const scheduler = require('./scheduler');
 const worker = require('./worker');
 const { sourceMode, corpScope } = require('./adapters');
 const { maskName } = require('./mask');
+const TQ = require('./trade-query');
+const { allowMockConvert } = require('../purchase-match/engine');
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 function validYmd(s) {
@@ -48,6 +50,14 @@ function tradeOut(r) {
     source_modified_at: iso(r.source_modified_at),
     revision: r.revision, withdrawn_at: iso(r.withdrawn_at),
   };
+}
+
+/** 경락 행을 매입 전환할 수 없는 이유(목록 표시용 — 실제 판정은 전환 API R-139 가 다시 한다) */
+function notConvertibleReason(r, mockOk) {
+  if (r.withdrawn_at) return 'WITHDRAWN';
+  if (r.map_status !== 'MAPPED' || !r.item_key) return 'UNMAPPED_ITEM';
+  if (r.source === 'MOCK' && !mockOk) return 'MOCK_SOURCE';
+  return null;
 }
 
 /** 날짜 범위의 날짜별 최신 스냅샷 + meta (D 4.5) */
@@ -110,7 +120,8 @@ function registerAuctionRoutes(app, deps) {
 
   // ---- R-92 경락 목록 ----
   app.get('/api/auction/trades', async (req, res) => {
-    if (!(await needUser(req, res))) return undefined;
+    const userId = await needUser(req, res);
+    if (!userId) return undefined;
     const q = req.query || {};
     const from = String(q.date_from || '').trim();
     const to = String(q.date_to || '').trim();
@@ -123,6 +134,16 @@ function registerAuctionRoutes(app, deps) {
     const params = [from, to];
     const where = ['t.trade_date BETWEEN $1 AND $2'];
     const add = (sql, v) => { params.push(v); where.push(sql.replace('?', `$${params.length}`)); };
+    // T-203 원표번호 검색(A 설계 1절, 매칭 규칙은 trade-query.js 한 곳): 있으면 품목군·품종·등급·규격·산지 조건은 무시, 기간·법인·소스·철회 여부는 유지
+    let shipmentNo = null;
+    if (q.shipment_no != null && String(q.shipment_no).trim() !== '') {
+      const sn = TQ.normalizeShipmentNo(q.shipment_no);
+      if (sn.error) return vErr(res, 'shipment_no', sn.error);
+      shipmentNo = TQ.addShipmentFilter(add, sn.value);
+    }
+    const srt = TQ.resolveSort(q.sort, q.dir);
+    if (srt.error) return vErr(res, srt.error.field, srt.error.message);
+    if (!shipmentNo) {
     if (q.family) {
       const f = String(q.family).toUpperCase();
       if (!/^[A-Z0-9]{1,20}$/.test(f)) return vErr(res, 'family', '품목군이 올바르지 않습니다.');
@@ -144,27 +165,35 @@ function registerAuctionRoutes(app, deps) {
       add('t.unit_qty_kg = ?::numeric', String(q.unit_kg));
     }
     if (q.origin) add("t.origin_name ILIKE ?", `%${String(q.origin).slice(0, 50).replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    } // 원표번호 검색이 아닐 때만 품목 조건
     if (q.corp_code) add('t.corp_code = ?', String(q.corp_code).slice(0, 10));
     if (q.source) {
       const s = String(q.source).toUpperCase();
       if (!['AT_REALTIME', 'MOCK', 'AT_SETTLE', 'GARAK_PRICE'].includes(s)) return vErr(res, 'source', '소스 값이 올바르지 않습니다.');
       add('t.source = ?', s);
     }
-    if (!(q.include_unmapped === 'true' || q.include_unmapped === '1')) where.push("t.map_status = 'MAPPED'");
+    // 원표번호 검색이면 미매핑 행도 기본으로 보인다(원표 전체). include_unmapped 를 명시하면 그 값
+    const um = q.include_unmapped == null || q.include_unmapped === '' ? null : (q.include_unmapped === 'true' || q.include_unmapped === '1');
+    if (!(um == null ? !!shipmentNo : um)) where.push("t.map_status = 'MAPPED'");
     if (!(q.include_withdrawn === 'true' || q.include_withdrawn === '1')) where.push('t.withdrawn_at IS NULL');
-    const sortMap = {
-      trade_date: ' ORDER BY t.trade_date DESC, t.auction_at DESC NULLS LAST, t.id DESC',
-      unit_price: ' ORDER BY t.unit_price DESC, t.id DESC',
-      price_per_kg: ' ORDER BY t.price_per_kg DESC NULLS LAST, t.id DESC',
-    };
-    const order = sortMap[String(q.sort || 'trade_date')];
-    if (!order) return vErr(res, 'sort', '정렬 값이 올바르지 않습니다.');
+    params.push(userId);
+    const uParam = `$${params.length}`;
     try {
-      const base = `SELECT t.*, mi.family_name, mi.variety_name FROM auction_trade t LEFT JOIN market_item mi ON mi.item_key = t.item_key WHERE ${where.join(' AND ')}`;
-      const out = await runList(pool, base, params, order, opts);
+      // 이 회원의 활성 매입 전환(경락 직접·매입서 경로 공통) — ux_pdc_trade_active 로 행마다 인덱스 1회. user_id 조건 필수(남의 전환 숨김)
+      const base = `SELECT t.*, mi.family_name, mi.variety_name, cv.purchase_id AS converted_purchase_id
+                      FROM auction_trade t LEFT JOIN market_item mi ON mi.item_key = t.item_key
+                      LEFT JOIN purchase_doc_conversion cv ON cv.user_id = ${uParam} AND cv.trade_id = t.id AND cv.status = 'ACTIVE'
+                     WHERE ${where.join(' AND ')}`;
+      const out = await runList(pool, base, params, srt.order, opts);
       const m = await rangeMeta(pool, { from, to, market: market() });
+      const mockOk = allowMockConvert();
       res.setHeader('Cache-Control', 'private, max-age=30');
-      return res.json({ ok: true, meta: m.meta, data: out.data.map(tradeOut), total: out.total, limit: out.limit, offset: out.offset, days: m.days });
+      return res.json({ ok: true, meta: { ...m.meta, sort: srt.sort, dir: srt.dir, shipment_no: shipmentNo, shipment_match: shipmentNo ? TQ.shipmentMatchMode() : null },
+        data: out.data.map((r) => {
+          const reason = r.converted_purchase_id ? 'ALREADY_CONVERTED' : notConvertibleReason(r, mockOk);
+          return { ...tradeOut(r), converted_purchase_id: r.converted_purchase_id || null, convertible: !reason, not_convertible_reason: reason };
+        }),
+        total: out.total, limit: out.limit, offset: out.offset, days: m.days });
     } catch (err) { return fail(res, err, '경락 목록을 불러오지 못했습니다.'); }
   });
 
