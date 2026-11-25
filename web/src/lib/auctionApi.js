@@ -3,7 +3,8 @@ import { request, qs } from './matchHttp';
 
 export const auctionApi = {
   /** R-92 경락 목록 → { data, meta, days, total, limit, offset } */
-  trades: (params) => request('GET', `/auction/trades${qs(params)}`, { fallback: '경락 목록을 불러오지 못했습니다.' }),
+  // 행에 이 회원의 매입 전환 상태(converted_purchase_id)가 실려 있어 브라우저 캐시(max-age=30)를 그대로 쓰지 않고 매번 확인한다(ETag 304)
+  trades: (params) => request('GET', `/auction/trades${qs(params)}`, { cache: 'no-cache', fallback: '경락 목록을 불러오지 못했습니다.' }),
   /** R-93 경락 상세(revision·이전 값) */
   trade: (id) => request('GET', `/auction/trades/${encodeURIComponent(id)}`, { fallback: '경락 상세를 불러오지 못했습니다.' }),
   /** R-94 참고 시세(가락 주요품목 평균가) */

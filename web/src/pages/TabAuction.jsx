@@ -13,7 +13,7 @@ import { ErrorLine, MatchModal, MockBadge, SubNav, Tone } from '../components/Ma
 import AuctionSyncStatus from './AuctionSyncStatus';
 import {
   EMPTY_REASON, FAMILY, GRADE, GRADE_LABEL, NOT_CONVERTIBLE, PHASE_LABEL, SNAPSHOT_STATUS, SOURCE_LABEL,
-  TRADE_CONVERT_RESULT, TRADE_CONVERT_WARN,
+  TRADE_CONVERT_RESULT, TRADE_CONVERT_WARN, reasonText,
   daysBetween, dec, kstAddDays, kstTime, kstToday, md, won,
 } from '../lib/matchLabels';
 import './PurchaseMatch.css';
@@ -55,7 +55,7 @@ const shipmentError = (v) => {
 
 /** 이 행을 매입 전환에 고를 수 없는 이유(없으면 null). 서버 칸(convertible·not_convertible_reason·converted_purchase_id) 우선 */
 function blockReason(r) {
-  if (r.converted_purchase_id) return 'CONVERTED';
+  if (r.converted_purchase_id || r.not_convertible_reason === 'ALREADY_CONVERTED') return 'CONVERTED';
   if (r.not_convertible_reason) return r.not_convertible_reason;
   if (r.withdrawn_at) return 'WITHDRAWN';
   if (r.convertible === false) return 'UNMAPPED_ITEM';
@@ -648,10 +648,23 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
   const okResults = results.filter((x) => x.result === 'CONVERTED' || x.result === 'ALREADY_CONVERTED');
   const badResults = results.filter((x) => !(x.result === 'CONVERTED' || x.result === 'ALREADY_CONVERTED'));
   const close = () => !busy && onClose(!!done);
-  const label = (id) => {
-    const t = byId.get(id);
-    return t ? `${md(t.trade_date)} · ${t.corp_name || t.corp_code || ''} · 원표 ${t.shipment_no || '-'} · ${t.item_label ? t.item_label.split('·').pop().trim() : t.item_name_raw || ''}` : `경락 #${id}`;
+  const label = (id, x = {}) => {
+    const t = { ...(byId.get(id) || {}), ...Object.fromEntries(Object.entries(x).filter(([, v]) => v != null && v !== '')) };
+    if (!t.trade_date && !t.corp_name) return `경락 #${id}`;
+    return `${md(t.trade_date)} · ${t.corp_name || t.corp_code || ''} · 원표 ${t.shipment_no || '-'} · ${t.item_label ? String(t.item_label).split('·').pop().trim() : t.item_name_raw || ''}`;
   };
+  /** 제외 이유 문장 — 코드로 화면 문구를 만든다(서버 문구의 조사 고정 "○○과과" 회피), 없으면 서버 문구 */
+  const reasonLine = (x) => {
+    const corp = x.corp_name || byId.get(x.trade_id)?.corp_name;
+    if (x.result === 'NO_CORP_LINK') return `${corp ? `법인 "${corp}"` : '이 법인'}에 연결된 거래처가 없습니다. 매입서 대조 → 대조 설정 → 법인 연결에서 연결하세요.`;
+    if (x.result === 'NO_PRODUCT_LINK') return '내 품목과 연결되지 않은 품종입니다. 매입서 대조 → 대조 설정 → 품목 연결에서 연결하세요.';
+    if (x.result === 'UNIT_CHECK_NEEDED') return `${x.detail?.reason ? reasonText(x.detail.reason) + ' — ' : ''}단위 환산이 맞지 않아 자동 등록하지 않습니다. 매입서 대조에서 수동 확정(주인)하세요.`;
+    if (x.result === 'PURCHASE_FAILED') return x.detail?.message || x.message || '매입 등록이 거절되었습니다.';
+    return x.message || '';
+  };
+  const warnLine = (w, x) => (w === 'DOC_LINE_PENDING' && x.pending_doc_line
+    ? `매입서 #${x.pending_doc_line.doc_id} ${x.pending_doc_line.line_no}줄이 이 경락 건을 후보로 기다리는 중 — 여기서 등록하면 그 줄은 "이미 씀"이 됩니다`
+    : TRADE_CONVERT_WARN[w] || w);
 
   const footer = done ? (
     <>
@@ -702,6 +715,7 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
               <div className="pm-tc-summary" data-testid="tc-summary">
                 <span><span className="pm-tc-k">등록 예정</span> <strong>{won(willCount)}건</strong></span>
                 <span><span className="pm-tc-k">합계</span> <strong className="pm-num">{won(sum.total_amount)}원</strong></span>
+                {sum.already > 0 && <span><span className="pm-tc-k">이미 등록</span> <strong>{won(sum.already)}건</strong></span>}
                 <span className={sum.excluded ? 'pm-bad-text' : ''}><span className="pm-tc-k">제외</span> <strong>{won(sum.excluded || 0)}건</strong></span>
               </div>
               <div className="main-table-wrap pm-table-wrap pm-table-wrap--short">
@@ -727,15 +741,15 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
                             <div className="pm-muted pm-mono">원표 {x.shipment_no || byId.get(x.trade_id)?.shipment_no || '-'} · 경매 {x.auction_seq || byId.get(x.trade_id)?.auction_seq || '-'}</div>
                           </td>
                           <td data-label="거래처 · 품목">
-                            {will ? <><div>{x.partner?.name || '-'}</div><div className="pm-muted">{x.product?.name || '-'}</div></> : <span className="pm-muted">{label(x.trade_id)}</span>}
+                            {will ? <><div>{x.partner?.name || '-'}</div><div className="pm-muted">{x.product?.name || '-'}</div></> : <span className="pm-muted">{label(x.trade_id, x)}</span>}
                           </td>
                           <td className="pm-num" data-label="수량">{will ? dec(x.quantity) : ''}</td>
                           <td className="pm-num" data-label="단가">{will ? won(x.unit_price) : ''}</td>
                           <td className="pm-num" data-label="금액">{will ? won(x.total) : ''}</td>
                           <td data-label="결과">
-                            <Tone tone={st.tone}>{will ? st.label : `제외: ${st.label}`}</Tone>
-                            {!will && x.message && <div className="pm-tc-msg">{x.message}</div>}
-                            {(x.warnings || []).map((w) => <div key={w} className="pm-tc-msg pm-tc-msg--warn">⚠ {TRADE_CONVERT_WARN[w] || w}</div>)}
+                            <Tone tone={st.tone}>{will || x.result === 'ALREADY_CONVERTED' ? st.label : `제외: ${st.label}`}</Tone>
+                            {!will && reasonLine(x) && <div className="pm-tc-msg">{reasonLine(x)}</div>}
+                            {(x.warnings || []).map((w) => <div key={w} className="pm-tc-msg pm-tc-msg--warn">⚠ {warnLine(w, x)}</div>)}
                           </td>
                         </tr>
                       );
@@ -761,8 +775,8 @@ function ConvertModal({ tradeIds, tradeRows, onTabBusy, onClose, onGo }) {
               const st = TRADE_CONVERT_RESULT[x.result] || { label: x.result, tone: 'bad' };
               return (
                 <li key={x.trade_id}>
-                  <Tone tone={st.tone}>{st.label}</Tone> <span>{label(x.trade_id)}</span>
-                  {x.message && <div className="pm-tc-msg">{x.message}</div>}
+                  <Tone tone={st.tone}>{st.label}</Tone> <span>{label(x.trade_id, x)}</span>
+                  {reasonLine(x) && <div className="pm-tc-msg">{reasonLine(x)}</div>}
                 </li>
               );
             })}

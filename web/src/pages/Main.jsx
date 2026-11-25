@@ -3375,6 +3375,8 @@ function MigrationBadge({ row }) {
 /** T-203 매입서 대조로 만든 매입이면 "매입서" 배지 — 누르면 매입서 대조 탭의 그 매입서로(다른 탭에 검색 조건 넘기기 방식) */
 function PurchaseDocBadge({ row, onNavigate }) {
   if (!row?.purchase_doc_line_id) return null;
+  // T-203 경락 시세에서 바로 전환한 매입(R-22 purchase_doc_kind = AUCTION)
+  if (row.purchase_doc_kind === 'AUCTION') return <span className="mg-badge pdoc-badge" title="경락 시세 화면에서 경락 건을 골라 바로 매입 등록함" data-testid="pdoc-purchase-badge-auction">경락 전환</span>;
   const docId = row.purchase_doc_id || null; // 서버와 맞출 것: 매입 목록에 purchase_doc_id 도 함께
   if (!onNavigate || !docId) return <span className="mg-badge" title="매입서 대조로 만든 매입" data-testid="pdoc-purchase-badge">매입서</span>;
   return (

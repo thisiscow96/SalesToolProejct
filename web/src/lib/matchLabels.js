@@ -248,6 +248,7 @@ export const TRADE_CONVERT_RESULT = {
 /** 경락 표에서 체크할 수 없는 이유(R-92 not_convertible_reason) */
 export const NOT_CONVERTIBLE = {
   CONVERTED: '이미 매입 등록한 경락 건입니다.',
+  ALREADY_CONVERTED: '이미 매입 등록한 경락 건입니다.',
   WITHDRAWN: '철회된 경락 건은 매입 등록하지 않습니다.',
   UNMAPPED_ITEM: '품목 매핑이 없어 매입으로 옮길 수 없습니다(관리자 품목 매핑 필요).',
   MOCK_SOURCE: '목업 데이터는 매입 등록하지 않습니다.',

@@ -432,7 +432,7 @@ async function route(method, path, q, body, headers) {
       purchases.unshift({
         id: pid, purchase_date: `${t.trade_date}T00:00:00+09:00`, partner_id: r._cl.partner_id, partner_name: r._cl.corp_name, product_id: r._pl.product_id, product_name: r._pl.product_name,
         quantity: t.qty, allocated_qty: '0', remaining_qty: t.qty, unit_price: t.unit_price, total_amount: t.amount, unpaid_amount: t.amount, status: 'active',
-        source_name: t.corp_name, origin_region: t.origin_name, memo: `경락 #${t.id} · 원표 ${t.shipment_no} · 경매 ${t.auction_seq}`, purchase_doc_line_id: nextLine++, purchase_doc_id: nextDoc,
+        source_name: t.corp_name, origin_region: t.origin_name, memo: `경락 #${t.id} · 원표 ${t.shipment_no} · 경매 ${t.auction_seq}`, purchase_doc_line_id: nextLine++, purchase_doc_id: nextDoc, purchase_doc_kind: 'AUCTION',
       });
       return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid };
     });

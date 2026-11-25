@@ -40,11 +40,11 @@ export function apiError(status, data, fallback) {
 }
 
 /**
- * JSON 요청. opts: { body, idemKey, form(FormData), fallback }
+ * JSON 요청. opts: { body, idemKey, form(FormData), fallback, cache(fetch 캐시 모드 — 예 'no-cache') }
  * 성공이면 본문 전체({ ok, data, meta, total, ... })를 돌려준다.
  */
 export async function request(method, path, opts = {}) {
-  const { body, idemKey, form, fallback = '요청을 처리하지 못했습니다.' } = opts;
+  const { body, idemKey, form, cache, fallback = '요청을 처리하지 못했습니다.' } = opts;
   const headers = { ...authOnly() };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idemKey) headers['Idempotency-Key'] = idemKey;
@@ -53,6 +53,7 @@ export async function request(method, path, opts = {}) {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers,
+      ...(cache ? { cache } : {}),
       ...(form ? { body: form } : body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
