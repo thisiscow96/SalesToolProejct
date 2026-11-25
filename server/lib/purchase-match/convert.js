@@ -313,6 +313,10 @@ async function confirmLine(client, cx, lineId, b) {
 async function cancelLine(client, cx, lineId, b) {
   withClient(cx, client);
   await lockConvert(client, cx.userId);
+  // 잠금 순서: advisory → 매입 행 → 매입서 → 줄 (I 검토 D-03). 기존 매입 취소 라우트·028 트리거가 매입 → 매입서 → 줄 순이라
+  // 줄을 먼저 잡으면 화면의 매입 취소와 교착이 난다. 활성 전환의 매입을 먼저 잠그고, 잠근 뒤 아래 conv 조회로 활성 전환을 다시 확인한다.
+  const pre = await client.query(`SELECT purchase_id FROM purchase_doc_conversion WHERE line_id = $1 AND user_id = $2 AND status = 'ACTIVE'`, [lineId, cx.userId]);
+  if (pre.rows[0]) await client.query(`SELECT 1 FROM purchase WHERE id = $1 AND user_id = $2 FOR UPDATE`, [pre.rows[0].purchase_id, cx.userId]);
   const rows = await engine.lockLines(client, cx.userId, [lineId]);
   const l = rows[0];
   if (!l) return { status: 404, body: { ok: false, code: 'NOT_FOUND', message: '줄을 찾을 수 없습니다.' } };

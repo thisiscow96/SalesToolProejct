@@ -475,10 +475,11 @@ function registerPurchaseDocRoutes(app, deps) {
     if (!id) return NF(res);
     const autoConvert = (req.body || {}).auto_convert === true;
     return inTx(req, res, auth, { route: 'R-124', body: {} }, async (client, cx) => {
+      // 잠금 순서: 회원 advisory → 매입서 → 줄 (I 검토 D-02 — 자동 전환이 아니어도 항상 advisory 먼저)
+      await convert.lockConvert(client, cx.userId);
       const d = await client.query(`SELECT status FROM purchase_doc WHERE id = $1 AND user_id = $2 FOR UPDATE`, [id, cx.userId]);
       if (!d.rows[0]) return { status: 404, body: { ok: false, code: 'NOT_FOUND', message: '매입서를 찾을 수 없습니다.' } };
       if (d.rows[0].status === 'CANCELLED') return { status: 409, body: { ok: false, code: 'DOC_CANCELLED', message: '취소된 매입서입니다.' } };
-      if (autoConvert) await convert.lockConvert(client, cx.userId);
       const ls = await client.query(`SELECT id FROM purchase_doc_line WHERE doc_id = $1 ORDER BY id`, [id]);
       const m = await engine.matchLines(client, cx, { lineIds: ls.rows.map((x) => x.id), trigger: 'MANUAL', autoConvert });
       const h = await client.query(`SELECT status FROM purchase_doc WHERE id = $1`, [id]);
@@ -498,6 +499,8 @@ function registerPurchaseDocRoutes(app, deps) {
     const reason = b.reason != null ? String(b.reason).trim() : '';
     if (reason.length < 2) return res.status(400).json({ ok: false, code: 'REASON_REQUIRED', field: 'reason', message: '취소 사유를 2자 이상 입력하세요.' });
     return inTx(req, res, auth, { key, route: 'R-131', body: { id, reason } }, async (client, cx) => {
+      // 잠금 순서: 회원 advisory → 매입서 (I 검토 D-01 — 수동 확정·전환과 직렬화해 "취소된 매입서에 활성 매입"을 막음)
+      await convert.lockConvert(client, cx.userId);
       const d = await client.query(`SELECT status FROM purchase_doc WHERE id = $1 AND user_id = $2 FOR UPDATE`, [id, cx.userId]);
       if (!d.rows[0]) return { status: 404, body: { ok: false, code: 'NOT_FOUND', message: '매입서를 찾을 수 없습니다.' } };
       if (d.rows[0].status === 'CANCELLED') return { status: 409, body: { ok: false, code: 'DOC_CANCELLED', message: '이미 취소된 매입서입니다.' } };

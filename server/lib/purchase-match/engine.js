@@ -186,8 +186,18 @@ async function planPurchase(db, line, product, tol) {
   return { quantity: p.quantity, unit_price: p.unit_price, total: t.rows[0].total, amount_diff: t.rows[0].diff, ok: !reason, reason, unit_kg: W, line_kg: kg };
 }
 
-/** 줄 행 + 매입서 헤더 읽기(잠금) */
+/**
+ * 줄 행 + 매입서 헤더 읽기(잠금)
+ *   잠금 순서(I 검토 D-01·D-02, 028 트리거와 같음): 회원 advisory(부르는 쪽) → 매입서 FOR UPDATE(id 순) → 줄 FOR UPDATE(id 순)
+ *   doc_status 는 매입서를 잠근 뒤 읽은 값이라 R-131 매입서 취소와 엇갈리지 않는다.
+ */
 async function lockLines(client, userId, lineIds) {
+  await client.query(
+    `SELECT id FROM purchase_doc
+      WHERE user_id = $1 AND id IN (SELECT doc_id FROM purchase_doc_line WHERE user_id = $1 AND id = ANY($2::bigint[]))
+      ORDER BY id FOR UPDATE`,
+    [userId, lineIds]
+  );
   const r = await client.query(
     `SELECT l.*, d.corp_code AS doc_corp_code, d.supplier_partner_id, d.status AS doc_status, d.doc_no
        FROM purchase_doc_line l JOIN purchase_doc d ON d.id = l.doc_id AND d.user_id = l.user_id
