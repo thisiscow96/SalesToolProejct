@@ -11,7 +11,7 @@ const queue = require('./queue');
 const circuit = require('./circuit');
 const scheduler = require('./scheduler');
 const worker = require('./worker');
-const { sourceMode } = require('./adapters');
+const { sourceMode, corpScope } = require('./adapters');
 const { maskName } = require('./mask');
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -217,6 +217,9 @@ function registerAuctionRoutes(app, deps) {
   // ---- R-96 수집 현황 ----
   app.get('/api/auction/sync/status', async (req, res) => {
     if (!(await needUser(req, res))) return undefined;
+    // 법인 한정 값(AUCTION_CORP_CODES)은 관리자에게만 보인다 — 서버 설정값이라 일반 사용자 응답에는 넣지 않음
+    const admin = await getUserIdAndAdmin(req).catch(() => null);
+    const isAdmin = !!(admin && admin.isAdmin);
     const today = worker.kstToday();
     const from = String(req.query.date_from || worker.addDays(today, -6));
     const to = String(req.query.date_to || today);
@@ -224,7 +227,7 @@ function registerAuctionRoutes(app, deps) {
     try {
       const c = await pool.query(`SELECT source, state, consecutive_failures, next_probe_at, disabled_reason, disabled_until, last_error_kind, last_success_at FROM ext_circuit_state ORDER BY source`);
       const d = await pool.query(
-        `SELECT DISTINCT ON (trade_date, source, phase) trade_date, source, phase, status, total_count, fetched_count, unmapped, verify_warning, error_kind, finished_at, is_latest_ok
+        `SELECT DISTINCT ON (trade_date, source, phase) trade_date, source, phase, status, total_count, fetched_count, unmapped, verify_warning, error_kind, finished_at, is_latest_ok, corp_scope
            FROM collect_snapshot WHERE market_code = $1 AND trade_date BETWEEN $2 AND $3 ORDER BY trade_date DESC, source, phase, id DESC`,
         [market(), from, to]
       );
@@ -237,9 +240,11 @@ function registerAuctionRoutes(app, deps) {
         ok: true,
         circuits: c.rows.map((x) => ({ ...x, next_probe_at: iso(x.next_probe_at), disabled_until: iso(x.disabled_until), last_success_at: iso(x.last_success_at),
           source_mode: x.source === 'MOCK' ? 'MOCK' : sourceMode(x.source) })),
-        days: d.rows.map((x) => ({ ...x, finished_at: iso(x.finished_at) })),
+        days: d.rows.map(({ corp_scope: cs, ...x }) => ({ ...x, finished_at: iso(x.finished_at), ...(isAdmin ? { corp_scope: cs || null } : {}) })),
         queue: qj.rows.map((x) => ({ ...x, id: Number(x.id), run_after: iso(x.run_after), created_at: iso(x.created_at) })),
         source_mode: sourceMode('AT_REALTIME'),
+        // 관리자만: 지금 수집 대상 법인 한정 값(null = 전체 법인). days[].corp_scope = 그 스냅샷이 받은 범위
+        ...(isAdmin ? { corp_scope: corpScope() } : {}),
       });
     } catch (err) { return fail(res, err, '수집 현황을 불러오지 못했습니다.'); }
   });
@@ -379,10 +384,13 @@ function registerAuctionRoutes(app, deps) {
         const hol = await pool.query(`SELECT 1 FROM market_calendar WHERE market_code = $1 AND cal_date = $2 AND kind = 'HOLIDAY'`, [market(), p.d]);
         if (hol.rows[0] && !force) { skipped.push({ target_date: p.d, reason: 'HOLIDAY' }); continue; }
         if (!force) {
+          // 법인 한정(AUCTION_CORP_CODES): 지금 설정 범위를 덮는 완료 스냅샷만 "이미 받음"(전체 = corp_scope NULL, 또는 범위를 다 포함)
+          const scope = worker.snapshotScope({ source });
           // eslint-disable-next-line no-await-in-loop
           const done = await pool.query(
-            `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND phase = $4 AND is_latest_ok AND status = 'COMPLETE'`,
-            [source, market(), p.d, p.phase]
+            `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND phase = $4 AND is_latest_ok AND status = 'COMPLETE'
+                AND (corp_scope IS NULL OR string_to_array(corp_scope, ',') @> $5::text[])`,
+            [source, market(), p.d, p.phase, scope ? scope.split(',') : null]
           );
           if (done.rows[0]) { skipped.push({ target_date: p.d, reason: 'ALREADY_COMPLETE' }); continue; }
         }

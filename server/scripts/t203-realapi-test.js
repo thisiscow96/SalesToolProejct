@@ -297,6 +297,119 @@ async function main() {
     await q(`DELETE FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1 AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.trade_id = auction_trade.id)`, [OD]);
   }
 
+  // ================= K 수집 대상 법인 한정(AUCTION_CORP_CODES) — B 20261125-1506 =================
+  // 실호출 0 — LIVE 는 가짜 fetch(이 프로세스 안), 재생은 임시 폴더. 다른 검사(RD 2026-11-24)의 데이터는 건드리지 않게 별도 날짜만 쓴다
+  {
+    const sched = require('../lib/auction/scheduler');
+    const engine = require('../lib/purchase-match/engine');
+    const KL = '2025-03-11'; const KL2 = '2025-03-12'; const KD = '2025-03-13';
+    const wipe = async () => {
+      await q(`DELETE FROM auction_trade_history WHERE trade_id IN (SELECT id FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = ANY($1::date[]))`, [[KL, KL2, KD]]);
+      await q(`DELETE FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = ANY($1::date[]) AND NOT EXISTS (SELECT 1 FROM purchase_doc_conversion c WHERE c.trade_id = auction_trade.id)`, [[KL, KL2, KD]]);
+    };
+    await wipe();
+    // K-1·2 파라미터·설정 해석
+    const A0 = new ad.AtRealtimeAdapter({ mode: 'LIVE' });
+    const u1 = new URL(base.buildUrl(ad.AtRealtimeAdapter.BASE_URL, A0.buildParams({ tradeDate: KL, marketCode: '110001', corpCode: '11000105', itemL: '12', itemM: '06' }), 'x'));
+    const u0 = new URL(base.buildUrl(ad.AtRealtimeAdapter.BASE_URL, A0.buildParams({ tradeDate: KL, marketCode: '110001', itemL: '12', itemM: '06' }), 'x'));
+    check('K-1 법인 코드 있으면 cond[corp_cd::EQ]=11000105 붙음, 없으면 안 붙음(기존 호출 그대로)',
+      u1.searchParams.get('cond[corp_cd::EQ]') === '11000105' && !u0.searchParams.has('cond[corp_cd::EQ]'), { u1: u1.search.replace(/serviceKey=[^&]*/, ''), u0: u0.search.replace(/serviceKey=[^&]*/, '') });
+    check('K-2 AUCTION_CORP_CODES 해석: 공백·중복·잘못된 값 정리 후 정렬, 비면 전체(null)',
+      JSON.stringify(ad.corpCodes({ AUCTION_CORP_CODES: ' 11000105, 11000101 ,11000105,bad-1,' })) === '["11000101","11000105"]'
+      && ad.corpScope({ AUCTION_CORP_CODES: '11000105,11000101' }) === '11000101,11000105' && ad.corpScope({}) === null && ad.corpScope({ AUCTION_CORP_CODES: ' , ' }) === null,
+      ad.corpCodes({ AUCTION_CORP_CODES: ' 11000105, 11000101 ,11000105,bad-1,' }));
+
+    // K-3·4·5 LIVE(가짜 fetch): 법인별 호출·법인별 쪽 나눔·호출 단위 완결성·범위 밖 행 버림
+    const srcK = JSON.parse(fs.readFileSync(path.join(ad.REPLAY_DIR, `${RD}_12-06_p1.json`), 'utf8'));
+    const allK = srcK.response.body.items.item;
+    const byCorp = (c) => allK.filter((it) => it.corp_cd === c);
+    const calls = [];
+    const mkFetch = (date, extra = {}) => async (url) => {
+      const u = new URL(url);
+      const corp = u.searchParams.get('cond[corp_cd::EQ]');
+      const pageNo = Number(u.searchParams.get('pageNo')); const size = Number(u.searchParams.get('numOfRows'));
+      calls.push({ corp, pageNo, combo: `${u.searchParams.get('cond[gds_lclsf_cd::EQ]')}-${u.searchParams.get('cond[gds_mclsf_cd::EQ]')}` });
+      const mine = (corp ? byCorp(corp) : allK).map((it) => ({ ...it, trd_clcln_ymd: date }));
+      const body = { response: { header: { resultCode: '0', resultMsg: 'NORMAL SERVICE' }, body: { items: { item: mine.slice((pageNo - 1) * size, pageNo * size) }, numOfRows: size, pageNo, totalCount: mine.length + (pageNo >= 2 ? (extra[corp] || 0) : 0) } } };
+      return { ok: true, status: 200, headers: { get: () => null, forEach() {} }, text: async () => JSON.stringify(body) };
+    };
+    const runLive = async (date, fetchFn, envx) => {
+      const realFetch = globalThis.fetch;
+      const e = await queue.enqueue(pool, { job_type: 'COLLECT', source: 'AT_REALTIME', market_code: '110001', trade_date: date, phase: 'FINAL', params: {}, dedupe_key: `T203K:${date}:${key()}` });
+      try {
+        globalThis.fetch = fetchFn;
+        return await withEnv({ AUCTION_SOURCE_MODE: null, AT_AUCTION_API_KEY: FAKE, AUCTION_ITEM_COMBOS: '12-06', AUCTION_PAGE_SIZE: '30', ...envx }, async () => {
+          const job = (await q(`UPDATE collect_job SET status = 'RUNNING', locked_by = $2, locked_at = NOW(), attempts = attempts + 1, started_at = COALESCE(started_at, NOW()) WHERE id = $1 RETURNING *`, [e.id, queue.INSTANCE]))[0];
+          job.params = job.params || {};
+          await worker.runJob(pool, job);
+          return (await q(`SELECT status, last_error_kind, last_error, result FROM collect_job WHERE id = $1`, [e.id]))[0];
+        });
+      } finally { globalThis.fetch = realFetch; }
+    };
+    const nS = byCorp('11000101').length; const nK = byCorp('11000105').length;
+    calls.length = 0;
+    const k3 = await runLive(KL, mkFetch(KL), { AUCTION_CORP_CODES: '11000105,11000101' });
+    const k3rows = await q(`SELECT corp_code, COUNT(*)::int n FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1 GROUP BY 1 ORDER BY 1`, [KL]);
+    const k3snap = (await q(`SELECT status, corp_scope, total_count, fetched_count, pages, is_latest_ok FROM collect_snapshot WHERE id = $1`, [k3.result && k3.result.snapshot_id]))[0] || {};
+    const pagesOf = (c) => calls.filter((x) => x.corp === c).length;
+    check(`K-3 법인 2곳 한정(LIVE·쪽 30행): 호출마다 법인 조건, 법인별 쪽 나눔(서울청과 ${nS}행 ${Math.ceil(nS / 30)}쪽·한국청과 ${nK}행 ${Math.ceil(nK / 30)}쪽), 두 법인만 저장, 스냅샷 corp_scope·COMPLETE`,
+      k3.status === 'DONE' && calls.every((x) => x.corp) && pagesOf('11000101') === Math.ceil(nS / 30) && pagesOf('11000105') === Math.ceil(nK / 30)
+      && calls.length === Math.ceil(nS / 30) + Math.ceil(nK / 30)
+      && k3rows.length === 2 && k3rows[0].n === nS && k3rows[1].n === nK
+      && k3snap.status === 'COMPLETE' && k3snap.corp_scope === '11000101,11000105' && k3snap.is_latest_ok && k3snap.total_count === nS + nK && k3.result.corp_scope === '11000101,11000105'
+      && (k3.result.combos || []).map((c) => `${c.corp}|${c.combo}|${c.total}|${c.pages}`).join(',') === `11000101|12-06|${nS}|${Math.ceil(nS / 30)},11000105|12-06|${nK}|${Math.ceil(nK / 30)}`,
+      { calls: calls.length, k3rows, k3snap, r: k3.result });
+    calls.length = 0;
+    const k4 = await runLive(KL2, mkFetch(KL2, { 11000105: 1 }), { AUCTION_CORP_CODES: '11000101,11000105' });
+    const k4snap = (await q(`SELECT status, corp_scope, is_latest_ok, verify_warning FROM collect_snapshot WHERE id = $1`, [k4.result && k4.result.snapshot_id]))[0] || {};
+    check('K-4 완결성은 법인×조합 호출 단위: 한국청과 2쪽부터 totalCount 가 바뀌면(다시 받아도 같음) → PARTIAL(정상 표시 안 함)·경고에 "11000105 12-06"',
+      k4.status === 'DONE' && k4.result.snapshot === 'PARTIAL' && !k4snap.is_latest_ok && /11000105 12-06/.test(k4snap.verify_warning || '') && k4snap.corp_scope === '11000101,11000105',
+      { r: k4.result, k4snap });
+    calls.length = 0;
+    const ignoreCorp = async (url) => { const u = new URL(url); u.searchParams.delete('cond[corp_cd::EQ]'); return mkFetch(KL2)(u.toString()); };
+    const k5 = await runLive(KL2, ignoreCorp, { AUCTION_CORP_CODES: '11000105', AUCTION_PAGE_SIZE: '1000' });
+    const k5rows = await q(`SELECT corp_code, COUNT(*)::int n FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1 AND withdrawn_at IS NULL GROUP BY 1 ORDER BY 1`, [KL2]);
+    const k5warn = k5.result && k5.result.snapshot_id ? ((await q(`SELECT verify_warning FROM collect_snapshot WHERE id = $1`, [k5.result.snapshot_id]))[0].verify_warning || '') : '';
+    check('K-5 원천이 법인 조건을 무시하고 전체를 줘도 범위 밖 법인 행은 저장 안 함(out_of_scope_dropped·경고 "법인 조건 밖 행")',
+      k5.status === 'DONE' && k5.result.out_of_scope_dropped === allK.length - nK && k5rows.some((r) => r.corp_code === '11000105' && r.n === nK) && /법인 조건 밖 행 \d+건 제외/.test(k5warn),
+      { r: k5.result, k5rows, k5warn });
+
+    // K-6 재생: 전체로 받은 날을 한국청과만 다시 FINAL → 철회 판정은 한국청과 행만, 다른 법인 저장 행은 그대로
+    const tmpK = fs.mkdtempSync(path.join(os.tmpdir(), 't203k-'));
+    const full = JSON.parse(JSON.stringify(srcK));
+    for (const it of full.response.body.items.item) it.trd_clcln_ymd = KD;
+    fs.writeFileSync(path.join(tmpK, `${KD}_12-06_p1.json`), JSON.stringify(full));
+    const k6a = await runReplay(KD, 'FINAL', { AUCTION_ITEM_COMBOS: '12-06', AUCTION_REPLAY_DIR: tmpK, AUCTION_CORP_CODES: null });
+    const asScope = async (scope) => withEnv({ AUCTION_CORP_CODES: scope }, () => sched.hasFinalOk(pool, 'AT_REALTIME', '110001', KD));
+    const cover1 = [await asScope(null), await asScope('11000105'), await asScope('11000101,11000105')];
+    const cut = JSON.parse(JSON.stringify(full));
+    const idx = cut.response.body.items.item.findIndex((it) => it.corp_cd === '11000105');
+    const gone = cut.response.body.items.item.splice(idx, 1)[0];
+    cut.response.body.totalCount -= 1;
+    fs.writeFileSync(path.join(tmpK, `${KD}_12-06_p1.json`), JSON.stringify(cut));
+    const k6 = await runReplay(KD, 'FINAL', { AUCTION_ITEM_COMBOS: '12-06', AUCTION_REPLAY_DIR: tmpK, AUCTION_CORP_CODES: '11000105' });
+    const k6w = await q(`SELECT corp_code, COUNT(*) FILTER (WHERE withdrawn_at IS NULL)::int live, COUNT(*) FILTER (WHERE withdrawn_at IS NOT NULL)::int wd FROM auction_trade WHERE source = 'AT_REALTIME' AND trade_date = $1 GROUP BY 1 ORDER BY 1`, [KD]);
+    const others = k6w.filter((r) => r.corp_code !== '11000105');
+    const kRow = k6w.find((r) => r.corp_code === '11000105') || {};
+    const goneRow = (await q(`SELECT withdrawn_at FROM auction_trade WHERE source = 'AT_REALTIME' AND source_row_key = $1`, [`110001|${KD}|${gone.corp_cd}|${gone.spm_no}|${gone.auctn_seq}`]))[0];
+    check('K-6 한국청과만 FINAL(재생·법인 조건 흉내) → 철회 1건은 한국청과 행, 다른 법인 저장 행은 철회·삭제 없음',
+      k6a.status === 'DONE' && k6a.result.snapshot === 'COMPLETE' && !('corp_scope' in k6a.result) && k6.status === 'DONE' && k6.result.snapshot === 'COMPLETE'
+      && k6.result.withdrawn === 1 && k6.result.total === nK - 1 && k6.result.corp_scope === '11000105' && goneRow && goneRow.withdrawn_at
+      && others.length === 4 && others.every((r) => r.wd === 0) && others.reduce((a, r) => a + r.live, 0) === allK.length - nK && kRow.wd === 1 && kRow.live === nK - 1,
+      { k6a: k6a.result, k6: k6.result, k6w });
+    const cover2 = [await asScope(null), await asScope('11000105'), await asScope('11000101'), await asScope('11000101,11000105')];
+    check('K-7 완료 판정(스케줄러 hasFinalOk): 전체 스냅샷은 어떤 범위도 덮음 / 한국청과 한정 스냅샷은 한국청과 설정에서만 완료 — 전체·다른 법인 설정이면 "그날 완료" 아님(다시 받음)',
+      JSON.stringify(cover1) === '[true,true,true]' && JSON.stringify(cover2) === '[false,true,false,false]', { cover1, cover2 });
+    const tol0 = () => ({ date_before_auto: 0, date_after_auto: 0 });
+    const ready = await engine.baseReadiness(pool, [{ trade_date: KD }], tol0, '110001');
+    check('K-8 대조 기준 준비: 한국청과 한정 스냅샷 날 — 한국청과 매입서·법인 없는 매입서는 준비됨, 서울청과 매입서는 BASE_NOT_READY',
+      ready({ trade_date: KD, doc_corp_code: '11000105' }) === null && ready({ trade_date: KD, doc_corp_code: null }) === null && ready({ trade_date: KD, doc_corp_code: '11000101' }) === 'BASE_NOT_READY',
+      [ready({ trade_date: KD, doc_corp_code: '11000105' }), ready({ trade_date: KD, doc_corp_code: null }), ready({ trade_date: KD, doc_corp_code: '11000101' })]);
+    fs.rmSync(tmpK, { recursive: true, force: true });
+    await wipe();
+    await q(`UPDATE ext_circuit_state SET state = 'CLOSED', consecutive_failures = 0, opened_at = NULL, next_probe_at = NULL, disabled_reason = NULL, disabled_until = NULL`);
+  }
+
   // ================= D 대조 m2 (API) =================
   const mkUser = async (name, agent) => {
     const pw = crypto.randomBytes(12).toString('hex');
@@ -408,6 +521,17 @@ async function main() {
   check('D-15 AC-37(실데이터) 실 경락 출하자·낙찰자 칸 전부 NULL', pn[0].n === 0, pn);
   const leak = await q(`SELECT COUNT(*)::int n FROM ext_raw_response WHERE request_url_masked ~* 'servicekey=[^*&]' OR body ~* 'servicekey=[^*&]'`);
   check('D-16 원천 로그 URL·본문에 serviceKey 값 없음(****)', leak[0].n === 0, leak);
+  // K-9 수집 현황 API — 법인 한정 값(corp_scope)은 관리자 응답에만(B 20261125-1506)
+  {
+    const AD = await mkUser(`실API관리자 ${tag}`, `rta_${tag}`);
+    await q(`UPDATE "user" SET is_admin = true WHERE id = $1`, [AD.id]);
+    const sa = await api('GET', '/api/auction/sync/status', null, AD.tok);
+    const so = await api('GET', '/api/auction/sync/status', null, T);
+    const dayHas = (j) => (j.days || []).some((d) => 'corp_scope' in d);
+    check('K-9 수집 현황: 관리자 응답에 corp_scope(현재 설정 — 이 서버는 전체 = null)·days[].corp_scope 있음, 일반 회원 응답에는 없음',
+      sa.status === 200 && 'corp_scope' in sa.json && (sa.json.days.length === 0 || dayHas(sa.json)) && so.status === 200 && !('corp_scope' in so.json) && !dayHas(so.json),
+      { admin: sa.status, adminScope: sa.json.corp_scope, owner: so.status, ownerKeys: Object.keys(so.json || {}) });
+  }
 
   await pool.end();
   const fail = results.filter((x) => !x.ok).length;
