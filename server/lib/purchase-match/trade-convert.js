@@ -43,6 +43,31 @@ function parseTradeIds(raw) {
   return { ids };
 }
 
+/**
+ * 지휘 AI ①(T-203 17:36): 경락 원래 값 — 미리보기·결과에서 "경락: 1상자(6kg) × 33,600원 → 매입: 0.6(10kg 단위) × 56,000원"을 보이게.
+ * 금액 계산은 바꾸지 않는다(engine.planPurchase 그대로). 표시용 필드만.
+ */
+function tradeOriginal(t) {
+  return {
+    qty: t.qty == null ? null : String(t.qty), pkg_name: t.pkg_name || null, pkg_norm: t.pkg_norm || null,
+    unit_qty_kg: t.unit_qty_kg == null ? null : String(t.unit_qty_kg), weight_source: t.weight_source || null,
+    unit_price: t.unit_price == null ? null : String(t.unit_price), amount: t.amount == null ? null : String(t.amount),
+    price_per_kg: t.price_per_kg == null ? null : String(t.price_per_kg),
+  };
+}
+/**
+ * 환산 근거 — 판매툴 품목 단위(product.unit)와 그 kg(W), 경락 1포장 kg(L). 매입 수량 = 경락 수량 × L/W, 매입 단가 = 경락 단가 × W/L (engine.planPurchase 와 같은 식)
+ *   same_unit=true 면 W 또는 L 이 없거나 같아 환산하지 않음(factor "1")
+ */
+function unitBasis(link, plan) {
+  const W = plan && plan.unit_kg != null ? String(plan.unit_kg) : null;
+  const L = plan && plan.line_kg != null ? String(plan.line_kg) : null;
+  const same = !W || !L || Number(W) === Number(L);
+  const factor = same ? '1' : String(Math.round((Number(L) / Number(W)) * 1e6) / 1e6);
+  return { product_unit: link ? link.unit || null : null, product_unit_kg: W, trade_unit_kg: L, factor, same_unit: same,
+    rule: same ? 'SAME_UNIT' : 'KG_RATIO' };
+}
+
 /** 건별 사전 점검(쓰기 없음) — 미리보기와 전환이 같은 함수를 쓴다 */
 async function evaluate(db, userId, ids) {
   const tr = await db.query(
@@ -80,7 +105,7 @@ async function evaluate(db, userId, ids) {
     const t = byId.get(id);
     if (!t) { rows.push({ trade_id: id, result: 'NOT_FOUND', code: 'NOT_FOUND', message: MSG.NOT_FOUND }); continue; }
     const base = { trade_id: id, trade_date: t.trade_date, corp_code: t.corp_code, corp_name: t.corp_name, shipment_no: t.shipment_no || null, auction_seq: t.auction_seq,
-      item_label: t.family_name ? `${t.family_name} · ${t.variety_name}` : t.item_name_raw };
+      item_label: t.family_name ? `${t.family_name} · ${t.variety_name}` : t.item_name_raw, trade_original: tradeOriginal(t) };
     const out = (result, message, extra = {}) => ({ ...base, result, code: result, message, ...extra });
     if (t.withdrawn_at) { rows.push(out('WITHDRAWN', MSG.WITHDRAWN)); continue; }
     if (t.map_status !== 'MAPPED' || !t.item_key) { rows.push(out('UNMAPPED_ITEM', MSG.UNMAPPED_ITEM)); continue; }
@@ -98,7 +123,10 @@ async function evaluate(db, userId, ids) {
     const tol = engine.pickTolerance(tolRows, userId, t.item_key);
     // eslint-disable-next-line no-await-in-loop
     const plan = await engine.planPurchase(db, { qty: t.qty, unit_price: t.unit_price, unit_qty_kg: t.unit_qty_kg, amount: t.amount }, { unit: link.unit }, tol);
-    if (!plan.ok) { rows.push(out('UNIT_CHECK_NEEDED', MSG.UNIT_CHECK_NEEDED, { detail: { reason: plan.reason, quantity: plan.quantity, unit_price: plan.unit_price, total: plan.total } })); continue; }
+    if (!plan.ok) {
+      rows.push(out('UNIT_CHECK_NEEDED', MSG.UNIT_CHECK_NEEDED, { unit_basis: unitBasis(link, plan), detail: { reason: plan.reason, quantity: plan.quantity, unit_price: plan.unit_price, total: plan.total } }));
+      continue;
+    }
     if (!pnames.has(link.product_id)) {
       // eslint-disable-next-line no-await-in-loop
       const p = await db.query(`SELECT name FROM product WHERE id = $1`, [link.product_id]);
@@ -110,6 +138,7 @@ async function evaluate(db, userId, ids) {
     if (pl) warnings.push('DOC_LINE_PENDING');
     rows.push({ ...base, result: 'WILL_CONVERT', partner, product: { id: link.product_id, name: pnames.get(link.product_id) },
       purchase_date: String(t.trade_date).slice(0, 10), quantity: String(plan.quantity), unit_price: String(plan.unit_price), total: String(plan.total),
+      unit_basis: unitBasis(link, plan),
       warnings, ...(pl ? { pending_doc_line: { doc_id: Number(pl.doc_id), line_no: pl.line_no } } : {}),
       _t: t, _plan: plan, _tol: tol });
   }
@@ -193,9 +222,9 @@ async function convertTrades(client, cx, ids) {
       await client.query(`RELEASE SAVEPOINT ${sp}`);
       if (newDoc) docs.set(gk, g);
       g.lines = lineNo;
-      const { partner, product, quantity, unit_price: up, total, warnings } = r;
+      const { partner, product, quantity, unit_price: up, total, warnings, trade_original: tro, unit_basis: ub } = r;
       results.push({ trade_id: Number(t.id), result: 'CONVERTED', purchase_id: c.purchase_id, doc_id: g.id, line_id: Number(line.id), conversion_id: c.conversion_id,
-        partner, product, purchase_date: date, quantity, unit_price: up, total, warnings });
+        partner, product, purchase_date: date, quantity, unit_price: up, total, warnings, trade_original: tro, unit_basis: ub });
     } catch (err) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(`ROLLBACK TO SAVEPOINT ${sp}`).catch(() => {});
@@ -218,4 +247,4 @@ async function convertTrades(client, cx, ids) {
   return { results, summary: { converted, already, failed: results.length - converted - already }, navigate, doc_ids: [...docs.values()].map((g) => g.id) };
 }
 
-module.exports = { parseTradeIds, previewTrades, convertTrades, MAX_TRADES };
+module.exports = { parseTradeIds, previewTrades, convertTrades, MAX_TRADES, tradeOriginal, unitBasis };
