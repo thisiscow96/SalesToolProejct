@@ -187,7 +187,8 @@ function registerAuctionRoutes(app, deps) {
       const out = await runList(pool, base, params, srt.order, opts);
       const m = await rangeMeta(pool, { from, to, market: market() });
       const mockOk = allowMockConvert();
-      res.setHeader('Cache-Control', 'private, max-age=30');
+      // C-CV-01: 캐시는 쓰되 매번 서버에 다시 확인(ETag 304) — max-age=30 이면 수집 직후·전환 직후 30초 동안 옛 목록이 보였다
+      res.setHeader('Cache-Control', 'private, no-cache');
       return res.json({ ok: true, meta: { ...m.meta, sort: srt.sort, dir: srt.dir, shipment_no: shipmentNo, shipment_match: shipmentNo ? TQ.shipmentMatchMode() : null },
         data: out.data.map((r) => {
           const reason = r.converted_purchase_id ? 'ALREADY_CONVERTED' : notConvertibleReason(r, mockOk);
