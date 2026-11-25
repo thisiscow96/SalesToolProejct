@@ -473,54 +473,72 @@ function registerAuctionRoutes(app, deps) {
         const phase = phaseIn || (d < today || (st && ['SETTLED', 'CONFIRMED', 'NO_TRADE'].includes(st)) ? 'FINAL' : 'INTRADAY');
         return { d, phase, st, key: `COLLECT:${source}:${market()}:${d}:${phase}:MANUAL:${auth.userId}:${minute}` };
       });
-      const dup = await pool.query(`SELECT dedupe_key FROM collect_job WHERE dedupe_key = ANY($1::text[])`, [plan.map((p) => p.key)]);
-      const dupSet = new Set(dup.rows.map((r) => r.dedupe_key));
-      if (dupSet.size === plan.length) {
-        return res.status(202).json({ ok: true, data: { queued: [], skipped: plan.map((p) => ({ target_date: p.d, reason: 'ALREADY_QUEUED' })) } });
-      }
-      // 회원별 5분 1회(C D01): 최근 5분 안 수동 작업이 있고, 이번 요청에 그 작업들에 없는 키(새 날짜)가 하나라도 있으면 429.
-      // 같은 분에 같은 범위를 다시 누른 경우(모든 키가 이미 있음)는 위에서 202 ALREADY_QUEUED, 동시에 들어온 같은 요청은 enqueue 의 dedupe 가 막는다.
-      const recent = await pool.query(
-        `SELECT dedupe_key, created_at FROM collect_job WHERE requested_by_user_id = $1 AND created_at > NOW() - interval '5 minutes' AND dedupe_key LIKE '%:MANUAL:%'
-          ORDER BY created_at DESC LIMIT 200`,
-        [auth.userId]
-      );
-      const recentKeys = new Set(recent.rows.map((r) => r.dedupe_key));
-      if (recent.rows.length && plan.some((p) => !recentKeys.has(p.key))) {
-        const wait = Math.max(1, 300 - Math.floor((Date.now() - new Date(recent.rows[0].created_at).getTime()) / 1000));
-        return res.status(429).json({ ok: false, code: 'SYNC_RATE_LIMIT', message: '수동 동기화는 5분에 한 번만 할 수 있습니다.', detail: { retry_after_sec: wait } });
-      }
+      // C-L-22: 5분 제한 확인 ~ 작업 등록을 회원 단위 잠금(트랜잭션 advisory lock) 안에서 한다.
+      // 날짜가 다른 동시 요청 2개는 dedupe_key 가 달라 ON CONFLICT 로는 못 막으므로, 둘째 요청이 첫째의 커밋을 기다린 뒤 최근 5분 조회에서 보고 429 가 된다.
       const queued = [];
       const skipped = [];
-      for (const p of plan) {
-        if (dupSet.has(p.key)) { skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED' }); continue; }
-        // eslint-disable-next-line no-await-in-loop
-        const hol = await pool.query(`SELECT 1 FROM market_calendar WHERE market_code = $1 AND cal_date = $2 AND kind = 'HOLIDAY'`, [market(), p.d]);
-        if (hol.rows[0] && !force) { skipped.push({ target_date: p.d, reason: 'HOLIDAY' }); continue; }
-        // 같은 날짜 수집이 이미 돌고 있으면(스케줄 폴링·01:00 배치 포함) 새로 넣지 않는다 — 같은 시각 5호출을 두 번 쓰지 않게(AC-L-20)
-        // eslint-disable-next-line no-await-in-loop
-        const act = await scheduler.activeCollect(pool, { source, market: market(), date: p.d, now });
-        if (act) { skipped.push({ target_date: p.d, reason: 'ALREADY_RUNNING', job_id: act.id, status: act.status }); continue; }
-        // 이미 확정: 하루 상태가 아직 경매 전·진행 중·완료 판정(SETTLED, 06:00 확인 전)이면 건너뛰지 않는다(AC-L-10). 하루 상태가 없는 날은 예전 기준
-        if (!force && !(p.st && ['WAITING', 'LIVE', 'SETTLED'].includes(p.st))) {
-          // 법인 한정(AUCTION_CORP_CODES): 지금 설정 범위를 덮는 완료 스냅샷만 "이미 받음"(전체 = corp_scope NULL, 또는 범위를 다 포함)
-          const scope = worker.snapshotScope({ source });
-          // eslint-disable-next-line no-await-in-loop
-          const done = await pool.query(
-            `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND phase = $4 AND is_latest_ok AND status = 'COMPLETE'
-                AND (corp_scope IS NULL OR string_to_array(corp_scope, ',') @> $5::text[])`,
-            [source, market(), p.d, p.phase, scope ? scope.split(',') : null]
+      const db = await pool.connect();
+      let early = null;
+      try {
+        await db.query('BEGIN');
+        await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`auction-sync:${auth.userId}`]);
+        early = await (async () => {
+          const dup = await db.query(`SELECT dedupe_key FROM collect_job WHERE dedupe_key = ANY($1::text[])`, [plan.map((p) => p.key)]);
+          const dupSet = new Set(dup.rows.map((r) => r.dedupe_key));
+          if (dupSet.size === plan.length) {
+            return { status: 202, body: { ok: true, data: { queued: [], skipped: plan.map((p) => ({ target_date: p.d, reason: 'ALREADY_QUEUED' })) } } };
+          }
+          // 회원별 5분 1회(C D01): 최근 5분 안 수동 작업이 있고, 이번 요청에 그 작업들에 없는 키(새 날짜)가 하나라도 있으면 429.
+          // 같은 분에 같은 범위를 다시 누른 경우(모든 키가 이미 있음)는 위에서 202 ALREADY_QUEUED, 동시에 들어온 같은 요청은 enqueue 의 dedupe 가 막는다.
+          const recent = await db.query(
+            `SELECT dedupe_key, created_at FROM collect_job WHERE requested_by_user_id = $1 AND created_at > NOW() - interval '5 minutes' AND dedupe_key LIKE '%:MANUAL:%'
+              ORDER BY created_at DESC LIMIT 200`,
+            [auth.userId]
           );
-          if (done.rows[0]) { skipped.push({ target_date: p.d, reason: 'ALREADY_COMPLETE' }); continue; }
-        }
-        const params = { reason: 'MANUAL' };
-        if (mockControl && b.mock_scenario) params.mock_scenario = String(b.mock_scenario).slice(0, 200);
-        // eslint-disable-next-line no-await-in-loop
-        const r = await queue.enqueue(pool, { job_type: 'COLLECT', source, market_code: market(), trade_date: p.d, phase: p.phase, params, dedupe_key: p.key,
-          requested_by_user_id: auth.userId, requested_by_staff_id: auth.staffId || null });
-        if (r.created) queued.push({ id: r.id, target_date: p.d, phase: p.phase });
-        else skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED', job_id: r.id });
+          const recentKeys = new Set(recent.rows.map((r) => r.dedupe_key));
+          if (recent.rows.length && plan.some((p) => !recentKeys.has(p.key))) {
+            const wait = Math.max(1, 300 - Math.floor((Date.now() - new Date(recent.rows[0].created_at).getTime()) / 1000));
+            return { status: 429, body: { ok: false, code: 'SYNC_RATE_LIMIT', message: '수동 동기화는 5분에 한 번만 할 수 있습니다.', detail: { retry_after_sec: wait } } };
+          }
+          for (const p of plan) {
+            if (dupSet.has(p.key)) { skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED' }); continue; }
+            // eslint-disable-next-line no-await-in-loop
+            const hol = await db.query(`SELECT 1 FROM market_calendar WHERE market_code = $1 AND cal_date = $2 AND kind = 'HOLIDAY'`, [market(), p.d]);
+            if (hol.rows[0] && !force) { skipped.push({ target_date: p.d, reason: 'HOLIDAY' }); continue; }
+            // 같은 날짜 수집이 이미 돌고 있으면(스케줄 폴링·01:00 배치 포함) 새로 넣지 않는다 — 같은 시각 5호출을 두 번 쓰지 않게(AC-L-20)
+            // eslint-disable-next-line no-await-in-loop
+            const act = await scheduler.activeCollect(db, { source, market: market(), date: p.d, now });
+            if (act) { skipped.push({ target_date: p.d, reason: 'ALREADY_RUNNING', job_id: act.id, status: act.status }); continue; }
+            // 이미 확정: 하루 상태가 아직 경매 전·진행 중·완료 판정(SETTLED, 06:00 확인 전)이면 건너뛰지 않는다(AC-L-10). 하루 상태가 없는 날은 예전 기준
+            if (!force && !(p.st && ['WAITING', 'LIVE', 'SETTLED'].includes(p.st))) {
+              // 법인 한정(AUCTION_CORP_CODES): 지금 설정 범위를 덮는 완료 스냅샷만 "이미 받음"(전체 = corp_scope NULL, 또는 범위를 다 포함)
+              const scope = worker.snapshotScope({ source });
+              // eslint-disable-next-line no-await-in-loop
+              const done = await db.query(
+                `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND phase = $4 AND is_latest_ok AND status = 'COMPLETE'
+                    AND (corp_scope IS NULL OR string_to_array(corp_scope, ',') @> $5::text[])`,
+                [source, market(), p.d, p.phase, scope ? scope.split(',') : null]
+              );
+              if (done.rows[0]) { skipped.push({ target_date: p.d, reason: 'ALREADY_COMPLETE' }); continue; }
+            }
+            const params = { reason: 'MANUAL' };
+            if (mockControl && b.mock_scenario) params.mock_scenario = String(b.mock_scenario).slice(0, 200);
+            // eslint-disable-next-line no-await-in-loop
+            const r = await queue.enqueue(db, { job_type: 'COLLECT', source, market_code: market(), trade_date: p.d, phase: p.phase, params, dedupe_key: p.key,
+              requested_by_user_id: auth.userId, requested_by_staff_id: auth.staffId || null });
+            if (r.created) queued.push({ id: r.id, target_date: p.d, phase: p.phase });
+            else skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED', job_id: r.id });
+          }
+          return null;
+        })();
+        await db.query('COMMIT');
+      } catch (e) {
+        await db.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        db.release();
       }
+      if (early) return res.status(early.status).json(early.body);
       if (queued.length) {
         await recordAudit(pool, { userId: auth.userId, entityType: 'market_sync', entityId: queued[0].id, action: 'sync', before: null,
           after: { source, date_from: from, date_to: to, jobs: queued.length, force }, note: `수동 동기화 ${source} ${from}~${to} ${queued.length}건` });
