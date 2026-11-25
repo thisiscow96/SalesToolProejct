@@ -51,3 +51,11 @@ export const purchaseDocApi = {
   saveTolerance: (body) => request('PUT', '/purchase-match/tolerances', { body, fallback: '허용오차를 저장하지 못했습니다.' }),
   removeTolerance: (id) => request('DELETE', `/purchase-match/tolerances/${encodeURIComponent(id)}`, { fallback: '허용오차를 지우지 못했습니다.' }),
 };
+
+/** T-203 경락 → 매입 전환 (설계 A 5.2·5.3). trade_ids 1~200 */
+export const tradeConvertApi = {
+  /** R-138 미리보기(쓰기 없음) → { rows, summary } */
+  preview: (trade_ids) => request('POST', '/purchase-docs/from-trades/preview', { body: { trade_ids }, fallback: '매입 전환 미리보기를 불러오지 못했습니다.' }),
+  /** R-139 전환(Idempotency-Key 필수) → { results, summary, navigate } */
+  convert: (trade_ids, idemKey) => request('POST', '/purchase-docs/from-trades', { body: { trade_ids }, idemKey, fallback: '매입 전환을 하지 못했습니다.' }),
+};

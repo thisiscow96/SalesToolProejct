@@ -169,7 +169,7 @@ function DocList({ onOpen, onChanged }) {
             {!loading && rows.length === 0 && <tr><td colSpan={7} className="main-empty-cell">매입서가 없습니다. [파일 올리기] 또는 [직접 입력]으로 넣어 주세요.</td></tr>}
             {rows.map((d) => (
               <tr key={d.id} data-testid={`pdoc-row-${d.id}`}>
-                <td data-label="매입서번호">{d.doc_no || `#${d.id}`}</td>
+                <td data-label="매입서번호">{d.doc_no || `#${d.id}`}{d.input_kind === 'AUCTION' && <span className="pdoc-kind"><Tone tone="info" title="경락 시세 화면에서 경락 건을 골라 바로 매입 등록하며 만든 매입서" testid={`pdoc-kind-auction-${d.id}`}>경락 직접 전환</Tone></span>}</td>
                 <td data-label="거래일">{md(d.doc_date)}</td>
                 <td data-label="제공처">{d.supplier_name || '-'}</td>
                 <td className="pm-num" data-label="줄수">{won(d.line_count)}</td>
@@ -356,6 +356,7 @@ function DocDetail({ id, onBack, onChanged, onBusy, onNavigate }) {
         <h3 className="pm-h3">
           {doc.doc_no || `#${doc.id}`} · {md(doc.doc_date)} · {doc.supplier_name || '-'} ·{' '}
           <Tone tone={DOC_STATUS[doc.status]?.tone} testid="pdoc-detail-status">{DOC_STATUS[doc.status]?.label || doc.status}</Tone>
+          {doc.input_kind === 'AUCTION' && <Tone tone="info" title="경락 시세 화면에서 경락 건을 골라 바로 매입 등록하며 만든 매입서" testid="pdoc-detail-kind-auction">경락 직접 전환</Tone>}
         </h3>
         <span className="pm-actions pm-head-right">
           {canMatch && !cancelled && (

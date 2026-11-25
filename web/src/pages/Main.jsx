@@ -577,7 +577,7 @@ function TabReorder() {
   );
 }
 
-function TabPurchases({ onNavigate } = {}) {
+function TabPurchases({ onNavigate, navFilter } = {}) {
   // T-211 목록 검색·페이지(서버 limit/offset)
   const paged = usePagedList('purchases');
   const { list, loading, err } = paged;
@@ -585,11 +585,15 @@ function TabPurchases({ onNavigate } = {}) {
   const [partnerFilter, setPartnerFilter] = useState('');
   // 정정(T-103): { type: 'edit' | 'cancel', row } | null, 성공 알림
   const [correction, setCorrection] = useState(null);
-  const [correctionNotice, setCorrectionNotice] = useState('');
+  const [correctionNotice, setCorrectionNotice] = useState(() => navFilter?.notice || '');
   const [products, setProducts] = useState([]);
   const [partners, setPartners] = useState([]);
-  const [fromDate, setFromDate] = useState(firstDayOfMonth());
-  const [toDate, setToDate] = useState(today());
+  const [fromDate, setFromDate] = useState(() => navFilter?.from_date || firstDayOfMonth());
+  const [toDate, setToDate] = useState(() => navFilter?.to_date || today());
+  // T-203 경락 → 매입 전환 뒤 이동(navFilter.highlight_ids): 방금 만든 매입만 보고(ids), 그 행을 강조한다. [전체 보기]는 ids만 풀고 기간 유지
+  const [highlightIds] = useState(() => (Array.isArray(navFilter?.highlight_ids) ? navFilter.highlight_ids.map(Number).filter((n) => n > 0).slice(0, 200) : []));
+  const [idsOnly, setIdsOnly] = useState(() => Array.isArray(navFilter?.highlight_ids) && navFilter.highlight_ids.length > 0);
+  const highlightSet = useMemo(() => new Set(highlightIds), [highlightIds]);
   const [productId, setProductId] = useState('');
   const [selected, setSelected] = useState({});
   const [showForm, setShowForm] = useState(false);
@@ -681,11 +685,12 @@ function TabPurchases({ onNavigate } = {}) {
     if (row) suggestUnitPrice(row.key, String(p.id), row.partner_id);
   };
 
-  const buildParams = () => {
+  const buildParams = (onlyIds = idsOnly) => {
     const params = {
       from_date: sanitizeYmd(fromDate, firstDayOfMonth()),
       to_date: sanitizeYmd(toDate, today()),
     };
+    if (onlyIds && highlightIds.length) params.ids = highlightIds.join(','); // R-22 ids(설계 A 5.4)
     if (productId) params.product_id = productId;
     if (unpaidOnly) params.unpaid_only = 1; // T-201: 기간과 상관없이 미지급·일부 매입 전체
     if (includeOpening) params.include_opening = 1; // T-403
@@ -697,6 +702,12 @@ function TabPurchases({ onNavigate } = {}) {
   const runSearch = () => {
     setSelected({});
     return paged.search(buildParams());
+  };
+  /** "방금 등록한 N건만" 칩의 [전체 보기] — ids 조건만 풀고 같은 기간으로 다시 */
+  const showAllPurchases = () => {
+    setIdsOnly(false);
+    setSelected({});
+    return paged.search(buildParams(false));
   };
   /** 등록·정정 뒤 — 마지막 검색 조건으로 지금 페이지 다시 */
   const load = () => paged.reload();
@@ -917,6 +928,13 @@ function TabPurchases({ onNavigate } = {}) {
   return (
     <>
       <CorrectionNotice text={correctionNotice} onClear={() => setCorrectionNotice('')} />
+      {idsOnly && highlightIds.length > 0 && (
+        <div className="main-filter-chip" role="status" data-testid="purchase-new-chip">
+          <span className="main-filter-chip-dot" aria-hidden="true" />
+          <span>방금 경락 시세에서 등록한 <strong>{highlightIds.length}건</strong>만 보는 중</span>
+          <button type="button" className="main-filter-chip-btn" onClick={showAllPurchases} data-testid="purchase-new-chip-all">전체 보기</button>
+        </div>
+      )}
       {actionErr && (
         <div className="main-alert-banner" role="alert">
           {actionErr}
@@ -1336,7 +1354,11 @@ function TabPurchases({ onNavigate } = {}) {
             </thead>
             <tbody>
               {list.map((row) => (
-                <tr key={row.id} className={row.status === 'cancelled' ? 'tc-row-cancelled' : undefined}>
+                <tr
+                  key={row.id}
+                  className={[row.status === 'cancelled' ? 'tc-row-cancelled' : '', highlightSet.has(Number(row.id)) ? 'main-row-new' : ''].filter(Boolean).join(' ') || undefined}
+                  data-testid={highlightSet.has(Number(row.id)) ? `purchase-new-${row.id}` : undefined}
+                >
                   <td data-card="check" className="main-col-check">
                     <input
                       type="checkbox"

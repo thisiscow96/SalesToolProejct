@@ -229,3 +229,31 @@ export function fieldErrors(e) {
   if (e.field) out[e.field] = e.message;
   return out;
 }
+
+/** T-203 경락 → 매입 전환(R-138 미리보기 · R-139 전환) 건별 결과 — 설계 A 3.2·5.3 */
+export const TRADE_CONVERT_RESULT = {
+  WILL_CONVERT: { label: '등록 예정', tone: 'ok' },
+  CONVERTED: { label: '매입 등록됨', tone: 'ok' },
+  ALREADY_CONVERTED: { label: '이미 매입 등록됨', tone: 'info' },
+  TRADE_TAKEN: { label: '매입서에서 이미 씀', tone: 'bad' },
+  NO_CORP_LINK: { label: '법인-거래처 연결 없음', tone: 'bad' },
+  NO_PRODUCT_LINK: { label: '품목 연결 없음', tone: 'bad' },
+  UNIT_CHECK_NEEDED: { label: '단위 환산 확인 필요', tone: 'warn' },
+  WITHDRAWN: { label: '철회된 경락', tone: 'bad' },
+  UNMAPPED_ITEM: { label: '품목 매핑 없음', tone: 'bad' },
+  MOCK_SOURCE: { label: '목업 데이터', tone: 'bad' },
+  NOT_FOUND: { label: '경락 건 없음', tone: 'bad' },
+  PURCHASE_FAILED: { label: '매입 등록 실패', tone: 'bad' },
+};
+/** 경락 표에서 체크할 수 없는 이유(R-92 not_convertible_reason) */
+export const NOT_CONVERTIBLE = {
+  CONVERTED: '이미 매입 등록한 경락 건입니다.',
+  WITHDRAWN: '철회된 경락 건은 매입 등록하지 않습니다.',
+  UNMAPPED_ITEM: '품목 매핑이 없어 매입으로 옮길 수 없습니다(관리자 품목 매핑 필요).',
+  MOCK_SOURCE: '목업 데이터는 매입 등록하지 않습니다.',
+};
+/** 전환 경고(미리보기·결과) */
+export const TRADE_CONVERT_WARN = {
+  BASE_NOT_FINAL: '확정 전(당일 집계) 값 — 나중에 값이 바뀔 수 있음',
+  DOC_LINE_PENDING: '대기 중인 매입서 줄이 이 경락 건을 후보로 갖고 있음(그 줄은 나중에 "이미 씀"이 됨)',
+};

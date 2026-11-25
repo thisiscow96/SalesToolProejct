@@ -47,6 +47,8 @@ const trades = [];
         grade_norm: g, grade_name: GN[g], pkg_name: '상자', unit_qty_kg: `${kg}.000`, weight_source: 'SOURCE',
         qty: `${qty}.000`, unit_price: p, price_per_kg: (p / kg).toFixed(2), amount: p * qty,
         origin_name: ['충남 청양', '경남 밀양', '전남 화순', '강원 철원'][i % 4], shipper_name_masked: ['김*수', '이*희', '박*진'][i % 3], buyer_code: null,
+        shipment_no: cc === 'C03' ? `0${30200 + Math.floor(i / 3)}` : String(9 + Math.floor(i / 3) + (day === Y1 ? 0 : 40)), auction_seq: String(1 + (i % 3) + (i > 9 ? 9 : 0)),
+        map_status: k ? 'MAPPED' : 'UNMAPPED',
         revision: i === 2 ? 2 : 1, first_seen_at: iso(day, '03:00'), last_seen_at: iso(day, '09:10'), withdrawn_at: i === 5 && day === Y1 ? iso(day, '10:00') : null,
         history: i === 2 ? [{ revision: 1, qty: `${qty + 1}.000`, unit_price: p + 1000, changed_at: iso(day, '09:10') }] : [],
       });
@@ -66,7 +68,16 @@ const tol = {
   default_row: { id: 1, user_id: null, item_family: null, item_key: null, price_pct_auto: '0.00', price_pct_review: '10.00', qty_pct_auto: '0.00', qty_pct_review: '20.00', amount_abs_auto: 0, date_before_auto: 1, date_after_auto: 0, date_before_review: 3, date_after_review: 1, auto_convert: true, auto_min_score: 85, ambiguity_margin: 10 },
   rows: [],
 };
-let plinks = [{ id: 1, item_key: 'PEPPER.CHEONGYANG', grade_norm: null, product_id: 31, product_name: '청양고추', product_unit: '10kg' }];
+let plinks = [
+  { id: 1, item_key: 'PEPPER.CHEONGYANG', grade_norm: null, product_id: 31, product_name: '청양고추', product_unit: '10kg' },
+  { id: 2, item_key: 'PEPPER.KKWARI', grade_norm: null, product_id: 32, product_name: '꽈리고추', product_unit: '4kg' },
+  { id: 3, item_key: 'PEPPER.RED', grade_norm: null, product_id: 33, product_name: '홍고추', product_unit: '10kg' },
+];
+const tradeConv = new Map(); // 경락 → 매입 활성 전환: trade_id → purchase_id
+let convertCalls = 0;
+const purchases = [
+  { id: 5012, purchase_date: `${Y1}T00:00:00+09:00`, partner_id: 7, partner_name: 'A청과', product_id: 31, product_name: '청양고추', quantity: '10', allocated_qty: '0', remaining_qty: '10', unit_price: 35000, total_amount: 350000, unpaid_amount: 350000, status: 'active', source_name: 'A청과' },
+];
 let clinks = [{ corp_code: 'C01', corp_name: 'A청과', partner_id: 7 }, { corp_code: 'C02', corp_name: 'B청과', partner_id: null }, { corp_code: 'C03', corp_name: 'C농협공판장', partner_id: null }];
 let mappings = [
   { id: 1, target: 'BOTH', source: null, code_l: null, code_m: null, code_s: null, keyword_norm: '청양', item_key: 'PEPPER.CHEONGYANG', priority: 50, active: true },
@@ -126,7 +137,7 @@ addDoc({ doc_no: 'D-1123-04', doc_date: Y1, supplier_name: 'B청과' }, [
 // ---------------------------------------------------------------------------
 const P = new URLSearchParams(window.location.search);
 const DELAY = Number(P.get('mock_delay') || 350);
-const ROLE_ALLOW = { input: ['purchase_doc.upload', 'purchase_doc.match', 'purchase_doc.edit', 'purchase_doc.convert'], view: [] };
+const ROLE_ALLOW = { input: ['purchase_doc.upload', 'purchase_doc.match', 'purchase_doc.edit', 'purchase_doc.convert', 'purchase.convert_from_trade', 'purchase.create'], view: [] };
 
 function setRoleUser() {
   const role = P.get('mock_role');
@@ -205,13 +216,51 @@ async function route(method, path, q, body, headers) {
       if (!from || !to) return fail(400, 'VALIDATION', '조회 기간을 지정하세요.', { field: 'date_from' });
       const keys = (q.get('item_key') || '').split(',').filter(Boolean);
       let rows = trades.filter((t) => t.trade_date >= from && t.trade_date <= to);
-      if (q.get('include_unmapped') !== 'true') rows = rows.filter((t) => t.item_key);
+      // 원표번호(정확 일치·앞자리 0 무시) — 있으면 품목·품종·등급·규격·산지 무시, 매핑 안 된 행도 보임(설계 A 1절)
+      const shipRaw = q.get('shipment_no');
+      const ship = shipRaw != null ? shipRaw.replace(/[\s.-]/g, '') : null;
+      if (ship != null && !/^\d{1,20}$/.test(ship)) return fail(400, 'VALIDATION', '원표번호는 숫자 20자리 이내로 입력하세요.', { field: 'shipment_no' });
+      const SORTS = { trade_date: 'desc', auction_at: 'desc', corp: 'asc', shipment_no: 'asc', auction_seq: 'asc', item: 'asc', grade: 'asc', unit_kg: 'asc', qty: 'desc', unit_price: 'desc', price_per_kg: 'desc', origin: 'asc' };
+      const sk = q.get('sort') || 'trade_date';
+      if (!SORTS[sk]) return fail(400, 'VALIDATION', '정렬 기준이 올바르지 않습니다.', { field: 'sort' });
+      const dir = q.get('dir') || SORTS[sk];
+      if (!['asc', 'desc'].includes(dir)) return fail(400, 'VALIDATION', '정렬 방향이 올바르지 않습니다.', { field: 'dir' });
+      const shipMode = ship != null;
+      if (shipMode) {
+        const z = (v) => String(v || '').replace(/^0+/, '') || '0';
+        rows = rows.filter((t) => t.shipment_no && z(t.shipment_no) === z(ship));
+      }
+      if (!shipMode && q.get('include_unmapped') !== 'true') rows = rows.filter((t) => t.item_key);
       if (q.get('include_withdrawn') !== 'true') rows = rows.filter((t) => !t.withdrawn_at);
-      if (q.get('family')) rows = rows.filter((t) => String(t.item_key).startsWith(q.get('family') + '.'));
+      if (!shipMode && q.get('family')) rows = rows.filter((t) => String(t.item_key).startsWith(q.get('family') + '.'));
       if (keys.length) rows = rows.filter((t) => keys.includes(t.item_key));
       if (q.get('grade')) rows = rows.filter((t) => t.grade_norm === q.get('grade'));
       if (q.get('corp_code')) rows = rows.filter((t) => t.corp_code === q.get('corp_code'));
-      if (q.get('origin')) rows = rows.filter((t) => (t.origin_name || '').includes(q.get('origin')));
+      if (!shipMode && q.get('origin')) rows = rows.filter((t) => (t.origin_name || '').includes(q.get('origin')));
+      const GRANK = { SPECIAL: 1, HIGH: 2, MID: 3, LOW: 4, OFF: 5, NONE: 6 };
+      const lenKey = (v) => (v ? String(v.length).padStart(3, '0') + v : null);
+      const SV = {
+        trade_date: (t) => t.trade_date + (t.auction_at || ''), auction_at: (t) => t.auction_at, corp: (t) => t.corp_name,
+        shipment_no: (t) => lenKey(t.shipment_no), auction_seq: (t) => lenKey(t.auction_seq),
+        item: (t) => t.item_label || t.item_name_raw, grade: (t) => GRANK[t.grade_norm] ?? null, unit_kg: (t) => (t.unit_qty_kg == null ? null : Number(t.unit_qty_kg)),
+        qty: (t) => Number(t.qty), unit_price: (t) => t.unit_price, price_per_kg: (t) => (t.price_per_kg == null ? null : Number(t.price_per_kg)), origin: (t) => t.origin_name,
+      };
+      const sgn = dir === 'asc' ? 1 : -1;
+      rows = [...rows].sort((x, y) => {
+        const a1 = SV[sk](x);
+        const b1 = SV[sk](y);
+        if (a1 == null && b1 == null) return sgn * (x.id - y.id);
+        if (a1 == null) return 1; // NULLS LAST(양쪽 방향)
+        if (b1 == null) return -1;
+        if (a1 < b1) return -sgn;
+        if (a1 > b1) return sgn;
+        return sgn * (x.id - y.id);
+      });
+      rows = rows.map((t) => {
+        const pid = tradeConv.get(t.id) || null;
+        const why = pid ? null : t.withdrawn_at ? 'WITHDRAWN' : !t.item_key ? 'UNMAPPED_ITEM' : null;
+        return { ...t, converted_purchase_id: pid, convertible: !pid && !why, not_convertible_reason: why };
+      });
       if (q.get('pkg')) rows = rows.filter((t) => t.pkg_name === q.get('pkg'));
       const days = [];
       for (let dd = from; dd <= to; dd = addDays(dd, 1)) {
@@ -219,7 +268,7 @@ async function route(method, path, q, body, headers) {
         days.push({ trade_date: dd, source: 'MOCK', phase: dd === TODAY ? 'INTRADAY' : 'FINAL', status: n ? 'COMPLETE' : dd > TODAY ? 'NOT_YET' : dd === TODAY ? 'NOT_YET' : 'EMPTY', fetched_count: n });
       }
       const onlyToday = from === TODAY && to === TODAY;
-      return ok({ meta: { as_of: iso(TODAY, '09:12'), snapshot_status: 'COMPLETE', phase: onlyToday ? 'INTRADAY' : 'FINAL', stale: P.get('mock_stale') === '1', source_mode: 'MOCK' }, ...page(rows, q), days });
+      return ok({ meta: { as_of: iso(TODAY, '09:12'), snapshot_status: 'COMPLETE', phase: onlyToday ? 'INTRADAY' : 'FINAL', stale: P.get('mock_stale') === '1', source_mode: 'MOCK', sort: sk, dir, shipment_no: ship }, ...page(rows, q), days });
     }
     if (b === 'daily-prices') return ok({ data: [{ price_date: q.get('date'), item_key: 'PEPPER.CHEONGYANG', item_name_raw: '청양', grade_name: '특', unit_name: '10kg', avg_price: 34800, prev_price: 34100, diff: 700, diff_pct: '2.1' }] });
     if (b === 'sync' && c === 'status')
@@ -335,6 +384,82 @@ async function route(method, path, q, body, headers) {
     tol.rows = tol.rows.filter((r) => !((r.item_family || null) === (body.item_family || null) && (r.item_key || null) === (body.item_key || null)));
     tol.rows.push({ id: 100 + tol.rows.length, user_id: 1, ...body });
     return ok({});
+  }
+
+  // ---- 경락 → 매입 전환(R-138 미리보기 · R-139 전환, 설계 A 5.2·5.3) ----
+  if (a === 'purchase-docs' && b === 'from-trades') {
+    if (need('write')) return forbid();
+    const tids = [...new Set((body?.trade_ids || []).map(Number))];
+    if (!tids.length || tids.length > 200 || tids.some((n) => !(n > 0))) return fail(400, 'VALIDATION', '경락 건을 1~200건 고르세요.', { field: 'trade_ids' });
+    const plan = (id) => {
+      const t = trades.find((x) => x.id === id);
+      if (!t) return { trade_id: id, result: 'NOT_FOUND', message: '경락 건을 찾지 못했습니다.' };
+      if (tradeConv.get(id)) return { trade_id: id, result: 'ALREADY_CONVERTED', purchase_id: tradeConv.get(id), message: '이미 매입 등록한 경락 건입니다.' };
+      if (t.withdrawn_at) return { trade_id: id, result: 'WITHDRAWN', message: '철회된 경락 건은 매입 등록하지 않습니다.' };
+      if (!t.item_key) return { trade_id: id, result: 'UNMAPPED_ITEM', message: '품목 매핑이 없는 경락 건입니다.' };
+      const cl = clinks.find((x) => x.corp_code === t.corp_code);
+      if (!cl?.partner_id) return { trade_id: id, result: 'NO_CORP_LINK', message: `법인 ${t.corp_name}과 거래처 연결이 없습니다(대조 설정 → 법인 연결).` };
+      const pl = plinks.find((x) => x.item_key === t.item_key);
+      if (!pl) return { trade_id: id, result: 'NO_PRODUCT_LINK', message: `${t.item_label || t.item_name_raw} 품목 연결이 없습니다(대조 설정 → 품목 연결).` };
+      return {
+        trade_id: id, result: 'WILL_CONVERT', partner: { id: cl.partner_id, name: cl.corp_name }, product: { id: pl.product_id, name: pl.product_name },
+        purchase_date: t.trade_date, quantity: t.qty, unit_price: `${t.unit_price}.00`, total: `${t.amount}.00`, shipment_no: t.shipment_no, auction_seq: t.auction_seq,
+        warnings: t.trade_date === TODAY ? ['BASE_NOT_FINAL'] : [], _t: t, _pl: pl, _cl: cl,
+      };
+    };
+    const strip = ({ _t, _pl, _cl, ...r }) => r; // eslint-disable-line no-unused-vars
+    if (c === 'preview') {
+      const rows = tids.map(plan);
+      const will = rows.filter((r) => r.result === 'WILL_CONVERT');
+      return ok({ data: { rows: rows.map(strip), summary: { will_convert: will.length, excluded: rows.length - will.length, total_amount: `${will.reduce((s2, r) => s2 + r._t.amount, 0)}.00` } } });
+    }
+    const key = headers['Idempotency-Key'];
+    if (!key) return fail(400, 'VALIDATION', 'Idempotency-Key 헤더가 필요합니다.', { field: 'Idempotency-Key' });
+    const bodyKey = JSON.stringify([...tids].sort((x, y) => x - y));
+    if (idemStore.has(key)) {
+      const prevRun = idemStore.get(key);
+      if (prevRun.bodyKey !== bodyKey) return fail(422, 'REUSED', '같은 요청 키를 다른 내용에 다시 쓸 수 없습니다.');
+      return json(200, prevRun.res, { 'Idempotent-Replay': 'true' });
+    }
+    convertCalls += 1;
+    const results = tids.map((id) => {
+      const r = plan(id);
+      if (r.result === 'ALREADY_CONVERTED') return { trade_id: id, result: r.result, purchase_id: r.purchase_id };
+      if (r.result !== 'WILL_CONVERT') return { trade_id: id, result: r.result, code: r.result, message: r.message };
+      const pid = nextPurchase++;
+      const t = r._t;
+      tradeConv.set(id, pid);
+      purchases.unshift({
+        id: pid, purchase_date: `${t.trade_date}T00:00:00+09:00`, partner_id: r._cl.partner_id, partner_name: r._cl.corp_name, product_id: r._pl.product_id, product_name: r._pl.product_name,
+        quantity: t.qty, allocated_qty: '0', remaining_qty: t.qty, unit_price: t.unit_price, total_amount: t.amount, unpaid_amount: t.amount, status: 'active',
+        source_name: t.corp_name, origin_region: t.origin_name, memo: `경락 #${t.id} · 원표 ${t.shipment_no} · 경매 ${t.auction_seq}`, purchase_doc_line_id: nextLine++, purchase_doc_id: nextDoc,
+      });
+      return { trade_id: id, result: 'CONVERTED', purchase_id: pid, doc_id: nextDoc, line_id: nextLine - 1, conversion_id: 300 + pid };
+    });
+    const conv = results.filter((r) => r.result === 'CONVERTED');
+    if (conv.length) {
+      const first = trades.find((x) => x.id === conv[0].trade_id);
+      docs.unshift({ id: nextDoc++, doc_no: null, input_kind: 'AUCTION', doc_date: first.trade_date, supplier_partner_id: 7, supplier_name: first.corp_name, status: 'CONVERTED', lines: [], counts: { converted: conv.length, pending: 0, hold: 0, rejected: 0, cancelled: 0 }, line_count: conv.length, amount_total: 0, memo: '경락 시세 직접 전환' });
+    }
+    const pids = results.filter((r) => r.purchase_id).map((r) => r.purchase_id);
+    const dates = results.filter((r) => r.purchase_id).map((r) => trades.find((x) => x.id === r.trade_id).trade_date).sort();
+    const res = {
+      ok: true,
+      data: {
+        results,
+        summary: { converted: conv.length, already: results.filter((r) => r.result === 'ALREADY_CONVERTED').length, failed: results.filter((r) => !r.purchase_id).length },
+        navigate: pids.length ? { tab: 'purchases', from_date: dates[0], to_date: dates[dates.length - 1], purchase_ids: pids } : null,
+      },
+    };
+    idemStore.set(key, { bodyKey, res });
+    console.info('[devMock] R-139 전환 호출 수(키 재생 제외):', convertCalls);
+    return json(200, res);
+  }
+  if (a === 'purchases' && !b && method === 'GET') {
+    const idsQ = (q.get('ids') || '').split(',').filter(Boolean).map(Number);
+    let rows = purchases.filter((x) => (!q.get('from_date') || x.purchase_date.slice(0, 10) >= q.get('from_date')) && (!q.get('to_date') || x.purchase_date.slice(0, 10) <= q.get('to_date')));
+    if (idsQ.length) rows = rows.filter((x) => idsQ.includes(x.id));
+    return ok(page(rows, q));
   }
 
   // ---- 매입서 ----
