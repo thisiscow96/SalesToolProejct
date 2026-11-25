@@ -64,7 +64,7 @@ const W = Number(process.env.W || 1366);
   await L.tid(page, 'auction-date-from').fill(D.C); await L.tid(page, 'auction-date-to').fill(D.C);
   await L.tid(page, 'auction-search').click();
   await page.waitForTimeout(4000);
-  const shownDates = await page.locator('[data-testid^="auction-row-"] td:first-child').allInnerTexts();
+  const shownDates = await page.locator('[data-testid^="auction-row-"] td[data-label="경락일"]').allInnerTexts();
   const mdC = D.C.slice(5).replace('-', '-');
   s.c('조회 중 [조회] 버튼 잠김', disabledDuring, { disabledDuring });
   s.c('늦게 온 앞 조건(D.B) 응답이 새 조건(D.C) 결과를 덮지 않음', shownDates.length > 0 && shownDates.every((t) => t.includes(D.C.slice(5, 7)) && t.includes(D.C.slice(8, 10))), { shownDates: shownDates.slice(0, 3), delayed: st.count, mdC });
