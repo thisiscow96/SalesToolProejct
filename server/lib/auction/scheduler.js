@@ -57,9 +57,13 @@ const slotKey = (kst) => kst.toISOString().slice(0, 16).replace(/[-T:]/g, '');
 const kstDateOf = (kst) => kst.toISOString().slice(0, 10);
 
 async function hasFinalOk(db, source, market, date) {
+  // 법인 한정(AUCTION_CORP_CODES): 지금 설정 범위를 덮는 스냅샷(전체 = corp_scope NULL, 또는 범위를 다 포함)만 완료로 본다
+  //   → 한국청과만 받은 날을 설정을 비운 뒤에도 "그날 전체 완료"로 보고 건너뛰지 않음
+  const scope = worker.snapshotScope({ source });
   const r = await db.query(
-    `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND is_latest_ok AND (phase = 'FINAL' OR status = 'HOLIDAY') LIMIT 1`,
-    [source, market, date]
+    `SELECT 1 FROM collect_snapshot WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND is_latest_ok AND (phase = 'FINAL' OR status = 'HOLIDAY')
+        AND (corp_scope IS NULL OR status = 'HOLIDAY' OR string_to_array(corp_scope, ',') @> $4::text[]) LIMIT 1`,
+    [source, market, date, scope ? scope.split(',') : null]
   );
   return !!r.rows[0];
 }
@@ -160,4 +164,4 @@ function startTimer(pool, hooks, env = process.env) {
   return h;
 }
 
-module.exports = { parseCron, cronMatches, latestSlot, planDue, backfill, runBatch, tick, startTimer, slotKey };
+module.exports = { parseCron, cronMatches, latestSlot, planDue, backfill, runBatch, tick, startTimer, slotKey, hasFinalOk };

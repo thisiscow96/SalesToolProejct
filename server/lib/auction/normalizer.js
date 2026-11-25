@@ -261,16 +261,18 @@ async function upsertTrades(client, rows, { snapshotId, rawRef }) {
 }
 
 /** FINAL 수집에서 보이지 않은 이전 건 → withdrawn_at (같은 트랜잭션의 NOW() 보다 이전에 본 건) */
-async function markWithdrawn(client, { source, marketCode, tradeDate, combos = null }) {
+async function markWithdrawn(client, { source, marketCode, tradeDate, combos = null, corps = null }) {
   // 중분류별로 나눠 부른 작업은 이번에 부른 (대분류, 중분류) 안에서만 철회 판정(I B-6 · R-04). combos 없으면 날짜 전체(목업·기존)
+  // 법인 한정 수집(AUCTION_CORP_CODES)이면 그 법인 행만 철회 판정 — 범위 밖 법인의 이미 저장된 행은 건드리지 않는다
   const ls = combos && combos.length ? combos.map((c) => c.itemL) : null;
   const ms = combos && combos.length ? combos.map((c) => c.itemM) : null;
   const r = await client.query(
     `UPDATE auction_trade SET withdrawn_at = NOW(), updated_at = NOW()
       WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND withdrawn_at IS NULL AND last_seen_at < NOW()
         AND ($4::text[] IS NULL OR (item_l_code, item_m_code) IN (SELECT * FROM unnest($4::text[], $5::text[])))
+        AND ($6::text[] IS NULL OR corp_code = ANY($6::text[]))
       RETURNING id`,
-    [source, marketCode, tradeDate, ls, ms]
+    [source, marketCode, tradeDate, ls, ms, corps && corps.length ? corps : null]
   );
   return r.rows.map((x) => x.id);
 }

@@ -12,7 +12,7 @@
  * 스냅샷·작업의 source 는 논리 소스(AT_REALTIME 등). 목업으로 돌면 경락 행·원천 로그의 source 가 'MOCK'(자동 전환 제외 표시).
  */
 const crypto = require('crypto');
-const { createAdapter, secretValues, itemCombos } = require('./adapters');
+const { createAdapter, secretValues, itemCombos, corpCodes, corpScope } = require('./adapters');
 const circuit = require('./circuit');
 const queue = require('./queue');
 const norm = require('./normalizer');
@@ -87,11 +87,16 @@ async function markLatestOk(client, snap) {
 /** 실패 스냅샷(롤백 뒤 별도 기록 — 수집 현황에 보이게) */
 async function recordFailedSnapshot(pool, job, info) {
   await pool.query(
-    `INSERT INTO collect_snapshot (source, market_code, trade_date, phase, job_id, status, pages, error_kind, error_message, finished_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+    `INSERT INTO collect_snapshot (source, market_code, trade_date, phase, job_id, status, pages, error_kind, error_message, finished_at, corp_scope)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)`,
     [job.source, job.market_code, job.trade_date, job.phase, job.id, info.status || 'FAILED', info.pages || 0, info.kind || null,
-      info.message ? scrubSecrets(info.message, secretValues()).slice(0, 500) : null]
+      info.message ? scrubSecrets(info.message, secretValues()).slice(0, 500) : null, snapshotScope(job)]
   );
+}
+
+/** 스냅샷 corp_scope — 실시간 경락(AT_REALTIME)만 법인 한정 대상. 다른 소스·전체 수집은 null */
+function snapshotScope(job, env = process.env) {
+  return job.source === 'AT_REALTIME' ? corpScope(env) : null;
 }
 
 /** 오류 kind → 작업 처리(D 4.3) */
@@ -130,24 +135,38 @@ async function handleFailure(pool, job, kind, message, retryAfterSec) {
  * 조합 하나라도 실패하면 작업 전체를 실패로 돌려 재시도(반쪽 저장 없음). 목업·다른 소스는 예전처럼 한 번에.
  */
 async function fetchAll(pool, job, adapter, effSource) {
-  const useCombos = job.source === 'AT_REALTIME' && adapter.mode !== 'MOCK' && !(job.params && job.params.filter);
-  if (!useCombos) return fetchOne(pool, job, adapter, effSource, (job.params && job.params.filter) || {});
-  const combos = itemCombos();
-  const out = { items: [], total: 0, rawIds: [], pages: 0, combos, perCombo: [] };
+  const filter = (job.params && job.params.filter) || null;
+  const useCombos = job.source === 'AT_REALTIME' && adapter.mode !== 'MOCK' && !filter;
+  // 수집 대상 법인 한정(AUCTION_CORP_CODES) — 실시간 경락만. 법인마다 따로 부르고(cond[corp_cd::EQ]), 완결성(totalCount)은 호출 단위(법인 × 조합)로 본다
+  const corps = job.source === 'AT_REALTIME' ? corpCodes() : [];
+  if (!useCombos && !corps.length) return fetchOne(pool, job, adapter, effSource, filter || {});
+  const combos = useCombos ? itemCombos() : [filter || {}];
+  const units = [];
+  for (const corp of (corps.length ? corps : [null])) for (const c of combos) units.push(corp ? { ...c, corpCode: corp } : { ...c });
+  const label = (u) => [u.corpCode, u.itemL ? `${u.itemL}-${u.itemM}` : null].filter(Boolean).join(' ') || 'all';
+  const out = { items: [], total: 0, rawIds: [], pages: 0, combos: useCombos ? combos : null, corps: corps.length ? corps : null, perCombo: [], outOfScope: 0 };
   const notes = [];
-  for (const c of combos) {
+  for (const u of units) {
     // eslint-disable-next-line no-await-in-loop
-    const r = await fetchOne(pool, job, adapter, effSource, c);
+    const r = await fetchOne(pool, job, adapter, effSource, u);
     out.rawIds.push(...(r.rawIds || []));
     out.pages += r.pages || 0;
-    if (r.error) return { ...r, rawIds: out.rawIds, pages: out.pages, message: `${c.itemL}-${c.itemM}: ${r.message || r.error}` };
-    out.perCombo.push({ combo: `${c.itemL}-${c.itemM}`, total: r.empty ? 0 : r.total, pages: r.pages });
+    if (r.error) return { ...r, rawIds: out.rawIds, pages: out.pages, message: `${label(u)}: ${r.message || r.error}` };
+    const entry = { ...(u.corpCode ? { corp: u.corpCode } : {}), ...(u.itemL ? { combo: `${u.itemL}-${u.itemM}` } : {}), total: r.empty ? 0 : r.total, pages: r.pages };
+    out.perCombo.push(entry);
     if (r.empty) continue;
-    out.items.push(...r.items);
+    let items = r.items;
+    if (u.corpCode) {
+      // 원천이 법인 조건을 무시해도(목업·명세 변경) 범위 밖 법인 행은 저장하지 않는다 — 버린 수는 경고에
+      items = r.items.filter((it) => String(adapter.toNormalized(it).corp_code || '') === u.corpCode);
+      if (items.length !== r.items.length) { entry.out_of_scope = r.items.length - items.length; out.outOfScope += entry.out_of_scope; }
+    }
+    out.items.push(...items);
     out.total += r.total;
-    if (r.partial) { out.partial = true; notes.push(`${c.itemL}-${c.itemM} ${r.note}`); }
+    if (r.partial) { out.partial = true; notes.push(`${label(u)} ${r.note}`); }
   }
-  if (!out.items.length) return { empty: true, rawIds: out.rawIds, pages: out.pages, combos, perCombo: out.perCombo };
+  if (out.outOfScope) notes.push(`법인 조건 밖 행 ${out.outOfScope}건 제외`);
+  if (!out.items.length) return { empty: true, rawIds: out.rawIds, pages: out.pages, combos: out.combos, corps: out.corps, perCombo: out.perCombo, ...(notes.length ? { note: notes.join(' / ') } : {}) };
   if (notes.length) out.note = notes.join(' / ');
   return out;
 }
@@ -253,15 +272,16 @@ async function runCollect(pool, job, hooks) {
       else status = 'EMPTY';
     } else status = fetched.partial ? 'PARTIAL' : 'COMPLETE';
     const s = await client.query(
-      `INSERT INTO collect_snapshot (source, market_code, trade_date, phase, job_id, status, total_count, fetched_count, pages, started_at)
-       VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,$7,$8,NOW()) RETURNING *`,
-      [job.source, job.market_code, job.trade_date, job.phase, job.id, fetched.total || 0, fetched.items ? fetched.items.length : 0, fetched.pages || 0]
+      `INSERT INTO collect_snapshot (source, market_code, trade_date, phase, job_id, status, total_count, fetched_count, pages, started_at, corp_scope)
+       VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,$7,$8,NOW(),$9) RETURNING *`,
+      [job.source, job.market_code, job.trade_date, job.phase, job.id, fetched.total || 0, fetched.items ? fetched.items.length : 0, fetched.pages || 0,
+        fetched.corps ? fetched.corps.join(',') : null]
     );
     snap = s.rows[0];
     const lastRaw = fetched.rawIds[fetched.rawIds.length - 1] || null;
     const up = await norm.upsertTrades(client, rows, { snapshotId: snap.id, rawRef: lastRaw });
     let withdrawn = [];
-    if (job.phase === 'FINAL' && status === 'COMPLETE') withdrawn = await norm.markWithdrawn(client, { source: effSource, marketCode: job.market_code, tradeDate: job.trade_date, combos: fetched.combos || null });
+    if (job.phase === 'FINAL' && status === 'COMPLETE') withdrawn = await norm.markWithdrawn(client, { source: effSource, marketCode: job.market_code, tradeDate: job.trade_date, combos: fetched.combos || null, corps: fetched.corps || null });
     changedTrades = [...up.changedIds, ...withdrawn];
     const flagged = await norm.flagRevisedConversions(client, changedTrades);
     const contentHash = crypto.createHash('sha256').update(rows.map((r) => r.content_hash).sort().join('')).digest('hex');
@@ -279,7 +299,7 @@ async function runCollect(pool, job, hooks) {
     if (['COMPLETE', 'EMPTY', 'HOLIDAY'].includes(status)) latest = await markLatestOk(client, snap);
     Object.assign(result, { snapshot_id: Number(snap.id), snapshot: status, latest_ok: latest, total: fetched.total || 0, fetched: rows.length,
       inserted: up.inserted, updated: up.updated, unchanged: up.unchanged, unmapped: up.unmapped, withdrawn: withdrawn.length, revised_flagged: flagged, pages: fetched.pages,
-      ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(seedMissing ? { mapping_seed_missing: true } : {}), ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
+      ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(fetched.corps ? { corp_scope: fetched.corps.join(',') } : {}), ...(fetched.outOfScope ? { out_of_scope_dropped: fetched.outOfScope } : {}), ...(seedMissing ? { mapping_seed_missing: true } : {}), ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -368,8 +388,11 @@ async function runSettleVerify(pool, job) {
   }
   await circuit.success(pool, 'AT_SETTLE');
   const settle = new Map();
+  // 법인 한정 수집이면 그 법인만 비교(범위 밖 법인을 "누락"으로 보고 재수집을 부르지 않게)
+  const scoped = new Set(corpCodes());
   for (const raw of f.items || []) {
     const x = adapter.toNormalized(raw);
+    if (scoped.size && !scoped.has(String(x.corp_code || ''))) continue;
     const k = `${x.corp_code}|${x.item_s_code}|${x.item_m_code}`;
     settle.set(k, (settle.get(k) || 0) + Number(x.trade_qty || 0));
   }
@@ -618,4 +641,4 @@ async function runJob(pool, job, hooks = {}) {
   }
 }
 
-module.exports = { SEED_MISSING_WARNING, logRaw, runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };
+module.exports = { SEED_MISSING_WARNING, logRaw, snapshotScope, runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };

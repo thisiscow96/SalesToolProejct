@@ -19,10 +19,12 @@ const MOCK_DIR = path.join(__dirname, '..', 'mock');
 
 class AtRealtimeAdapter extends SourceAdapter {
   get source() { return 'AT_REALTIME'; }
-  buildParams({ tradeDate, marketCode, itemL, itemM, itemS, pageNo = 1, numOfRows = 1000 }) {
+  buildParams({ tradeDate, marketCode, corpCode, itemL, itemM, itemS, pageNo = 1, numOfRows = 1000 }) {
     return {
       'cond[trd_clcln_ymd::EQ]': tradeDate,
       'cond[whsl_mrkt_cd::EQ]': marketCode,
+      // 수집 대상 법인 한정(AUCTION_CORP_CODES) — 명세 요청 변수 cond[corp_cd::EQ]. 값이 없으면 붙지 않는다(buildUrl 이 빈 값 생략)
+      'cond[corp_cd::EQ]': corpCode,
       'cond[gds_lclsf_cd::EQ]': itemL,
       'cond[gds_mclsf_cd::EQ]': itemM,
       'cond[gds_sclsf_cd::EQ]': itemS,
@@ -212,9 +214,34 @@ class ReplayAdapter {
     const pageNo = params.pageNo || 1;
     const requestParams = this.buildParams(params);
     const masked = `replay://${this.source}?serviceKey=****&${new URLSearchParams(requestParams).toString()}`;
+    // 법인 조건이 있으면 재생 파일(법인 조건 없이 받은 원문)에서 그 법인 행만 골라 실 API 처럼 다시 쪽을 나눈다
+    if (params.corpCode) return this.real.interpret({ status: 200, body: this.corpBody(params, pageNo), headers: {}, durationMs: 0 }, { masked, pageNo, requestParams });
     const file = path.join(this.dir, fixtureName({ ...params, pageNo }));
     const body = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '{"response":{"header":{"resultCode":"99","resultMsg":"replay 파일 없음"}}}';
     return this.real.interpret({ status: 200, body, headers: {}, durationMs: 0 }, { masked, pageNo, requestParams });
+  }
+
+  /** 재생 — 법인 조건 흉내: 그 조합의 재생 파일 전 쪽을 읽어 corp_cd 로 거른 뒤 numOfRows 로 다시 쪽 나눔(totalCount = 거른 건수) */
+  corpBody(params, pageNo) {
+    const all = [];
+    let header = null;
+    for (let p = 1; p <= 200; p += 1) {
+      const file = path.join(this.dir, fixtureName({ ...params, pageNo: p }));
+      if (!fs.existsSync(file)) break;
+      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const resp = j.response || j;
+      header = header || resp.header;
+      let items = resp.body && resp.body.items;
+      if (items && typeof items === 'object' && !Array.isArray(items)) items = items.item;
+      if (items != null && items !== '') all.push(...(Array.isArray(items) ? items : [items]));
+      const tc = parseInt((resp.body && resp.body.totalCount) || 0, 10) || 0;
+      if (all.length >= tc) break;
+    }
+    if (!header) return '{"response":{"header":{"resultCode":"99","resultMsg":"replay 파일 없음"}}}';
+    const mine = all.filter((x) => String(x.corp_cd) === String(params.corpCode));
+    const size = Number(params.numOfRows) || 1000;
+    const pageItems = mine.slice((pageNo - 1) * size, pageNo * size);
+    return JSON.stringify({ response: { header, body: { items: { item: pageItems }, numOfRows: size, pageNo, totalCount: mine.length } } });
   }
 }
 
@@ -223,6 +250,20 @@ const DEFAULT_ITEM_COMBOS = '12-05,12-06,12-08,13-26,13-02';
 function itemCombos(env = process.env) {
   const raw = String(env.AUCTION_ITEM_COMBOS || DEFAULT_ITEM_COMBOS);
   return raw.split(',').map((x) => x.trim()).filter((x) => /^[0-9A-Z]{2}-[0-9A-Z]{2}$/.test(x)).map((x) => { const [l, m] = x.split('-'); return { itemL: l, itemM: m }; });
+}
+
+/**
+ * 수집 대상 법인 한정 — AUCTION_CORP_CODES(쉼표 구분, 예 '11000105' = 한국청과㈜). 비면 [] = 전체 법인(기존 동작).
+ * 정렬·중복 제거한 목록. 코드 모양(영숫자 1~10자 — auction_trade.corp_code VARCHAR(10))이 아닌 값은 버린다.
+ */
+function corpCodes(env = process.env) {
+  const raw = String(env.AUCTION_CORP_CODES || '');
+  return [...new Set(raw.split(',').map((x) => x.trim()).filter((x) => /^[0-9A-Za-z]{1,10}$/.test(x)))].sort();
+}
+/** 스냅샷 corp_scope 값 — 법인 한정이면 '11000101,11000105', 전체면 null */
+function corpScope(env = process.env) {
+  const c = corpCodes(env);
+  return c.length ? c.join(',') : null;
 }
 
 /** 소스 모드 — 키가 없거나 AUCTION_SOURCE_MODE=mock 이면 MOCK, replay 면 REPLAY(운영 금지). 키 값은 절대 밖으로 내보내지 않는다 */
@@ -249,6 +290,6 @@ function secretValues(env = process.env) {
 }
 
 module.exports = {
-  createAdapter, sourceMode, secretValues, MockAdapter, ReplayAdapter, itemCombos, fixtureName, DEFAULT_ITEM_COMBOS, REPLAY_DIR, AtRealtimeAdapter, AtSettleAdapter, AtCodeAdapter, GarakPriceAdapter,
+  createAdapter, sourceMode, secretValues, MockAdapter, ReplayAdapter, itemCombos, corpCodes, corpScope, fixtureName, DEFAULT_ITEM_COMBOS, REPLAY_DIR, AtRealtimeAdapter, AtSettleAdapter, AtCodeAdapter, GarakPriceAdapter,
   MOCK_DIR, MOCK_BASE_DATE, SCENARIOS, ERROR_SCENARIOS,
 };

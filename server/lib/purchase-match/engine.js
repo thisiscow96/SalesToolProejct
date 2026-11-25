@@ -160,11 +160,14 @@ async function baseReadiness(db, lines, tolOf, market) {
   }
   if (!need.size) return () => 'BASE_NOT_READY';
   const r = await db.query(
-    `SELECT trade_date, status FROM collect_snapshot WHERE source = 'AT_REALTIME' AND market_code = $1 AND trade_date = ANY($2::date[]) AND is_latest_ok`,
+    `SELECT trade_date, status, corp_scope FROM collect_snapshot WHERE source = 'AT_REALTIME' AND market_code = $1 AND trade_date = ANY($2::date[]) AND is_latest_ok`,
     [market, [...need]]
   );
-  const ok = new Map(r.rows.map((x) => [x.trade_date, x.status]));
+  const okAll = new Map(r.rows.map((x) => [x.trade_date, { status: x.status, scope: x.corp_scope ? new Set(String(x.corp_scope).split(',')) : null }]));
   return (l) => {
+    // 법인 한정 수집(corp_scope) 스냅샷은 그 법인 매입서에만 기준 데이터 — 범위 밖 법인 매입서에는 "그날 받음"으로 보지 않는다(휴장은 전체)
+    const ok = new Map();
+    for (const [d, v] of okAll) if (!v.scope || v.status === 'HOLIDAY' || !l.doc_corp_code || v.scope.has(String(l.doc_corp_code))) ok.set(d, v.status);
     const t = tolOf(l);
     const days = [];
     for (let i = -Number(t.date_before_auto); i <= Number(t.date_after_auto); i += 1) {
@@ -479,4 +482,4 @@ async function evaluatePair(client, cx, line, tradeId) {
   return { tol, candidate: { ...c, ...s } };
 }
 
-module.exports = { matchLines, pickTolerance, loadTolerances, planPurchase, lockLines, evaluatePair, diffOf, tolView, resolveProductLinks, ENGINE_VERSION };
+module.exports = { matchLines, pickTolerance, loadTolerances, planPurchase, lockLines, evaluatePair, diffOf, tolView, resolveProductLinks, baseReadiness, ENGINE_VERSION };
