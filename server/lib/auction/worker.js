@@ -34,11 +34,36 @@ function pageSize(env = process.env) {
   const n = parseInt(env.AUCTION_PAGE_SIZE || '', 10);
   return Number.isFinite(n) && n >= 1 && n <= 10000 ? n : 1000;
 }
-/** 확정(FINAL) 마감 기준 시각 — 거래일 다음 날 10:00 KST [가정] */
-function finalReadyAt(tradeDate, env = process.env) {
-  const h = parseInt(env.AUCTION_FINAL_READY_HOUR || '', 10);
-  return kstAt(addDays(tradeDate, 1), Number.isFinite(h) && h >= 0 && h <= 23 ? h : 10);
+const envInt = (v, lo, hi, dflt) => { const n = parseInt(v == null ? '' : String(v), 10); return Number.isFinite(n) && n >= lo && n <= hi ? n : dflt; };
+/** KST 달력 날짜(now 주입 가능) */
+const kstDateOf = (now = new Date()) => new Date(now.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+/** 정산일 경계 시각(KST 시) — 이 시각부터는 "다음 날 정산분" 경매가 시작된다. 실측 첫 낙찰 21:25(정산일 2026-11-24, A 1.1) */
+const cutoverHour = (env = process.env) => envInt(env.AUCTION_SETTLE_CUTOVER_HOUR, 0, 23, 21);
+/**
+ * T-203 L-D1: 경매·수집 대상 정산일 D. KST 시각이 경계(기본 21시) 이후면 KST 날짜 + 1일, 아니면 KST 날짜
+ *   예) 11-23 21:30 → 11-24 · 11-24 00:30 → 11-24 · 11-24 20:59 → 11-24 · 11-24 21:00 → 11-25
+ *   (달력 날짜가 필요한 곳 — 보관 기간 등 — 은 kstToday() 그대로)
+ */
+function settleDateOf(now = new Date(), env = process.env) {
+  const k = new Date(now.getTime() + 9 * 3600 * 1000);
+  const d = k.toISOString().slice(0, 10);
+  return k.getUTCHours() >= cutoverHour(env) ? addDays(d, 1) : d;
 }
+/** 확정(FINAL) 마감 기준 시각 — 정산일 D 당일 06:00 KST(L-D3. 전 법인 마지막 적재 01:42 + 여유, A 2.2). 옛 env AUCTION_FINAL_READY_HOUR(D+1 기준)는 읽지 않는다 */
+const finalReadyHour = (env = process.env) => envInt(env.AUCTION_FINAL_READY_HOUR_D, 0, 23, 6);
+function finalReadyAt(tradeDate, env = process.env) {
+  return kstAt(tradeDate, finalReadyHour(env));
+}
+/** 경매 창·완료 판정 수치(A 2.2) — 창 D-1 START_HOUR:00 ~ D END_HOUR:00, 무변화 SETTLE_MIN 분이면 완료 */
+function liveConfig(env = process.env) {
+  return {
+    startHour: envInt(env.AUCTION_LIVE_START_HOUR, 12, 23, 21),
+    endHour: envInt(env.AUCTION_LIVE_END_HOUR, 0, 11, 2),
+    settleMin: envInt(env.AUCTION_LIVE_SETTLE_MIN, 10, 600, 40),
+  };
+}
+/** 테스트 시계 주입(hooks.now) — 없으면 실제 시각 */
+const clockOf = (hooks) => (hooks && typeof hooks.now === 'function' ? hooks.now() : new Date());
 const marketCode = (env = process.env) => env.AUCTION_MARKET_CODE || '110001';
 
 /** 목업 시나리오 주입은 목업 모드 + 테스트 DB(AUCTION_MOCK_CONTROL=true)에서만 */
@@ -200,9 +225,95 @@ async function fetchOne(pool, job, adapter, effSource, filter) {
   return { error: 'BAD_RESPONSE', message: 'unreachable' };
 }
 
+/**
+ * T-203 033 정산일 하루 상태 — WAITING → LIVE → SETTLED → CONFIRMED (+ NO_TRADE · HOLIDAY), A 2.1·2.2
+ *  - 비어 있지 않은 응답 첫 회 → LIVE(first_row_at·판정 시계 시작)
+ *  - 판정 시계 last_change_at = 호출 단위(법인×분류) totalCount 또는 받은 행의 max(mdfcn_dt)가 바뀐 마지막 시각
+ *  - 창 폴링·01:00 배치(params.live)가 COMPLETE 이고 now − last_change_at ≥ 무변화 분(기본 40) → SETTLED(NO_CHANGE), 바로 FINAL 1회(부르는 쪽)
+ *  - FINAL COMPLETE 이고 마감 기준 시각(D 06:00) 뒤 → CONFIRMED. FINAL 빈 응답이 그 뒤면 NO_TRADE
+ *  - 상태는 되돌아가지 않는다(SETTLED·CONFIRMED 뒤 새 행이 와도 시계만 갱신)
+ */
+const dayKey = (job) => [job.source, job.market_code, job.trade_date, snapshotScope(job) || ''];
+function daySignature(info) {
+  const totals = {};
+  if (info.perCombo && info.perCombo.length) {
+    for (const u of info.perCombo) totals[[u.corp || '', u.combo || 'all'].join(' ').trim() || 'all'] = u.total;
+  } else totals.all = info.empty ? 0 : info.total;
+  let max = null;
+  for (const r of info.rows || []) {
+    const t = r.source_modified_at ? Date.parse(r.source_modified_at) : NaN;
+    if (Number.isFinite(t) && (max == null || t > max)) max = t;
+  }
+  return { totals, maxMdfcn: max == null ? null : new Date(max) };
+}
+const sameTotals = (a, b) => JSON.stringify(Object.keys(a || {}).sort().map((k) => [k, Number(a[k])]))
+  === JSON.stringify(Object.keys(b || {}).sort().map((k) => [k, Number(b[k])]));
+
+async function updateDayState(db, job, info, now) {
+  const cfg = liveConfig();
+  const cur = (await db.query(
+    `SELECT * FROM collect_day_state WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND corp_scope = $4 FOR UPDATE`, dayKey(job))).rows[0] || null;
+  if (cur && cur.state === 'HOLIDAY') return { state: 'HOLIDAY', settledNow: false };
+  const sig = daySignature(info);
+  const nonEmpty = !info.empty && (info.status === 'COMPLETE' || info.status === 'PARTIAL');
+  const prevMax = cur && cur.last_max_mdfcn ? new Date(cur.last_max_mdfcn).getTime() : null;
+  const changed = !cur || !sameTotals(sig.totals, cur.last_totals) || (sig.maxMdfcn ? sig.maxMdfcn.getTime() : null) !== prevMax;
+  let state = cur ? cur.state : null;
+  let firstRowAt = cur ? cur.first_row_at : null;
+  let lastChangeAt = cur ? cur.last_change_at : null;
+  let settledAt = cur ? cur.settled_at : null;
+  let reason = cur ? cur.settle_reason : null;
+  let confirmedAt = cur ? cur.confirmed_at : null;
+  let settledNow = false;
+  if (nonEmpty) {
+    if (!state || state === 'WAITING' || state === 'NO_TRADE') { state = 'LIVE'; firstRowAt = firstRowAt || now; lastChangeAt = now; } else if (changed) lastChangeAt = now;
+  } else if (!state) state = 'WAITING';
+  else if (changed && state === 'LIVE') lastChangeAt = now;
+  const ready = now >= finalReadyAt(job.trade_date);
+  if (job.phase === 'FINAL' && info.status === 'COMPLETE' && ready) {
+    if (state !== 'CONFIRMED') { state = 'CONFIRMED'; confirmedAt = now; settledAt = settledAt || now; }
+  } else if (job.phase === 'FINAL' && info.empty && ready && (state === 'WAITING' || state === 'NO_TRADE')) {
+    state = 'NO_TRADE';
+  } else if (state === 'LIVE' && job.params && job.params.live && info.status === 'COMPLETE' && lastChangeAt
+    && now.getTime() - new Date(lastChangeAt).getTime() >= cfg.settleMin * 60000) {
+    state = 'SETTLED'; settledAt = now; reason = 'NO_CHANGE'; settledNow = true;
+  }
+  await db.query(
+    `INSERT INTO collect_day_state (source, market_code, trade_date, corp_scope, state, first_row_at, last_change_at, last_totals, last_max_mdfcn, last_rows,
+                                    last_polled_at, last_job_id, polls, settled_at, settle_reason, confirmed_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,1,$13,$14,$15,NOW())
+     ON CONFLICT (source, market_code, trade_date, corp_scope) DO UPDATE SET state = EXCLUDED.state, first_row_at = EXCLUDED.first_row_at,
+       last_change_at = EXCLUDED.last_change_at, last_totals = EXCLUDED.last_totals, last_max_mdfcn = EXCLUDED.last_max_mdfcn, last_rows = EXCLUDED.last_rows,
+       last_polled_at = EXCLUDED.last_polled_at, last_job_id = EXCLUDED.last_job_id, polls = collect_day_state.polls + 1, settled_at = EXCLUDED.settled_at,
+       settle_reason = EXCLUDED.settle_reason, confirmed_at = EXCLUDED.confirmed_at, updated_at = NOW()`,
+    [...dayKey(job), state, firstRowAt, lastChangeAt, JSON.stringify(sig.totals), sig.maxMdfcn, (info.rows || []).length, now, job.id, settledAt, reason, confirmedAt]
+  );
+  return { state, settledNow, changed };
+}
+
+/** 휴장 — 하루 상태 HOLIDAY(그 뒤 창 폴링·01:00 배치는 계획하지 않음, AC-L-15) */
+async function setDayHoliday(db, job, now) {
+  if (job.source !== 'AT_REALTIME') return;
+  await db.query(
+    `INSERT INTO collect_day_state (source, market_code, trade_date, corp_scope, state, last_polled_at, last_job_id, polls, updated_at)
+     VALUES ($1,$2,$3,$4,'HOLIDAY',$5,$6,0,NOW())
+     ON CONFLICT (source, market_code, trade_date, corp_scope) DO UPDATE SET state = 'HOLIDAY', updated_at = NOW()`,
+    [...dayKey(job), now, job.id]
+  );
+}
+
+/** 하루 상태 읽기(스케줄러·수동 받기·수집 현황) — 지금 법인 범위 기준 */
+async function dayState(db, { source = 'AT_REALTIME', market = marketCode(), date }) {
+  const r = await db.query(`SELECT * FROM collect_day_state WHERE source = $1 AND market_code = $2 AND trade_date = $3 AND corp_scope = $4`,
+    [source, market, date, snapshotScope({ source }) || '']);
+  return r.rows[0] || null;
+}
+
 async function runCollect(pool, job, hooks) {
   const scenario = mockScenarioOf(job);
-  const adapter = createAdapter(job.source, { scenario });
+  // 테스트 주입(hooks.createAdapter — 시계에 맞춰 적재되는 재생 어댑터 등). 운영 경로는 언제나 createAdapter
+  const adapter = hooks && typeof hooks.createAdapter === 'function' ? hooks.createAdapter(job.source, { scenario }) : createAdapter(job.source, { scenario });
+  const now = clockOf(hooks);
   const effSource = adapter.mode === 'MOCK' ? 'MOCK' : job.source;
   const result = { source_mode: adapter.mode };
 
@@ -215,6 +326,7 @@ async function runCollect(pool, job, hooks) {
         [job.source, job.market_code, job.trade_date, job.phase, job.id]
       );
       await markLatestOk(c, s.rows[0]);
+      await setDayHoliday(c, job, now);
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
     await queue.finish(pool, job.id, { status: 'DONE', result: { ...result, snapshot: 'HOLIDAY' } });
@@ -256,6 +368,7 @@ async function runCollect(pool, job, hooks) {
 
   const client = await pool.connect();
   let snap;
+  let dayInfo = null;
   let changedTrades = [];
   try {
     await client.query('BEGIN');
@@ -267,8 +380,8 @@ async function runCollect(pool, job, hooks) {
     }
     let status;
     if (fetched.empty) {
-      if (new Date() < finalReadyAt(job.trade_date) && (job.phase === 'FINAL' || job.trade_date >= kstToday())) status = 'NOT_YET';
-      else if (job.phase === 'INTRADAY' && job.trade_date >= kstToday()) status = 'NOT_YET';
+      if (now < finalReadyAt(job.trade_date) && (job.phase === 'FINAL' || job.trade_date >= kstDateOf(now))) status = 'NOT_YET';
+      else if (job.phase === 'INTRADAY' && job.trade_date >= kstDateOf(now)) status = 'NOT_YET';
       else status = 'EMPTY';
     } else status = fetched.partial ? 'PARTIAL' : 'COMPLETE';
     const s = await client.query(
@@ -297,6 +410,9 @@ async function runCollect(pool, job, hooks) {
     snap.status = status;
     let latest = false;
     if (['COMPLETE', 'EMPTY', 'HOLIDAY'].includes(status)) latest = await markLatestOk(client, snap);
+    // T-203 033 하루 상태·완료 판정 — 이 수집을 저장하는 트랜잭션 안에서(A 2.2). 실패한 수집은 여기까지 오지 않으므로 판정 시계가 바뀌지 않는다(AC-L-17)
+    if (job.source === 'AT_REALTIME') dayInfo = await updateDayState(client, job, { status, empty: !!fetched.empty, perCombo: fetched.perCombo, total: fetched.total || 0, rows }, now);
+    if (dayInfo) result.day_state = dayInfo.state;
     Object.assign(result, { snapshot_id: Number(snap.id), snapshot: status, latest_ok: latest, total: fetched.total || 0, fetched: rows.length,
       inserted: up.inserted, updated: up.updated, unchanged: up.unchanged, unmapped: up.unmapped, withdrawn: withdrawn.length, revised_flagged: flagged, pages: fetched.pages,
       ignored: up.ignored, stale_rows: up.stale, dup_dropped: dd.dropped, ...(fetched.corps ? { corp_scope: fetched.corps.join(',') } : {}), ...(fetched.outOfScope ? { out_of_scope_dropped: fetched.outOfScope } : {}), ...(seedMissing ? { mapping_seed_missing: true } : {}), ...(fetched.perCombo ? { combos: fetched.perCombo } : {}) });
@@ -312,7 +428,9 @@ async function runCollect(pool, job, hooks) {
   await queue.finish(pool, job.id, { status: 'DONE', result });
 
   // 다음 할 일 — 빈 응답 재확인·FINAL 뒤 자동 재대조
-  if (snap.status === 'NOT_YET') {
+  // 창 폴링(live)·오늘 정산분 지금 받기는 10분 슬롯이 다시 부르므로 1시간 뒤 재수집을 따로 넣지 않는다
+  const liveManaged = job.params && (job.params.live || (job.params.reason === 'MANUAL' && job.trade_date === settleDateOf(now)));
+  if (snap.status === 'NOT_YET' && !liveManaged) {
     const at = new Date(Date.now() + 3600 * 1000);
     const slot = new Date(at.getTime() + 9 * 3600 * 1000).toISOString().slice(0, 13).replace(/[-T]/g, '');
     await queue.enqueue(pool, { job_type: 'COLLECT', source: job.source, market_code: job.market_code, trade_date: job.trade_date, phase: job.phase,
@@ -320,7 +438,12 @@ async function runCollect(pool, job, hooks) {
   } else if (snap.status === 'EMPTY' && !job.params.recheck) {
     await queue.enqueue(pool, { job_type: 'COLLECT', source: job.source, market_code: job.market_code, trade_date: job.trade_date, phase: 'FINAL',
       params: { ...job.params, recheck: true }, dedupe_key: `COLLECT:${job.source}:${job.market_code}:${job.trade_date}:FINAL:RECHECK`,
-      run_after: kstAt(addDays(kstToday(), 1), 11) });
+      run_after: kstAt(addDays(kstDateOf(now), 1), 11) });
+  }
+  if (dayInfo && dayInfo.settledNow) {
+    // 완료 판정 → 바로 확정(FINAL) 수집 1회(철회 정리·자동 재대조는 기존 FINAL 흐름 그대로). 하루 1건(dedupe)
+    await queue.enqueue(pool, { job_type: 'COLLECT', source: job.source, market_code: job.market_code, trade_date: job.trade_date, phase: 'FINAL',
+      params: { reason: 'SETTLED', live: true }, dedupe_key: `COLLECT:${job.source}:${job.market_code}:${job.trade_date}:FINAL:SETTLED` });
   }
   if (job.phase === 'FINAL' && snap.status === 'COMPLETE' && result.latest_ok) {
     await queue.enqueue(pool, { job_type: 'REMATCH', source: job.source, market_code: job.market_code, trade_date: job.trade_date,
@@ -641,4 +764,4 @@ async function runJob(pool, job, hooks = {}) {
   }
 }
 
-module.exports = { SEED_MISSING_WARNING, logRaw, snapshotScope, runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };
+module.exports = { finalReadyHour, isHoliday, settleDateOf, kstDateOf, cutoverHour, liveConfig, clockOf, updateDayState, setDayHoliday, dayState, daySignature, SEED_MISSING_WARNING, logRaw, snapshotScope, runJob, runCollect, fetchAll, finalReadyAt, kstToday, addDays, kstAt, marketCode, pageSize, mockScenarioOf, markLatestOk, tradeRetention };

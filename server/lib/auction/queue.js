@@ -43,16 +43,17 @@ async function enqueue(db, job) {
 }
 
 /** 실행할 작업 하나 가져오기 — 짧은 트랜잭션 */
-async function claim(pool, { types = null } = {}) {
+async function claim(pool, { types = null, ids = null } = {}) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
     const r = await c.query(
       `SELECT id FROM collect_job
         WHERE status = 'QUEUED' AND run_after <= NOW() AND ($1::text[] IS NULL OR job_type = ANY($1::text[]))
+          AND ($2::bigint[] IS NULL OR id = ANY($2::bigint[])) -- 지금 받기: 방금 넣은 작업만(R-98 즉시 실행)
         ORDER BY run_after, id
         FOR UPDATE SKIP LOCKED LIMIT 1`,
-      [types]
+      [types, ids && ids.length ? ids : null]
     );
     if (!r.rows[0]) { await c.query('COMMIT'); return null; }
     const u = await c.query(

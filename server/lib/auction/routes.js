@@ -101,6 +101,8 @@ async function rangeMeta(db, { from, to, source = 'AT_REALTIME', market }) {
 function registerAuctionRoutes(app, deps) {
   const { pool, getUserId, getUserIdAndAdmin, recordAudit, hooks } = deps;
   const market = () => worker.marketCode();
+  // 시계 — 테스트가 deps.now 로 주입(서버는 실제 시각). 정산일·창 판단에만 쓴다(5분 제한·멱등 키는 DB·실제 시각)
+  const nowOf = () => (typeof deps.now === 'function' ? deps.now() : new Date());
 
   async function needUser(req, res) {
     const userId = await getUserId(req);
@@ -268,17 +270,59 @@ function registerAuctionRoutes(app, deps) {
     } catch (err) { return fail(res, err, '법인 목록을 불러오지 못했습니다.'); }
   });
 
+  /** 오늘·어제 정산분 수집 상태(R-96 live[]) — 하루 상태 + 진행 중 작업 + 마지막 수집 작업 + 다음 수집 예정 시각 */
+  async function liveStatus(now) {
+    const cfg = worker.liveConfig();
+    const today = worker.settleDateOf(now);
+    const dates = [today, worker.addDays(today, -1)];
+    const sch = await pool.query(`SELECT job_type, cron_text FROM collect_schedule WHERE active AND source = 'AT_REALTIME' AND job_type LIKE 'COLLECT\\_%'`);
+    const cnt = await pool.query(
+      `SELECT trade_date, COUNT(*)::int AS n FROM auction_trade WHERE market_code = $1 AND trade_date = ANY($2::date[]) AND withdrawn_at IS NULL GROUP BY 1`, [market(), dates]);
+    const nBy = new Map(cnt.rows.map((x) => [x.trade_date, x.n]));
+    const days = [];
+    for (const [i, d] of dates.entries()) {
+      /* eslint-disable no-await-in-loop */
+      const st = await worker.dayState(pool, { source: 'AT_REALTIME', market: market(), date: d });
+      const hol = await worker.isHoliday(pool, market(), d);
+      const act = await scheduler.activeCollect(pool, { source: 'AT_REALTIME', market: market(), date: d, now });
+      const lj = await pool.query(
+        `SELECT id, status, phase, result, finished_at, params->>'reason' AS reason FROM collect_job WHERE job_type = 'COLLECT' AND source = 'AT_REALTIME' AND market_code = $1 AND trade_date = $2
+          AND status IN ('DONE','FAILED','DEAD') ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`, [market(), d]);
+      /* eslint-enable no-await-in-loop */
+      const state = st ? st.state : (hol ? 'HOLIDAY' : 'WAITING');
+      const last = lj.rows[0];
+      days.push({
+        settle_date: d, label: i === 0 ? 'today' : 'yesterday', state, state_recorded: !!st,
+        rows: nBy.get(d) || 0,
+        first_row_at: iso(st && st.first_row_at), last_polled_at: iso(st && st.last_polled_at), last_change_at: iso(st && st.last_change_at),
+        settled_at: iso(st && st.settled_at), settle_reason: st ? st.settle_reason : null, confirmed_at: iso(st && st.confirmed_at),
+        next_run_at: iso(scheduler.nextRunFor(sch.rows, { date: d, state, now })),
+        running: act ? { job_id: act.id, status: act.status, phase: act.phase } : null,
+        last_job: last ? { job_id: Number(last.id), status: last.status, phase: last.phase, reason: last.reason || null, finished_at: iso(last.finished_at),
+          snapshot: last.result ? last.result.snapshot || null : null, inserted: last.result ? last.result.inserted ?? null : null, updated: last.result ? last.result.updated ?? null : null,
+          withdrawn: last.result ? last.result.withdrawn ?? null : null } : null,
+      });
+    }
+    return {
+      config: { settle_cutover_hour: worker.cutoverHour(), window_start_hour: cfg.startHour, window_end_hour: cfg.endHour, settle_quiet_min: cfg.settleMin,
+        final_ready_hour: worker.finalReadyHour() },
+      days,
+    };
+  }
+
   // ---- R-96 수집 현황 ----
   app.get('/api/auction/sync/status', async (req, res) => {
     if (!(await needUser(req, res))) return undefined;
     // 법인 한정 값(AUCTION_CORP_CODES)은 관리자에게만 보인다 — 서버 설정값이라 일반 사용자 응답에는 넣지 않음
     const admin = await getUserIdAndAdmin(req).catch(() => null);
     const isAdmin = !!(admin && admin.isAdmin);
-    const today = worker.kstToday();
+    const now = nowOf();
+    const today = worker.settleDateOf(now); // L-D5: 기본 기간 끝 = 오늘 정산분(21시 뒤면 다음 날)
     const from = String(req.query.date_from || worker.addDays(today, -6));
     const to = String(req.query.date_to || today);
     if (!validYmd(from) || !validYmd(to) || from > to || daysBetween(from, to) > 30) return vErr(res, 'date_from', '기간은 31일 이내의 YYYY-MM-DD 로 지정하세요.');
     try {
+      const live = await liveStatus(now);
       const c = await pool.query(`SELECT source, state, consecutive_failures, next_probe_at, disabled_reason, disabled_until, last_error_kind, last_success_at FROM ext_circuit_state ORDER BY source`);
       const d = await pool.query(
         `SELECT DISTINCT ON (trade_date, source, phase) trade_date, source, phase, status, total_count, fetched_count, unmapped, verify_warning, error_kind, finished_at, is_latest_ok, corp_scope
@@ -297,6 +341,10 @@ function registerAuctionRoutes(app, deps) {
         days: d.rows.map(({ corp_scope: cs, ...x }) => ({ ...x, finished_at: iso(x.finished_at), ...(isAdmin ? { corp_scope: cs || null } : {}) })),
         queue: qj.rows.map((x) => ({ ...x, id: Number(x.id), run_after: iso(x.run_after), created_at: iso(x.created_at) })),
         source_mode: sourceMode('AT_REALTIME'),
+        // T-203 033 경매 직후 수집 상태(오늘·어제 정산분) — 화면 "수집 상태 줄"·"지금 받기" 뒤 진행 확인
+        settle_today: today,
+        live_config: live.config,
+        live: live.days,
         // 관리자만: 지금 수집 대상 법인 한정 값(null = 전체 법인). days[].corp_scope = 그 스냅샷이 받은 범위
         ...(isAdmin ? { corp_scope: corpScope() } : {}),
       });
@@ -386,7 +434,9 @@ function registerAuctionRoutes(app, deps) {
     const b = req.body || {};
     const source = String(b.source || 'AT_REALTIME').toUpperCase();
     if (!SOURCES.includes(source)) return vErr(res, 'source', '소스 값이 올바르지 않습니다(AT_REALTIME·GARAK_PRICE).');
-    const today = worker.kstToday();
+    const now = nowOf();
+    // L-D4: 상한 = 오늘 정산분(settleDateOf — 21시 뒤면 다음 날). 밤 22시에 "오늘 밤 진행분"을 받을 수 있다
+    const today = worker.settleDateOf(now);
     const from = String(b.date_from || b.date || today);
     const to = String(b.date_to || b.date || from);
     if (!validYmd(from)) return vErr(res, 'date_from', '최대 31일, 미래 날짜는 지정할 수 없습니다.');
@@ -409,9 +459,19 @@ function registerAuctionRoutes(app, deps) {
       const minute = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace(/[-T:]/g, '');
       const dates = [];
       for (let d = from; d <= to; d = worker.addDays(d, 1)) dates.push(d);
+      // phase 기본값: 오늘 정산분이 아직 경매 전·진행 중(WAITING·LIVE)이면 INTRADAY(철회 처리 안 함), 완료 판정·확정·지난 날이면 FINAL
+      const states = new Map();
+      if (source === 'AT_REALTIME') {
+        for (const d of dates) {
+          // eslint-disable-next-line no-await-in-loop
+          const st = await worker.dayState(pool, { source, market: market(), date: d });
+          if (st) states.set(d, st.state);
+        }
+      }
       const plan = dates.map((d) => {
-        const phase = phaseIn || (d < today ? 'FINAL' : 'INTRADAY');
-        return { d, phase, key: `COLLECT:${source}:${market()}:${d}:${phase}:MANUAL:${auth.userId}:${minute}` };
+        const st = states.get(d);
+        const phase = phaseIn || (d < today || (st && ['SETTLED', 'CONFIRMED', 'NO_TRADE'].includes(st)) ? 'FINAL' : 'INTRADAY');
+        return { d, phase, st, key: `COLLECT:${source}:${market()}:${d}:${phase}:MANUAL:${auth.userId}:${minute}` };
       });
       const dup = await pool.query(`SELECT dedupe_key FROM collect_job WHERE dedupe_key = ANY($1::text[])`, [plan.map((p) => p.key)]);
       const dupSet = new Set(dup.rows.map((r) => r.dedupe_key));
@@ -437,7 +497,12 @@ function registerAuctionRoutes(app, deps) {
         // eslint-disable-next-line no-await-in-loop
         const hol = await pool.query(`SELECT 1 FROM market_calendar WHERE market_code = $1 AND cal_date = $2 AND kind = 'HOLIDAY'`, [market(), p.d]);
         if (hol.rows[0] && !force) { skipped.push({ target_date: p.d, reason: 'HOLIDAY' }); continue; }
-        if (!force) {
+        // 같은 날짜 수집이 이미 돌고 있으면(스케줄 폴링·01:00 배치 포함) 새로 넣지 않는다 — 같은 시각 5호출을 두 번 쓰지 않게(AC-L-20)
+        // eslint-disable-next-line no-await-in-loop
+        const act = await scheduler.activeCollect(pool, { source, market: market(), date: p.d, now });
+        if (act) { skipped.push({ target_date: p.d, reason: 'ALREADY_RUNNING', job_id: act.id, status: act.status }); continue; }
+        // 이미 확정: 하루 상태가 아직 경매 전·진행 중·완료 판정(SETTLED, 06:00 확인 전)이면 건너뛰지 않는다(AC-L-10). 하루 상태가 없는 날은 예전 기준
+        if (!force && !(p.st && ['WAITING', 'LIVE', 'SETTLED'].includes(p.st))) {
           // 법인 한정(AUCTION_CORP_CODES): 지금 설정 범위를 덮는 완료 스냅샷만 "이미 받음"(전체 = corp_scope NULL, 또는 범위를 다 포함)
           const scope = worker.snapshotScope({ source });
           // eslint-disable-next-line no-await-in-loop
@@ -454,13 +519,17 @@ function registerAuctionRoutes(app, deps) {
         const r = await queue.enqueue(pool, { job_type: 'COLLECT', source, market_code: market(), trade_date: p.d, phase: p.phase, params, dedupe_key: p.key,
           requested_by_user_id: auth.userId, requested_by_staff_id: auth.staffId || null });
         if (r.created) queued.push({ id: r.id, target_date: p.d, phase: p.phase });
-        else skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED' });
+        else skipped.push({ target_date: p.d, reason: 'ALREADY_QUEUED', job_id: r.id });
       }
       if (queued.length) {
         await recordAudit(pool, { userId: auth.userId, entityType: 'market_sync', entityId: queued[0].id, action: 'sync', before: null,
           after: { source, date_from: from, date_to: to, jobs: queued.length, force }, note: `수동 동기화 ${source} ${from}~${to} ${queued.length}건` });
       }
-      return res.status(202).json({ ok: true, data: { queued, skipped } });
+      // L-D7 즉시 실행: 응답을 먼저 보내고 같은 프로세스에서 방금 넣은 작업만 1회 돌린다(타이머와 겹치지 않게 scheduler.exclusive). 결과는 R-96 live[].last_job 으로 본다
+      const runNow = queued.length > 0 && String(process.env.AUCTION_SYNC_RUN_NOW || 'true').toLowerCase() !== 'false';
+      res.status(202).json({ ok: true, data: { queued, skipped, settle_today: today, run_now: runNow } });
+      if (runNow) scheduler.runNow(pool, queued.map((x) => x.id), { hooks }).catch((e) => console.error('[auction] 즉시 실행 오류:', e.message));
+      return undefined;
     } catch (err) { return fail(res, err, '수동 동기화를 넣지 못했습니다.'); }
   });
 
@@ -596,7 +665,7 @@ function registerAuctionRoutes(app, deps) {
     const b = req.body || {};
     const jt = String(b.job_type || '');
     const src = String(b.source || '');
-    if (!['COLLECT_INTRADAY', 'COLLECT_FINAL', 'SETTLE_VERIFY', 'CODE_SYNC', 'PURGE_RAW'].includes(jt)) return vErr(res, 'job_type', '작업 종류가 올바르지 않습니다.');
+    if (!['COLLECT_INTRADAY', 'COLLECT_FINAL', 'COLLECT_NIGHTLY', 'COLLECT_WINDOW_END', 'SETTLE_VERIFY', 'CODE_SYNC', 'PURGE_RAW'].includes(jt)) return vErr(res, 'job_type', '작업 종류가 올바르지 않습니다.');
     if (b.cron_text != null && !scheduler.parseCron(b.cron_text)) return vErr(res, 'cron_text', 'cron 형식(분 시 일 월 요일 5칸)이 올바르지 않습니다.', 'BAD_CRON');
     if (b.active != null && typeof b.active !== 'boolean') return vErr(res, 'active', 'active 는 true/false 입니다.');
     try {
