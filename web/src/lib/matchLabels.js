@@ -15,7 +15,7 @@ export function kstAddDays(ymd, days) {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
-export const md = (ymd) => (ymd ? String(ymd).slice(5, 10) : '-');
+export const md = (ymd) => (ymd ? String(ymd).slice(0, 10) : '-'); // 경락·거래 날짜는 항상 YYYY-MM-DD(사용자 지시 2026-11-25)
 /** ISO 시각 → KST "MM-DD HH:mm" */
 export function kstTime(iso, withDate = true) {
   if (!iso) return '-';

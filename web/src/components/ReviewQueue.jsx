@@ -124,7 +124,7 @@ export default function ReviewQueue({ onOpenDoc, onChanged, busyNav }) {
               const d = l.top_diff || l.diff || {};
               return (
                 <tr key={l.id} data-testid={`pdoc-review-row-${l.id}`}>
-                  <td data-label="거래일">{md(l.trade_date)}</td>
+                  <td data-label="거래일">{l.trade_date}</td>
                   <td data-label="매입서-줄">
                     <button type="button" className="pm-link" disabled={busyNav || rowBusy.any} onClick={() => onOpenDoc(l.doc_id)} data-testid={`pdoc-review-open-${l.id}`}>
                       {l.doc_no || `#${l.doc_id}`}-{l.line_no}

@@ -193,7 +193,7 @@ export default function AuctionSyncStatus() {
             return (
               <li key={`${d.trade_date}-${d.source}-${d.phase}`}>
                 <Tone tone={s.tone} title={`${SOURCE_LABEL[d.source] || d.source}${d.finished_at ? ` · ${kstTime(d.finished_at)} 끝남` : ''}${d.verify_warning ? ` · ${d.verify_warning}` : ''}`}>
-                  {md(d.trade_date)} {PHASE_SHORT[d.phase] || d.phase} {s.label}
+                  {d.trade_date} {PHASE_SHORT[d.phase] || d.phase} {s.label}
                   {d.status === 'COMPLETE' && ` ${won(d.fetched_count)}건`}
                   {d.unmapped > 0 && ` (미매핑 ${d.unmapped})`}
                 </Tone>

@@ -268,7 +268,7 @@ function AuctionTrades() {
             <span className="pm-days">
               {days.map((d) => (
                 <Tone key={`${d.trade_date}-${d.source}`} tone={SNAPSHOT_STATUS[d.status]?.tone || 'neutral'} title={`${SOURCE_LABEL[d.source] || d.source} · ${d.fetched_count ?? 0}건`}>
-                  {md(d.trade_date)} {SNAPSHOT_STATUS[d.status]?.label || d.status}
+                  {d.trade_date} {SNAPSHOT_STATUS[d.status]?.label || d.status}
                 </Tone>
               ))}
             </span>
@@ -288,6 +288,7 @@ function AuctionTrades() {
               <th>낙찰시각</th>
               <th>법인</th>
               <th className="pm-col-ref">원표번호</th>
+              <th className="pm-col-ref">경매번호</th>
               <th>품종</th>
               <th>등급</th>
               <th>규격</th>
@@ -299,11 +300,11 @@ function AuctionTrades() {
           </thead>
           <tbody>
             {loading && rows.length === 0 && (
-              <tr><td colSpan={11} className="main-loading">불러오는 중…</td></tr>
+              <tr><td colSpan={12} className="main-loading">불러오는 중…</td></tr>
             )}
             {!loading && res && rows.length === 0 && (
               <tr>
-                <td colSpan={11} className="main-empty-cell" data-testid="auction-empty">
+                <td colSpan={12} className="main-empty-cell" data-testid="auction-empty">
                   {emptyDay ? EMPTY_REASON[emptyDay.status] : '조건에 맞는 경락이 없습니다.'}
                 </td>
               </tr>
@@ -318,13 +319,14 @@ function AuctionTrades() {
                 aria-label={`경락 ${r.id} 상세 보기`}
                 data-testid={`auction-row-${r.id}`}
               >
-                <td data-label="경락일">{md(r.trade_date)}</td>
+                <td data-label="경락일">{r.trade_date}</td>
                 <td data-label="낙찰시각">{kstTime(r.auction_at, false)}</td>
                 <td data-label="법인">
                   {r.corp_name || r.corp_code || '-'}
                   {r.corp_variety_name && <div className="pm-muted" title="법인이 쓴 품목명(매입서와 대조할 때 참고)">{r.corp_item_name ? `${r.corp_item_name}/` : ''}{r.corp_variety_name}</div>}
                 </td>
                 <td className="pm-mono pm-col-ref" data-label="원표번호">{r.shipment_no || <span className="pm-muted">-</span>}</td>
+                <td className="pm-mono pm-col-ref" data-label="경매번호">{r.auction_seq || <span className="pm-muted">-</span>}</td>
                 <td data-label="품종">
                   {r.item_label ? r.item_label.split('·').pop().trim() : <span className="pm-muted" title="품목 매핑 없음">{r.item_name_raw}</span>}
                   {r.revision > 1 && <Tone tone="info" title="원천에서 값이 바뀌었습니다(행을 눌러 이전 값 보기)">값 바뀜</Tone>}

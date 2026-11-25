@@ -119,7 +119,7 @@ export function MatchCandidateModal({ line, onClose, onDone, onLine }) {
   return (
     <MatchModal
       title="후보"
-      sub={`${lineTitle(l)} (${md(l.trade_date)}${l.supplier_name ? `, ${l.supplier_name}` : ''})`}
+      sub={`${lineTitle(l)} (${l.trade_date}${l.supplier_name ? `, ${l.supplier_name}` : ''})`}
       busy={busy}
       onClose={onClose}
       testid="pdoc-cand-modal"
