@@ -1069,6 +1069,8 @@ app.get('/api/purchases', async (req, res) => {
              pu.entry_kind, pu.external_ref, pu.migration_batch_id, -- T-403 이관 표시
              pu.purchase_doc_line_id, -- T-203 매입서 매입전환으로 만든 매입(화면 "매입서" 배지)
              (SELECT pdl.doc_id FROM purchase_doc_line pdl WHERE pdl.id = pu.purchase_doc_line_id AND pdl.user_id = pu.user_id) AS purchase_doc_id,
+             (SELECT pd.input_kind FROM purchase_doc_line pdl JOIN purchase_doc pd ON pd.id = pdl.doc_id
+               WHERE pdl.id = pu.purchase_doc_line_id AND pdl.user_id = pu.user_id) AS purchase_doc_kind, -- T-203 032: AUCTION = 경락 조회에서 직접 전환
              (CASE WHEN pu.status = 'active' THEN GREATEST(pu.total_amount - pu.paid_amount, 0) ELSE 0 END)::numeric AS unpaid_amount,
              p.name AS product_name, p.unit, pt.name AS partner_name,
              -- T-401: 생산자·산지·지급 대상(PR-06), 매입 할인·상계 배분 합(P-08, 표시용)
@@ -1110,6 +1112,16 @@ app.get('/api/purchases', async (req, res) => {
     if (productId && Number.isFinite(productId)) {
       params.push(productId);
       q += ` AND pu.product_id = $${params.length}`;
+    }
+    // T-203 R-22 ids: 경락 → 매입 전환 직후 "방금 등록한 N건만 보기"(쉼표 구분 양의 정수 1~200개, 기간 조건과 AND, 본인 매입만)
+    if (req.query.ids != null && String(req.query.ids).trim() !== '') {
+      const parts = String(req.query.ids).split(',').map((x) => x.trim()).filter(Boolean);
+      const ids = parts.map(parsePositiveIdParam);
+      if (!parts.length || parts.length > 200 || ids.some((x) => !x)) {
+        return res.status(400).json({ ok: false, code: 'VALIDATION', field: 'ids', message: '매입 번호 목록이 올바르지 않습니다(쉼표로 구분한 숫자 200개 이내).' });
+      }
+      params.push([...new Set(ids)]);
+      q += ` AND pu.id = ANY($${params.length}::int[])`;
     }
     q += createdByClause(createdBy, params, 'pu');
     q += searchClause(opts, params, ['p.name', 'pu.memo', 'pu.source_name', 'pt.name']);

@@ -78,7 +78,8 @@ const actorStaff = (cx) => (cx.actorKind === 'STAFF' ? cx.staffId : null);
 
 /**
  * 줄 하나 → 매입 한 건 (SAVEPOINT 안). 바깥에서 줄은 이미 잠겨 있어야 한다.
- * @param a { line, trade|null, mode:'AUTO'|'MANUAL'|'FORCED', plan, tol, eventType, approveReason, diff, warnings }
+ * @param a { line, trade|null, mode:'AUTO'|'MANUAL'|'FORCED', plan, tol, eventType, approveReason, diff, warnings, memo?, extraDetail? }
+ *   memo·extraDetail(이벤트 detail 에 더할 값)은 T-203 경락 직접 전환만 넘긴다 — 없으면 기존과 같음
  * @returns { result:'CONVERTED'|'ALREADY_CONVERTED'|'TRADE_TAKEN'|'PURCHASE_FAILED', purchase_id?, conversion_id?, code?, message?, detail? }
  */
 async function convertOne(client, cx, a) {
@@ -106,7 +107,7 @@ async function convertOne(client, cx, a) {
       quantity: String(plan.quantity),
       unit_price: String(plan.unit_price),
       purchase_date: String(line.trade_date).slice(0, 10),
-      memo: `매입서 #${line.doc_id}-${line.line_no}${trade ? ` · 경락 #${trade.trade_id}` : ''}`.slice(0, 200),
+      memo: (a.memo || `매입서 #${line.doc_id}-${line.line_no}${trade ? ` · 경락 #${trade.trade_id}` : ''}`).slice(0, 200), // a.memo: T-203 경락 직접 전환(trade-convert.js)
       source_name: (trade && trade.corp_name) || '가락시장 경매',
       payee: 'supplier',
     };
@@ -143,7 +144,7 @@ async function convertOne(client, cx, a) {
        VALUES ($1,$2,$3,$4,$5,'CONVERTED',$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15)`,
       [cx.userId, line.doc_id, line.id, a.eventType || 'CONVERT', line.status, line.match_result || null, line.match_score ?? null, trade ? trade.trade_id : null,
         purchaseId, convId, a.approveReason ? String(a.approveReason).slice(0, 200) : null,
-        JSON.stringify({ mode, tolerance: a.tol ? engine.tolView(a.tol) : null, diff: a.diff || null, warnings,
+        JSON.stringify({ ...(a.extraDetail || {}), mode, tolerance: a.tol ? engine.tolView(a.tol) : null, diff: a.diff || null, warnings,
           purchase: { quantity: tot.rows[0].quantity, unit_price: tot.rows[0].unit_price, total: tot.rows[0].total_amount, amount_diff: conv.rows[0].amount_diff, unit_kg: plan.unit_kg, line_kg: plan.line_kg } }),
         cx.actorKind, actorStaff(cx), cx.idemKey || null]
     );

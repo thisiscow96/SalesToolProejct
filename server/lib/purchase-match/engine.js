@@ -482,4 +482,4 @@ async function evaluatePair(client, cx, line, tradeId) {
   return { tol, candidate: { ...c, ...s } };
 }
 
-module.exports = { matchLines, pickTolerance, loadTolerances, planPurchase, lockLines, evaluatePair, diffOf, tolView, resolveProductLinks, baseReadiness, ENGINE_VERSION };
+module.exports = { matchLines, pickTolerance, loadTolerances, planPurchase, lockLines, evaluatePair, diffOf, tolView, resolveProductLinks, baseReadiness, allowMockConvert, ENGINE_VERSION };
