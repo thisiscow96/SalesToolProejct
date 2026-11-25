@@ -369,6 +369,20 @@ async function main() {
   await q(`UPDATE collect_job SET created_at = NOW() - interval '2 minutes', dedupe_key = dedupe_key || ':old' WHERE requested_by_user_id = $1 AND dedupe_key LIKE '%:MANUAL:%'`, [O.id]);
   r = await api('POST', '/api/auction/sync', { date_from: addDays(syncDate, -1), date_to: addDays(syncDate, -1) }, A);
   check('AC-36 5분 안 두 번째 수동 동기화 → 429 SYNC_RATE_LIMIT', r.status === 429 && r.json.code === 'SYNC_RATE_LIMIT', r.json);
+  { // C D01: 같은 분 키가 일부 겹쳐도(기간을 넓혀 다시 누름) 새 날짜가 있으면 429, 새 작업 0건
+    await q(`UPDATE collect_job SET created_at = NOW() - interval '1 hour' WHERE requested_by_user_id = $1 AND dedupe_key LIKE '%:MANUAL:%'`, [O.id]);
+    const wd = addDays(syncDate, -6);
+    while (new Date().getSeconds() > 50) await new Promise((res) => setTimeout(res, 1000)); // 두 요청을 같은 분에
+    const w1 = await api('POST', '/api/auction/sync', { date_from: wd, date_to: wd, phase: 'FINAL', force: true }, A);
+    const nBefore = Number((await q(`SELECT COUNT(*)::int AS n FROM collect_job WHERE requested_by_user_id = $1`, [O.id]))[0].n);
+    const w2 = await api('POST', '/api/auction/sync', { date_from: addDays(wd, -2), date_to: wd, phase: 'FINAL', force: true }, A);
+    const nAfter = Number((await q(`SELECT COUNT(*)::int AS n FROM collect_job WHERE requested_by_user_id = $1`, [O.id]))[0].n);
+    const w3 = await api('POST', '/api/auction/sync', { date_from: wd, date_to: wd, phase: 'FINAL', force: true }, A);
+    check('D01 같은 분 키 일부 겹침 + 새 날짜 → 429·새 작업 0, 같은 범위 재요청은 202 ALREADY_QUEUED',
+      w1.status === 202 && w2.status === 429 && w2.json.code === 'SYNC_RATE_LIMIT' && nAfter === nBefore
+      && w3.status === 202 && w3.json.data.queued.length === 0, { w1: w1.status, w2: w2.json, nBefore, nAfter, w3: w3.json });
+    await q(`UPDATE collect_job SET status = CASE WHEN status = 'QUEUED' THEN 'CANCELLED' ELSE status END, finished_at = CASE WHEN status = 'QUEUED' THEN NOW() ELSE finished_at END, created_at = NOW() - interval '1 hour' WHERE requested_by_user_id = $1 AND dedupe_key LIKE '%:MANUAL:%' AND created_at > NOW() - interval '5 minutes'`, [O.id]);
+  }
   r = await api('POST', '/api/auction/sync', { date_from: addDays(kstToday(), 1) }, ADM.tok);
   check('R-98 미래 날짜 → 400 VALIDATION', r.status === 400 && r.json.code === 'VALIDATION', r.json);
   r = await api('POST', '/api/auction/sync', { date_from: S0, date_to: S0, phase: 'FINAL' }, ADM.tok);

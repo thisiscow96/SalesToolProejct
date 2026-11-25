@@ -308,13 +308,16 @@ function registerAuctionRoutes(app, deps) {
       if (dupSet.size === plan.length) {
         return res.status(202).json({ ok: true, data: { queued: [], skipped: plan.map((p) => ({ target_date: p.d, reason: 'ALREADY_QUEUED' })) } });
       }
+      // 회원별 5분 1회(C D01): 최근 5분 안 수동 작업이 있고, 이번 요청에 그 작업들에 없는 키(새 날짜)가 하나라도 있으면 429.
+      // 같은 분에 같은 범위를 다시 누른 경우(모든 키가 이미 있음)는 위에서 202 ALREADY_QUEUED, 동시에 들어온 같은 요청은 enqueue 의 dedupe 가 막는다.
       const recent = await pool.query(
-        `SELECT MAX(created_at) AS t FROM collect_job WHERE requested_by_user_id = $1 AND created_at > NOW() - interval '5 minutes' AND dedupe_key LIKE '%:MANUAL:%'
-            AND NOT (dedupe_key = ANY($2::text[]))`,
-        [auth.userId, plan.map((p) => p.key)]
+        `SELECT dedupe_key, created_at FROM collect_job WHERE requested_by_user_id = $1 AND created_at > NOW() - interval '5 minutes' AND dedupe_key LIKE '%:MANUAL:%'
+          ORDER BY created_at DESC LIMIT 200`,
+        [auth.userId]
       );
-      if (recent.rows[0].t && !dupSet.size) {
-        const wait = Math.max(1, 300 - Math.floor((Date.now() - new Date(recent.rows[0].t).getTime()) / 1000));
+      const recentKeys = new Set(recent.rows.map((r) => r.dedupe_key));
+      if (recent.rows.length && plan.some((p) => !recentKeys.has(p.key))) {
+        const wait = Math.max(1, 300 - Math.floor((Date.now() - new Date(recent.rows[0].created_at).getTime()) / 1000));
         return res.status(429).json({ ok: false, code: 'SYNC_RATE_LIMIT', message: '수동 동기화는 5분에 한 번만 할 수 있습니다.', detail: { retry_after_sec: wait } });
       }
       const queued = [];
