@@ -31,32 +31,108 @@ export function SearchTextField({ id, value, onChange, onSubmit, placeholder = '
   );
 }
 
-/** 총 건수와 이전·다음 — total 이 0 이면 그리지 않고, 1쪽뿐이면 건수만 보인다 */
-export function Pager({ total, offset, limit = PAGE_SIZE, count, loading, onPage }) {
+/** 쪽 번호 목록 — 처음·끝·현재 앞뒤 1쪽, 사이는 … (최대 7칸) */
+export function pageWindow(page, pages) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const set = new Set([1, pages, page - 1, page, page + 1]);
+  if (page <= 3) [2, 3, 4].forEach((n) => set.add(n));
+  if (page >= pages - 2) [pages - 3, pages - 2, pages - 1].forEach((n) => set.add(n));
+  const nums = [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => {
+    if (i > 0 && n - nums[i - 1] > 1) out.push('gap-' + n);
+    out.push(n);
+  });
+  return out;
+}
+
+const fmt = (n) => Number(n || 0).toLocaleString('ko-KR');
+
+/**
+ * 페이지 이동 막대(앱 공통) — total 이 0 이면 그리지 않는다.
+ *  full(기본, 표 아래): 왼쪽 "총 N건 · a–b" · 가운데 "‹ 이전 1 2 … N 다음 ›" · 오른쪽 쪽당 건수(onLimit 있을 때)
+ *  compact(표 위 오른쪽): "a–b / N건  ‹ ›" — 아래까지 내리지 않고 넘길 수 있게
+ *  휴대폰(<768): 쪽 번호 대신 "3 / 23쪽", 이전·다음은 반반 44px
+ */
+export function Pager({ total, offset, limit = PAGE_SIZE, count, loading, onPage, onLimit, pageSizes = [50, 100, 200], variant = 'full', label = '목록 페이지', testid }) {
   if (!total) return null;
   const page = Math.floor(offset / limit) + 1;
   const pages = Math.max(1, Math.ceil(total / limit));
-  const from = total === 0 ? 0 : offset + 1;
+  const from = offset + 1;
   const to = offset + (count ?? 0);
+  const go = (p) => onPage(Math.min(Math.max(0, (p - 1) * limit), (pages - 1) * limit));
+  const prevDisabled = loading || page <= 1;
+  const nextDisabled = loading || page >= pages;
+
+  if (variant === 'compact') {
+    return (
+      <nav className="list-pager list-pager--compact" aria-label={label + '(표 위)'} data-testid={testid}>
+        <span className="list-pager-info" role="status">
+          <span className="list-pager-range">{fmt(from)}–{fmt(to)}</span> / <strong>{fmt(total)}</strong>건
+        </span>
+        {pages > 1 && (
+          <span className="list-pager-btns">
+            <button type="button" className="list-pager-icon" disabled={prevDisabled} onClick={() => go(page - 1)} aria-label="이전 페이지(표 위)" title="이전 페이지">‹</button>
+            <span className="list-pager-of" aria-hidden="true">{page}/{pages}</span>
+            <button type="button" className="list-pager-icon" disabled={nextDisabled} onClick={() => go(page + 1)} aria-label="다음 페이지(표 위)" title="다음 페이지">›</button>
+          </span>
+        )}
+      </nav>
+    );
+  }
+
   return (
-    <nav className="list-pager" aria-label="목록 페이지">
+    <nav className="list-pager" aria-label={label} data-testid={testid}>
       <span className="list-pager-info" role="status">
-        총 <strong>{total.toLocaleString('ko-KR')}</strong>건 · {from.toLocaleString('ko-KR')}–{to.toLocaleString('ko-KR')}
+        총 <strong>{fmt(total)}</strong>건 · {fmt(from)}–{fmt(to)}
         <span className="list-pager-page"> ({page}/{pages}쪽)</span>
       </span>
-      {pages > 1 && (
-      <span className="list-pager-btns">
-        <button type="button" className="main-btn main-btn--secondary" disabled={loading || page <= 1} onClick={() => onPage(Math.max(0, offset - limit))} aria-label="이전 페이지">
-          ‹ 이전
-        </button>
-        <button type="button" className="main-btn main-btn--secondary" disabled={loading || page >= pages} onClick={() => onPage(offset + limit)} aria-label="다음 페이지">
-          다음 ›
-        </button>
-      </span>
+      {pages > 1 ? (
+        <span className="list-pager-btns">
+          <button type="button" className="list-pager-step" disabled={prevDisabled} onClick={() => go(page - 1)} aria-label="이전 페이지">
+            ‹ 이전
+          </button>
+          <span className="list-pager-nums">
+            {pageWindow(page, pages).map((n) =>
+              typeof n === 'string' ? (
+                <span key={n} className="list-pager-gap" aria-hidden="true">…</span>
+              ) : (
+                <button
+                  key={n}
+                  type="button"
+                  className={'list-pager-num' + (n === page ? ' on' : '')}
+                  aria-current={n === page ? 'page' : undefined}
+                  aria-label={`${n}쪽`}
+                  disabled={loading && n !== page}
+                  onClick={() => n !== page && go(n)}
+                >
+                  {n}
+                </button>
+              ),
+            )}
+          </span>
+          <span className="list-pager-mobile-of" aria-hidden="true">{page} / {pages}쪽</span>
+          <button type="button" className="list-pager-step" disabled={nextDisabled} onClick={() => go(page + 1)} aria-label="다음 페이지">
+            다음 ›
+          </button>
+        </span>
+      ) : (
+        <span />
       )}
+      <span className="list-pager-size">
+        {onLimit && (
+          <label>
+            <span>쪽당</span>
+            <select value={limit} disabled={loading} onChange={(e) => onLimit(Number(e.target.value))} aria-label="한 쪽에 보일 건수">
+              {pageSizes.map((n) => <option key={n} value={n}>{n}건</option>)}
+            </select>
+          </label>
+        )}
+      </span>
     </nav>
   );
 }
+
 
 /**
  * 서버 페이지 목록 상태. search(params) 로 첫 페이지, goPage(offset) 로 같은 조건의 다른 페이지.

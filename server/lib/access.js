@@ -160,6 +160,7 @@ function buildRules(env = process.env) {
     ['R-93', 'GET', '/api/auction/trades/:id', ALL],
     ['R-94', 'GET', '/api/auction/daily-prices', ALL],
     ['R-95', 'GET', '/api/auction/items', ALL],
+    ['R-137', 'GET', '/api/auction/corps', ALL],                                             // 경락 조회 [법인] 선택지(전체 법인)
     ['R-96', 'GET', '/api/auction/sync/status', ALL],
     ['R-97', 'GET', '/api/auction/jobs', ALL],
     ['R-136', 'GET', '/api/auction/storage', OWNER],                                             // 관리자 — DB 사용량·경락 보관 기간

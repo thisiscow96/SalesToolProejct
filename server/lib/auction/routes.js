@@ -214,6 +214,30 @@ function registerAuctionRoutes(app, deps) {
     } catch (err) { return fail(res, err, '품목 목록을 불러오지 못했습니다.'); }
   });
 
+  // ---- R-137 법인 목록 — 경락 조회 [법인] 선택지. 조회 결과(현재 페이지)가 아니라 이 시장의 전체 법인 ----
+  //  수집된 경락의 DISTINCT corp_code(이름 = 가장 최근 경락의 법인명) + 표준코드(code_master corp, 이 시장 코드로 시작)
+  app.get('/api/auction/corps', async (req, res) => {
+    if (!(await needUser(req, res))) return undefined;
+    try {
+      const r = await pool.query(
+        `WITH t AS (
+           SELECT DISTINCT ON (corp_code) corp_code, corp_name FROM auction_trade
+            WHERE market_code = $1 AND corp_code IS NOT NULL AND corp_code <> '' ORDER BY corp_code, id DESC
+         ), c AS (
+           SELECT code AS corp_code, name AS corp_name FROM code_master
+            WHERE code_type = 'corp' AND (parent_code = $1 OR code LIKE $1 || '%')
+         )
+         SELECT COALESCE(t.corp_code, c.corp_code) AS corp_code,
+                COALESCE(NULLIF(btrim(t.corp_name), ''), NULLIF(btrim(c.corp_name), ''), COALESCE(t.corp_code, c.corp_code)) AS corp_name,
+                (t.corp_code IS NOT NULL) AS has_trades
+           FROM t FULL OUTER JOIN c ON c.corp_code = t.corp_code
+          ORDER BY 1`,
+        [market()]
+      );
+      return res.json({ ok: true, data: r.rows });
+    } catch (err) { return fail(res, err, '법인 목록을 불러오지 못했습니다.'); }
+  });
+
   // ---- R-96 수집 현황 ----
   app.get('/api/auction/sync/status', async (req, res) => {
     if (!(await needUser(req, res))) return undefined;

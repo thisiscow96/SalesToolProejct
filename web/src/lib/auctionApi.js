@@ -10,6 +10,8 @@ export const auctionApi = {
   dailyPrices: (params) => request('GET', `/auction/daily-prices${qs(params)}`, { fallback: '참고 시세를 불러오지 못했습니다.' }),
   /** R-95 내부 품목(품종) 목록 */
   items: () => request('GET', '/auction/items', { fallback: '품목 목록을 불러오지 못했습니다.' }),
+  /** R-137 법인 목록(경락 조회 [법인] 선택지 — 이 시장의 전체 법인) */
+  corps: () => request('GET', '/auction/corps', { fallback: '법인 목록을 불러오지 못했습니다.' }),
   /** R-96 수집 현황(서킷·날짜별·대기 작업·source_mode) */
   syncStatus: (params) => request('GET', `/auction/sync/status${qs(params)}`, { fallback: '수집 현황을 불러오지 못했습니다.' }),
   /** R-97 수집 작업 목록 */

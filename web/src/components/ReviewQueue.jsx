@@ -5,6 +5,7 @@ import { purchaseDocApi } from '../lib/purchaseDocApi';
 import { can } from '../lib/staffAccess';
 import { useBusyIds, useLatestRequest } from './Busy';
 import { ErrorLine, Tone } from './MatchBits';
+import { Pager } from './ListPaging';
 import { MatchCandidateModal, ReasonModal, lineTitle } from './MatchCandidateModal';
 import { LINE_STATUS, REVIEW_FILTER, dec, kstAddDays, kstToday, md, normLine, reasonText, won } from '../lib/matchLabels';
 
@@ -79,23 +80,27 @@ export default function ReviewQueue({ onOpenDoc, onChanged, busyNav }) {
 
   return (
     <section className="pm-section" aria-label="검토 대기" data-testid="pdoc-review">
-      <div className="main-filters pm-filters">
-        <label htmlFor={ids.reason}>
-          사유
-          <select id={ids.reason} value={cond.reason} onChange={(e) => change({ reason: e.target.value })} data-testid="pdoc-review-reason">
-            {REVIEW_FILTER.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-          </select>
-        </label>
-        <label htmlFor={ids.from}>
-          거래일
-          <input id={ids.from} type="date" value={cond.date_from} max={today} onChange={(e) => change({ date_from: e.target.value })} />
-        </label>
-        <span aria-hidden="true">~</span>
-        <label htmlFor={ids.to}>
-          <span className="pm-sr">끝 날짜</span>
-          <input id={ids.to} type="date" value={cond.date_to} max={today} onChange={(e) => change({ date_to: e.target.value })} />
-        </label>
-        <button type="button" className="main-btn main-btn--secondary" onClick={refresh} disabled={loading}>{loading ? '불러오는 중…' : '새로고침'}</button>
+      <div className="pm-search" role="group" aria-label="검토 대기 조건">
+        <div className="pm-search-row">
+          <div className="pm-field">
+            <label className="pm-field-label" htmlFor={ids.reason}>사유</label>
+            <select id={ids.reason} value={cond.reason} onChange={(e) => change({ reason: e.target.value })} data-testid="pdoc-review-reason">
+              {REVIEW_FILTER.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+          </div>
+          <div className="pm-field pm-field--range">
+            <label className="pm-field-label" htmlFor={ids.from}>거래일</label>
+            <div className="pm-range">
+              <input id={ids.from} type="date" value={cond.date_from} max={today} onChange={(e) => change({ date_from: e.target.value })} />
+              <span aria-hidden="true">~</span>
+              <label htmlFor={ids.to} className="pm-sr">끝 날짜</label>
+              <input id={ids.to} type="date" value={cond.date_to} max={today} onChange={(e) => change({ date_to: e.target.value })} />
+            </div>
+          </div>
+          <div className="pm-search-actions">
+            <button type="button" className="main-btn main-btn--secondary" onClick={refresh} disabled={loading}>{loading ? '불러오는 중…' : '새로고침'}</button>
+          </div>
+        </div>
       </div>
       <ErrorLine error={err} />
       {msg && <p className={msg.tone === 'bad' ? 'pm-error' : 'pm-ok'} role={msg.tone === 'bad' ? 'alert' : 'status'} data-testid="pdoc-review-msg">{msg.text}</p>}
@@ -158,11 +163,7 @@ export default function ReviewQueue({ onOpenDoc, onChanged, busyNav }) {
         </table>
       </div>
       {total > LIMIT && (
-        <nav className="list-pager pm-pager" aria-label="검토 대기 페이지">
-          <span role="status">총 <strong>{won(total)}</strong>건</span>
-          <button type="button" className="main-btn main-btn--secondary" disabled={loading || offset === 0} onClick={() => { const o = Math.max(0, offset - LIMIT); setOffset(o); load(cond, o); }}>‹ 이전</button>
-          <button type="button" className="main-btn main-btn--secondary" disabled={loading || offset + LIMIT >= total} onClick={() => { const o = offset + LIMIT; setOffset(o); load(cond, o); }}>다음 ›</button>
-        </nav>
+        <Pager total={total} offset={offset} limit={LIMIT} count={rows.length} loading={loading} onPage={(o) => { setOffset(o); load(cond, o); }} label="검토 대기 페이지" />
       )}
 
       {cand && (

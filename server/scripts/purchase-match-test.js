@@ -869,6 +869,21 @@ async function main() {
   r = await api('GET', `/api/auction/daily-prices?date=${G}`, null, A);
   check('R-94 참고 시세(가락 목업 3품목) 평균가·전일 대비', j.status === 'DONE' && r.status === 200 && r.json.data.length === 3 && r.json.data[0].avg_price > 0 && r.json.data.some((x) => x.diff === 500), r.json);
 
+  // ---------- H UI: R-137 법인 목록 — 조회 페이지가 아니라 수집된 전체 법인(DISTINCT corp_code) ----------
+  {
+    const mk = (await q(`SELECT market_code FROM auction_trade WHERE corp_code IS NOT NULL ORDER BY id DESC LIMIT 1`))[0]?.market_code;
+    const want = (await q(`SELECT DISTINCT corp_code FROM auction_trade WHERE market_code = $1 AND corp_code IS NOT NULL AND corp_code <> '' ORDER BY 1`, [mk])).map((x) => x.corp_code);
+    r = await api('GET', '/api/auction/corps', null, A);
+    const got = r.status === 200 && Array.isArray(r.json.data) ? r.json.data : [];
+    const codes = got.map((x) => x.corp_code);
+    check('R-137 법인 목록 = 수집된 경락의 전체 법인(코드 중복 없음·이름 있음·정렬)', r.status === 200 && want.length > 0 && want.every((c) => codes.includes(c))
+      && new Set(codes).size === codes.length && got.every((x) => x.corp_name) && codes.join() === [...codes].sort().join(), { want, got });
+    r = await api('GET', '/api/auction/corps', null, SV);
+    check('R-137 직원(조회)도 법인 목록 조회 200', r.status === 200, r.status);
+    r = await api('GET', '/api/auction/corps');
+    check('R-137 로그인 없음 → 401', r.status === 401, r.status);
+  }
+
   // ---------- T-203 후속: 운영 경락 보관 기간(AUCTION_TRADE_KEEP_DAYS) · R-136 DB 사용량 ----------
   // 정리 작업을 이 프로세스에서 직접 돌린다(서버 환경을 바꾸지 않음). 기준선 = 이번 실행 기준일 B 다음 날 → B 이하(이번·이전 실행 데이터)만 대상
   {

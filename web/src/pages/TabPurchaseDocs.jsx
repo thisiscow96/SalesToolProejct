@@ -7,6 +7,7 @@ import { getUser } from '../api';
 import { can } from '../lib/staffAccess';
 import { newIdempotencyKey, withIdempotency } from '../lib/idempotency';
 import { useBusyIds, useLatestRequest } from '../components/Busy';
+import { Pager } from '../components/ListPaging';
 import { ErrorLine, SubNav, Tone } from '../components/MatchBits';
 import PurchaseDocUpload from '../components/PurchaseDocUpload';
 import ReviewQueue from '../components/ReviewQueue';
@@ -123,28 +124,32 @@ function DocList({ onOpen, onChanged }) {
         }}
       />
       {saved && <SavedSummary result={saved} onOpen={onOpen} onClose={() => setSaved(null)} />}
-      <form className="main-filters pm-filters" onSubmit={search} data-testid="pdoc-filters">
-        <label htmlFor={ids.from}>
-          기간
-          <input id={ids.from} type="date" value={cond.date_from} max={today} onChange={(e) => change({ date_from: e.target.value })} />
-        </label>
-        <span aria-hidden="true">~</span>
-        <label htmlFor={ids.to}>
-          <span className="pm-sr">끝 날짜</span>
-          <input id={ids.to} type="date" value={cond.date_to} max={today} onChange={(e) => change({ date_to: e.target.value })} />
-        </label>
-        <label htmlFor={ids.st}>
-          상태
-          <select id={ids.st} value={cond.status} onChange={(e) => change({ status: e.target.value })} data-testid="pdoc-filter-status">
-            <option value="">전체</option>
-            {Object.entries(DOC_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-        </label>
-        <label htmlFor={ids.q}>
-          검색
-          <input id={ids.q} type="search" value={cond.q} maxLength={50} placeholder="매입서번호·품목" onChange={(e) => change({ q: e.target.value })} data-testid="pdoc-filter-q" />
-        </label>
-        <button type="submit" className="main-btn" disabled={loading} aria-busy={loading} data-testid="pdoc-search">{loading ? '조회 중…' : '조회'}</button>
+      <form className="pm-search" onSubmit={search} data-testid="pdoc-filters" aria-label="매입서 조회 조건">
+        <div className="pm-search-row">
+          <div className="pm-field pm-field--range">
+            <label className="pm-field-label" htmlFor={ids.from}>기간</label>
+            <div className="pm-range">
+              <input id={ids.from} type="date" value={cond.date_from} max={today} onChange={(e) => change({ date_from: e.target.value })} />
+              <span aria-hidden="true">~</span>
+              <label htmlFor={ids.to} className="pm-sr">끝 날짜</label>
+              <input id={ids.to} type="date" value={cond.date_to} max={today} onChange={(e) => change({ date_to: e.target.value })} />
+            </div>
+          </div>
+          <div className="pm-field">
+            <label className="pm-field-label" htmlFor={ids.st}>상태</label>
+            <select id={ids.st} value={cond.status} onChange={(e) => change({ status: e.target.value })} data-testid="pdoc-filter-status">
+              <option value="">전체</option>
+              {Object.entries(DOC_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+          <div className="pm-field">
+            <label className="pm-field-label" htmlFor={ids.q}>검색</label>
+            <input id={ids.q} type="search" value={cond.q} maxLength={50} placeholder="매입서번호·품목" onChange={(e) => change({ q: e.target.value })} data-testid="pdoc-filter-q" />
+          </div>
+          <div className="pm-search-actions">
+            <button type="submit" className="main-btn" disabled={loading} aria-busy={loading} data-testid="pdoc-search">{loading ? '조회 중…' : '조회'}</button>
+          </div>
+        </div>
       </form>
       <ErrorLine error={err} />
       <div className="main-table-wrap pm-table-wrap">
@@ -178,13 +183,7 @@ function DocList({ onOpen, onChanged }) {
           </tbody>
         </table>
       </div>
-      {total > 0 && (
-        <nav className="list-pager pm-pager" aria-label="매입서 목록 페이지">
-          <span role="status">총 <strong>{won(total)}</strong>건 ({Math.floor(offset / LIMIT) + 1}/{Math.max(1, Math.ceil(total / LIMIT))}쪽)</span>
-          <button type="button" className="main-btn main-btn--secondary" disabled={loading || offset === 0} onClick={() => { const o = Math.max(0, offset - LIMIT); setOffset(o); load(cond, o); }}>‹ 이전</button>
-          <button type="button" className="main-btn main-btn--secondary" disabled={loading || offset + LIMIT >= total} onClick={() => { const o = offset + LIMIT; setOffset(o); load(cond, o); }}>다음 ›</button>
-        </nav>
-      )}
+      <Pager total={total} offset={offset} limit={LIMIT} count={rows.length} loading={loading} onPage={(o) => { setOffset(o); load(cond, o); }} label="매입서 목록 페이지" />
     </section>
   );
 }
